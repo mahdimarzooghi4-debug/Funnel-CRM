@@ -60,9 +60,10 @@ async def test_workspace_cannot_reference_another_tenants_root(
         root_organization_type="root",
     )
     db_session.add(forged)
-    await db_session.execute(
-        text("SET CONSTRAINTS fk_workspaces_root_organization_same_tenant IMMEDIATE")
-    )
 
+    # Executing this statement autoflushes the forged row, then forces the
+    # deferred FK to be checked before the test transaction is rolled back.
     with pytest.raises(IntegrityError):
-        await db_session.flush()
+        await db_session.execute(
+            text("SET CONSTRAINTS fk_workspaces_root_organization_same_tenant IMMEDIATE")
+        )
