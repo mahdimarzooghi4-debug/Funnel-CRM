@@ -1,0 +1,1 @@
+"""Funnel CRM application package."""
