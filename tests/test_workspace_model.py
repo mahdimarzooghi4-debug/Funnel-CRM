@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,7 +52,6 @@ async def test_organization_parent_from_another_tenant_is_rejected(
 async def test_workspace_cannot_reference_another_tenants_root(
     db_session: AsyncSession,
 ) -> None:
-    first = await create_workspace(db_session, display_name="Workspace A")
     second = await create_workspace(db_session, display_name="Workspace B")
     forged = Workspace(
         id=uuid4(),
@@ -61,6 +60,9 @@ async def test_workspace_cannot_reference_another_tenants_root(
         root_organization_type="root",
     )
     db_session.add(forged)
+    await db_session.execute(
+        text("SET CONSTRAINTS fk_workspaces_root_organization_same_tenant IMMEDIATE")
+    )
 
     with pytest.raises(IntegrityError):
-        await db_session.commit()
+        await db_session.flush()
