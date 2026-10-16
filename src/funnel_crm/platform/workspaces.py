@@ -40,6 +40,11 @@ async def create_workspace(
         name=normalized_name,
         unit_type="root",
     )
-    session.add_all([workspace, root])
+
+    # The workspace-to-root constraint is deferred. Persist the workspace first
+    # so the root's immediate tenant foreign key is satisfied, then persist root.
+    session.add(workspace)
+    await session.flush()
+    session.add(root)
     await session.flush()
     return workspace
