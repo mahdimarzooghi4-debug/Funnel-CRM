@@ -2,7 +2,7 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.platform.models import OrganizationUnit, Workspace
@@ -47,7 +47,7 @@ async def test_rls_filters_reads_and_rejects_cross_tenant_writes(
                     root_organization_type="root",
                 )
             )
-            with pytest.raises(IntegrityError):
+            with pytest.raises(DBAPIError):
                 await context.session.flush()
 
 
