@@ -407,6 +407,13 @@ class CRMPipeline(Base):
             name="fk_crm_pipelines_workspace", ondelete="CASCADE",
         ),
         Index("ix_crm_pipelines_tenant_entity", "tenant_id", "entity_kind"),
+        Index(
+            "uq_crm_pipelines_one_default_per_entity",
+            "tenant_id",
+            "entity_kind",
+            unique=True,
+            postgresql_where=text("is_default"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
