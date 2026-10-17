@@ -39,7 +39,7 @@ def upgrade() -> None:
             name="ck_crm_profile_custom_value_json_scalar",
         ),
         sa.CheckConstraint(
-            "octet_length(value::text) <= 8192",
+            "octet_length(value::text) <= 32768",
             name="ck_crm_profile_custom_value_size",
         ),
         sa.ForeignKeyConstraint(
