@@ -70,6 +70,17 @@ async def tenant_session(
             if membership is None:
                 raise WorkspaceAccessDenied
 
+            await session.execute(
+                text(
+                    "SELECT set_config('app.actor_identity_id', :identity_id, true), "
+                    "set_config('app.actor_membership_id', :membership_id, true)"
+                ),
+                {
+                    "identity_id": str(membership.identity_id),
+                    "membership_id": str(membership.id),
+                },
+            )
+
             yield TenantSessionContext(
                 session=session,
                 access=VerifiedWorkspaceAccess(
