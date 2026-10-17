@@ -129,7 +129,7 @@ async def list_duplicate_candidates(
             .where(
                 CRMProfile.tenant_id == tenant_id,
                 CRMProfile.id != profile.id,
-                CRMProfile.id.in_(
+                CRMProfile.organization_unit_id.in_(
                     crm_scope_ids(context, permission_key="crm.profile:view")
                 ),
                 CRMContactPoint.tenant_id == tenant_id,
