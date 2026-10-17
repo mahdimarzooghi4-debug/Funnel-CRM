@@ -197,6 +197,11 @@ async def create_contact_point(
             channel=payload.channel,
             value=payload.value,
         )
+        fingerprint = keyring.blind_indexes(
+            tenant_id=context.access.tenant_id,
+            channel=payload.channel,
+            value=payload.value,
+        )[key_id]
     except ContactPointCryptoError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -222,6 +227,8 @@ async def create_contact_point(
         channel=payload.channel,
         encrypted_value=ciphertext,
         encryption_key_id=key_id,
+        fingerprint_key_id=key_id,
+        match_fingerprint=fingerprint,
         verification_status="unverified",
         is_primary=payload.is_primary,
     )
