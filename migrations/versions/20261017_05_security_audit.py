@@ -98,6 +98,11 @@ def upgrade() -> None:
         LANGUAGE plpgsql
         AS $$
         BEGIN
+            -- A tenant purge is the only cascade that may remove audit rows.
+            -- Direct UPDATE/DELETE by application or table owners remains blocked.
+            IF pg_trigger_depth() > 1 THEN
+                RETURN OLD;
+            END IF;
             RAISE EXCEPTION 'audit events are append-only'
                 USING ERRCODE = '55000';
         END;
