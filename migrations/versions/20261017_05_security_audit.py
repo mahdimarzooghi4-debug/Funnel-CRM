@@ -25,7 +25,12 @@ AUDITED_TABLES = (
 def upgrade() -> None:
     op.create_table(
         "audit_events",
-        sa.Column("event_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column(
+            "event_id",
+            postgresql.UUID(as_uuid=True),
+            nullable=False,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("actor_kind", sa.String(length=16), nullable=False),
         sa.Column("actor_identity_id", postgresql.UUID(as_uuid=True), nullable=True),
