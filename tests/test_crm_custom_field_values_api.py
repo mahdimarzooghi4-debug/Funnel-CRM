@@ -299,6 +299,11 @@ async def test_custom_profile_field_update_requires_its_own_permission(
                     role_id=role.id,
                     permission_key="crm.profile:view",
                 ),
+                RolePermission(
+                    tenant_id=tenant_id,
+                    role_id=role.id,
+                    permission_key="crm.custom_field:view",
+                ),
             ]
         )
         await context.session.flush()
@@ -306,11 +311,18 @@ async def test_custom_profile_field_update_requires_its_own_permission(
     app = make_app(runtime_session_factory, identity)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        headers = {"X-Workspace-ID": str(tenant_id)}
         response = await client.get(
             f"/api/v1/crm/profiles/{profile_id}/custom-fields",
-            headers={"X-Workspace-ID": str(tenant_id)},
+            headers=headers,
         )
-        assert response.status_code == 403
+        assert response.status_code == 200
+        denied_update = await client.put(
+            f"/api/v1/crm/profiles/{profile_id}/custom-fields/segment",
+            headers=headers,
+            json={"value": "enterprise"},
+        )
+        assert denied_update.status_code == 403
 
     async with tenant_session(
         runtime_session_factory,
