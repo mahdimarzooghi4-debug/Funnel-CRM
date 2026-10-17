@@ -340,3 +340,216 @@ class AuditEvent(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
     )
+
+
+
+class WorkspaceCRMSettings(Base):
+    """Tenant-owned business-model configuration for a CRM workspace."""
+
+    __tablename__ = "workspace_crm_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(business_models) = 'array' "
+            "AND jsonb_array_length(business_models) > 0",
+            name="ck_workspace_crm_settings_business_models",
+        ),
+        CheckConstraint(
+            "configuration_version > 0",
+            name="ck_workspace_crm_settings_version_positive",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_workspace_crm_settings_workspace", ondelete="CASCADE",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    business_models: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=lambda: ["general"],
+        server_default=text("""'["general"]'::jsonb"""),
+    )
+    configuration_version: Mapped[int] = mapped_column(
+        nullable=False, default=1, server_default=text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
+class CRMPipeline(Base):
+    """Workspace-specific configurable stages for a record workflow."""
+
+    __tablename__ = "crm_pipelines"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_pipelines_tenant_id"),
+        UniqueConstraint("tenant_id", "pipeline_key", name="uq_crm_pipelines_tenant_key"),
+        CheckConstraint(
+            "length(trim(pipeline_key)) > 0 AND length(trim(display_name)) > 0",
+            name="ck_crm_pipelines_names_nonempty",
+        ),
+        CheckConstraint(
+            "entity_kind IN ('person', 'organization', 'lead', 'opportunity')",
+            name="ck_crm_pipelines_entity_kind",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(stages) = 'array' AND jsonb_array_length(stages) > 0",
+            name="ck_crm_pipelines_stages_nonempty",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_crm_pipelines_workspace", ondelete="CASCADE",
+        ),
+        Index("ix_crm_pipelines_tenant_entity", "tenant_id", "entity_kind"),
+        Index(
+            "uq_crm_pipelines_one_default_per_entity",
+            "tenant_id",
+            "entity_kind",
+            unique=True,
+            postgresql_where=text("is_default"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    pipeline_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    entity_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    stages: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
+class CRMCustomFieldDefinition(Base):
+    """Typed tenant-owned custom field definition; values are stored separately."""
+
+    __tablename__ = "crm_custom_field_definitions"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_custom_fields_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "entity_kind", "field_key",
+            name="uq_crm_custom_fields_tenant_entity_key",
+        ),
+        CheckConstraint(
+            "entity_kind IN ('person', 'organization', 'lead', 'opportunity')",
+            name="ck_crm_custom_fields_entity_kind",
+        ),
+        CheckConstraint(
+            "field_key ~ '^[a-z][a-z0-9_]{0,79}$'",
+            name="ck_crm_custom_fields_key_format",
+        ),
+        CheckConstraint(
+            "length(trim(display_name)) > 0",
+            name="ck_crm_custom_fields_display_name",
+        ),
+        CheckConstraint(
+            "value_type IN ('text', 'number', 'boolean', 'date', 'choice')",
+            name="ck_crm_custom_fields_value_type",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(options) = 'array' AND "
+            "((value_type = 'choice' AND jsonb_array_length(options) > 0) OR "
+            "(value_type <> 'choice' AND jsonb_array_length(options) = 0))",
+            name="ck_crm_custom_fields_options",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_crm_custom_fields_workspace", ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    entity_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    field_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    value_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    options: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    is_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
+class CRMProfile(Base):
+    """Tenant-owned person or organization profile anchored to a tenant record."""
+
+    __tablename__ = "crm_profiles"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_profiles_tenant_id"),
+        CheckConstraint(
+            "record_type = 'crm_profile'",
+            name="ck_crm_profiles_record_type",
+        ),
+        CheckConstraint(
+            "profile_kind IN ('person', 'organization')",
+            name="ck_crm_profiles_profile_kind",
+        ),
+        CheckConstraint(
+            "length(trim(display_name)) BETWEEN 1 AND 240",
+            name="ck_crm_profiles_display_name",
+        ),
+        CheckConstraint(
+            "length(trim(lifecycle_stage)) BETWEEN 1 AND 80",
+            name="ck_crm_profiles_lifecycle_stage",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "record_type"],
+            ["tenant_records.tenant_id", "tenant_records.id", "tenant_records.record_type"],
+            name="fk_crm_profiles_record_anchor", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_profiles_org_same_tenant", ondelete="RESTRICT",
+        ),
+        Index("ix_crm_profiles_tenant_kind_stage", "tenant_id", "profile_kind", "lifecycle_stage"),
+        Index("ix_crm_profiles_tenant_org", "tenant_id", "organization_unit_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    record_type: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="crm_profile", server_default="crm_profile"
+    )
+    profile_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(240), nullable=False)
+    lifecycle_stage: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="lead", server_default="lead"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
