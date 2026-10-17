@@ -30,7 +30,9 @@ def upgrade() -> None:
         "crm_profiles",
         ["tenant_id", "merged_into_profile_id"],
         ["tenant_id", "id"],
-        ondelete="RESTRICT",
+        ondelete="NO ACTION",
+        deferrable=True,
+        initially="DEFERRED",
     )
     op.create_index(
         "ix_crm_profiles_tenant_merge_target",
