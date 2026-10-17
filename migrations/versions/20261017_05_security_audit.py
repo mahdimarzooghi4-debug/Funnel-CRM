@@ -141,6 +141,12 @@ def upgrade() -> None:
             event_org_unit uuid;
             event_action text;
         BEGIN
+            -- Tenant deletion cascades already remove the audit rows. Do not
+            -- create new audit rows while those parent rows are being purged.
+            IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
+                RETURN OLD;
+            END IF;
+
             IF TG_OP = 'INSERT' THEN
                 row_data := to_jsonb(NEW);
                 new_data := row_data;
@@ -192,7 +198,7 @@ def upgrade() -> None:
                     (row_data ->> 'organization_unit_id')::uuid
                 ELSE NULL
             END;
-            event_action := event_target_type || '.' || lower(TG_OP);
+            event_action := event_target_type || '.' || CASE TG_OP\n                WHEN 'INSERT' THEN 'created'\n                WHEN 'UPDATE' THEN 'updated'\n                ELSE 'deleted'\n            END;
 
             INSERT INTO audit_events (
                 tenant_id,
