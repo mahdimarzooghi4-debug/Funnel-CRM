@@ -1,6 +1,5 @@
 """Workspace-level management for CRM custom field definitions."""
 
-from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
