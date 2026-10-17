@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter
 
+from funnel_crm.api.v1.crm_segments import router as crm_segments_router
+
 from funnel_crm.api.v1.crm_contact_points import router as crm_contact_points_router
 from funnel_crm.api.v1.crm_duplicates import router as crm_duplicates_router
 from funnel_crm.api.v1.crm_custom_field_definitions import router as crm_custom_field_definitions_router
@@ -15,6 +17,7 @@ router = APIRouter(prefix="/api/v1")
 router.include_router(system_router)
 router.include_router(integrations_router)
 router.include_router(crm_profiles_router)
+router.include_router(crm_segments_router)
 router.include_router(crm_contact_points_router)
 router.include_router(crm_duplicates_router)
 router.include_router(crm_custom_field_definitions_router)
