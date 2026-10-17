@@ -1,5 +1,6 @@
 """Tenant-scoped customer profile API with action and row-scope checks."""
 
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -7,8 +8,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
+from funnel_crm.api.v1.crm_custom_field_values import _validated_value
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
-from funnel_crm.platform.models import CRMProfile, TenantRecord
+from funnel_crm.platform.models import (
+    CRMCustomFieldDefinition,
+    CRMProfile,
+    CRMProfileCustomFieldValue,
+    TenantRecord,
+)
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
 router = APIRouter(prefix="/crm/profiles", tags=["CRM customer profiles"])
@@ -21,6 +28,7 @@ class CRMProfileCreate(BaseModel):
     profile_kind: str = Field(pattern=r"^(person|organization)$")
     display_name: str = Field(min_length=1, max_length=240)
     lifecycle_stage: str = Field(default="lead", min_length=1, max_length=80)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("display_name", "lifecycle_stage")
     @classmethod
@@ -139,6 +147,39 @@ async def create_crm_profile(
         permission_key="crm.profile:create",
         organization_unit_id=payload.organization_unit_id,
     )
+
+    definitions = (
+        await context.session.scalars(
+            select(CRMCustomFieldDefinition).where(
+                CRMCustomFieldDefinition.tenant_id == context.access.tenant_id,
+                CRMCustomFieldDefinition.entity_kind == payload.profile_kind,
+                CRMCustomFieldDefinition.is_active.is_(True),
+            )
+        )
+    ).all()
+    definitions_by_key = {definition.field_key: definition for definition in definitions}
+    unknown = set(payload.custom_fields) - definitions_by_key.keys()
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Unknown custom field key", "field_keys": sorted(unknown)},
+        )
+    missing = sorted(
+        definition.field_key
+        for definition in definitions
+        if definition.is_required and definition.field_key not in payload.custom_fields
+    )
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Required custom fields are missing", "field_keys": missing},
+        )
+
+    validated_values: list[tuple[CRMCustomFieldDefinition, Any]] = []
+    for field_key, raw_value in payload.custom_fields.items():
+        definition = definitions_by_key[field_key]
+        validated_values.append((definition, _validated_value(definition, raw_value)))
+
     profile_id = uuid4()
     context.session.add(
         TenantRecord(
@@ -158,6 +199,17 @@ async def create_crm_profile(
         lifecycle_stage=payload.lifecycle_stage,
     )
     context.session.add(profile)
+    await context.session.flush()
+    context.session.add_all(
+        CRMProfileCustomFieldValue(
+            id=uuid4(),
+            tenant_id=context.access.tenant_id,
+            profile_id=profile_id,
+            field_definition_id=definition.id,
+            value=value,
+        )
+        for definition, value in validated_values
+    )
     await context.session.flush()
     return CRMProfileRead.model_validate(profile)
 
