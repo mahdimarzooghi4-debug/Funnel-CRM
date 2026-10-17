@@ -141,6 +141,9 @@ def upgrade() -> None:
             event_org_unit uuid;
             event_action text;
         BEGIN
+            IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
+                RETURN OLD;
+            END IF;
             IF TG_OP = 'DELETE' THEN
                 current_row := to_jsonb(OLD);
             ELSE
