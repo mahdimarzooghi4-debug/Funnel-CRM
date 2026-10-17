@@ -317,7 +317,12 @@ class AuditEvent(Base):
         Index("ix_audit_events_tenant_target_time", "tenant_id", "target_type", "target_key", "occurred_at"),
     )
 
-    event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    event_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
     tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     actor_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     actor_identity_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
