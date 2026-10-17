@@ -119,6 +119,12 @@ async def ingest_product_event(
 
     sink = getattr(request.app.state, "product_event_sink", None)
     if sink is None:
+        session_factory = getattr(request.app.state, "session_factory", None)
+        if session_factory is not None:
+            from funnel_crm.platform.integration_sink import PostgresProductEventSink
+
+            sink = PostgresProductEventSink(session_factory)
+    if sink is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Durable event ingestion is not configured",
