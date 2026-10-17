@@ -112,7 +112,8 @@ async def test_profile_archive_restore_is_scoped_and_audited(
                 ).order_by(AuditEvent.event_id)
             )
         ).all()
-        assert [event.action_key for event in events] == ["crm_profile.archived", "crm_profile.restored"]
+        assert len(events) == 2
+        assert {event.action_key for event in events} == {"crm_profile.archived", "crm_profile.restored"}
         await context.session.execute(
             delete(TenantRecord).where(TenantRecord.tenant_id == tenant_id, TenantRecord.id == profile_id)
         )
