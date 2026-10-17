@@ -114,7 +114,7 @@ async def list_crm_profiles(
         CRMProfile.merged_into_profile_id.is_(None),
     ]
     if include_archived:
-        archive_units = crm_scope_ids(context, permission_key="crm.profile:archive")
+        archive_units = crm_scope_ids(context, permission_key="crm.profile:archive", cte_name="crm_archive_scope")
         filters.extend([
             CRMProfile.archived_at.is_not(None),
             CRMProfile.organization_unit_id.in_(archive_units),
