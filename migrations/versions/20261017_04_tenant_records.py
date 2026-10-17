@@ -42,7 +42,6 @@ def upgrade() -> None:
             name="fk_tenant_records_org_same_tenant",
             ondelete="RESTRICT",
         ),
-        sa.PrimaryKeyConstraint("id", name="pk_tenant_records"),
         sa.UniqueConstraint(
             "tenant_id", "id", name="uq_tenant_records_tenant_id"
         ),
