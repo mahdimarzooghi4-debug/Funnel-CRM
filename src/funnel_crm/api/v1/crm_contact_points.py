@@ -4,7 +4,7 @@ from functools import lru_cache
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
@@ -31,18 +31,13 @@ class CRMContactPointCreate(BaseModel):
     value: str = Field(min_length=1, max_length=1000)
     is_primary: bool = False
 
-    @staticmethod
-    def _trim(value: str) -> str:
+    @field_validator("value")
+    @classmethod
+    def strip_value(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("must contain a non-whitespace character")
         return value
-
-    @classmethod
-    def model_validate(cls, obj, **kwargs):
-        if isinstance(obj, dict) and isinstance(obj.get("value"), str):
-            obj = {**obj, "value": cls._trim(obj["value"])}
-        return super().model_validate(obj, **kwargs)
 
 
 class CRMContactPointUpdate(BaseModel):
