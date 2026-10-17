@@ -7,12 +7,14 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Identity,
     LargeBinary,
     String,
     UniqueConstraint,
@@ -614,4 +616,53 @@ class CRMContactPoint(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+class CRMCommunicationConsentEvent(Base):
+    """Append-only, purpose- and channel-specific communication decision."""
+
+    __tablename__ = "crm_communication_consent_events"
+    __table_args__ = (
+        CheckConstraint(
+            "purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}$'",
+            name="ck_crm_consent_purpose_key",
+        ),
+        CheckConstraint(
+            "channel IN ('email', 'phone', 'postal_address', 'social_handle', 'website')",
+            name="ck_crm_consent_channel",
+        ),
+        CheckConstraint(
+            "decision IN ('granted', 'withdrawn')",
+            name="ck_crm_consent_decision",
+        ),
+        CheckConstraint(
+            "length(trim(policy_version)) BETWEEN 1 AND 64",
+            name="ck_crm_consent_policy_version",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_consent_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_crm_consent_latest_by_scope",
+            "tenant_id",
+            "profile_id",
+            "purpose_key",
+            "channel",
+            "recorded_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    purpose_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
     )

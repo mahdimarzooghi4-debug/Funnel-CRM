@@ -132,6 +132,8 @@ async def test_crm_permission_requires_matching_action_and_inherited_org_scope(
                 "crm.contact_point:view",
                 "crm.contact_point:create",
                 "crm.contact_point:update",
+                "crm.communication_consent:view",
+                "crm.communication_consent:record",
             }
         )
 
