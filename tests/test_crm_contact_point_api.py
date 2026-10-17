@@ -237,6 +237,16 @@ async def test_contact_point_read_requires_its_own_permission_and_missing_key_fa
                     role_id=role.id,
                     organization_unit_id=root_id,
                 ),
+                RolePermission(
+                    tenant_id=tenant_id,
+                    role_id=role.id,
+                    permission_key="crm.profile:view",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id,
+                    role_id=role.id,
+                    permission_key="crm.contact_point:create",
+                ),
             ]
         )
         await context.session.flush()
