@@ -3,14 +3,14 @@ import os
 from uuid import uuid4
 
 import pytest_asyncio
-from sqlalchemy import event
+from sqlalchemy import delete, event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 
-from funnel_crm.platform.models import UserIdentity, WorkspaceMembership
+from funnel_crm.platform.models import UserIdentity, Workspace, WorkspaceMembership
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity
 from funnel_crm.platform.workspaces import create_workspace
 
@@ -98,8 +98,14 @@ async def tenant_case() -> AsyncIterator[dict[str, object]]:
             async with session.begin():
                 # Tenant-owned rows cascade from workspaces. Identities are global
                 # references and are removed after their memberships cascade.
-                await session.delete(workspace_a)
-                await session.delete(workspace_b)
-                await session.delete(user_a)
-                await session.delete(user_b)
+                await session.execute(
+                    delete(Workspace).where(
+                        Workspace.id.in_([values["workspace_a"], values["workspace_b"]])
+                    )
+                )
+                await session.execute(
+                    delete(UserIdentity).where(
+                        UserIdentity.id.in_([user_a.id, user_b.id])
+                    )
+                )
         await engine.dispose()
