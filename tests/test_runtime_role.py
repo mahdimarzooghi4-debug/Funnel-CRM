@@ -14,7 +14,7 @@ async def test_runtime_role_is_non_owner_and_cannot_bypass_rls(
                     text(
                         """
                         SELECT r.rolsuper, r.rolbypassrls, c.relrowsecurity,
-                               c.relforcerowsecurity, pg_get_userbyid(c.relowner),
+                               c.relforcerowsecurity, pg_get_userbyid(c.relowner) AS table_owner,
                                current_user
                         FROM pg_roles AS r
                         JOIN pg_class AS c ON c.relname = 'workspaces'
@@ -28,4 +28,4 @@ async def test_runtime_role_is_non_owner_and_cannot_bypass_rls(
     assert result.rolbypassrls is False
     assert result.relrowsecurity is True
     assert result.relforcerowsecurity is True
-    assert result.pg_get_userbyid != result.current_user
+    assert result.table_owner != result.current_user
