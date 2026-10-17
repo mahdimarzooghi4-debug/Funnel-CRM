@@ -25,6 +25,9 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.profile:update",
         "crm.profile:archive",
         "crm.profile:export",
+        "crm.contact_point:view",
+        "crm.contact_point:create",
+        "crm.contact_point:update",
     }
 )
 
