@@ -586,7 +586,18 @@ class CRMProfile(Base):
             ["organization_units.tenant_id", "organization_units.id"],
             name="fk_crm_profiles_org_same_tenant", ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "merged_into_profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_profiles_merge_target_same_tenant",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "merged_into_profile_id IS NULL OR merged_into_profile_id <> id",
+            name="ck_crm_profiles_not_merged_into_self",
+        ),
         Index("ix_crm_profiles_tenant_kind_stage", "tenant_id", "profile_kind", "lifecycle_stage"),
+        Index("ix_crm_profiles_tenant_merge_target", "tenant_id", "merged_into_profile_id"),
         Index("ix_crm_profiles_tenant_org", "tenant_id", "organization_unit_id"),
     )
 
@@ -601,6 +612,7 @@ class CRMProfile(Base):
     lifecycle_stage: Mapped[str] = mapped_column(
         String(80), nullable=False, default="lead", server_default="lead"
     )
+    merged_into_profile_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
