@@ -590,7 +590,9 @@ class CRMProfile(Base):
             ["tenant_id", "merged_into_profile_id"],
             ["crm_profiles.tenant_id", "crm_profiles.id"],
             name="fk_crm_profiles_merge_target_same_tenant",
-            ondelete="RESTRICT",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         CheckConstraint(
             "merged_into_profile_id IS NULL OR merged_into_profile_id <> id",
