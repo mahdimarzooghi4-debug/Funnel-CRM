@@ -186,7 +186,7 @@ async def export_crm_profiles_csv(
         )
         or 0
     )
-    if total > limit:
+    if max(total - offset, 0) > limit:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Export exceeds the requested row limit; increase limit or use offset batches",
