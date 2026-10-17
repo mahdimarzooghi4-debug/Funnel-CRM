@@ -91,6 +91,13 @@ class CRMCustomFieldDefinitionUpdate(BaseModel):
             raise ValueError("options must be unique")
         return cleaned
 
+    @field_validator("is_required", "is_active")
+    @classmethod
+    def reject_null_flags(cls, value: bool | None) -> bool:
+        if value is None:
+            raise ValueError("explicit null is not allowed")
+        return value
+
 
 class CRMCustomFieldDefinitionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
