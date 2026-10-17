@@ -22,6 +22,7 @@ from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_ses
 async def test_membership_role_permission_and_org_changes_capture_actor_and_diff(
     runtime_session_factory: async_sessionmaker[AsyncSession],
     tenant_case: dict[str, object],
+    db_session: AsyncSession,
 ) -> None:
     tenant_id = tenant_case["workspace_a"]
     root_id = tenant_case["root_a"]
@@ -167,7 +168,16 @@ async def test_membership_role_permission_and_org_changes_capture_actor_and_diff
 
         # Verify the database guard as the privileged test connection. The test
         # transaction is rolled back by db_session after the expected failure.
-        from pytest import FixtureRequest  # noqa: F401
+        await db_session.execute(
+            text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+            {"tenant_id": str(tenant_id)},
+        )
+        with pytest.raises(DBAPIError):
+            await db_session.execute(
+                update(AuditEvent)
+                .where(AuditEvent.event_id == role_event_id)
+                .values(action_key="tampered")
+            )
 
     finally:
         async with admin_factory() as admin:
