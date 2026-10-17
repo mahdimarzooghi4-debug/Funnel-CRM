@@ -78,6 +78,8 @@ async def test_workspace_settings_and_customer_profile_are_tenant_scoped_and_aud
                 record_type="crm_profile",
             )
         )
+        # The profile has a database FK to its shared tenant-record anchor.
+        await context.session.flush()
         context.session.add(
             CRMProfile(
                 id=profile_id,
@@ -105,15 +107,6 @@ async def test_workspace_settings_and_customer_profile_are_tenant_scoped_and_aud
                     record_type="crm_profile",
                 )
             )
-            context.session.add(
-                CRMProfile(
-                    id=foreign_id,
-                    tenant_id=other_tenant_id,
-                    organization_unit_id=other_organization_id,
-                    profile_kind="organization",
-                    display_name="Foreign contact",
-                )
-            )
             with pytest.raises(DBAPIError):
                 await context.session.flush()
 
@@ -128,6 +121,7 @@ async def test_workspace_settings_and_customer_profile_are_tenant_scoped_and_aud
                     record_type="crm_profile",
                 )
             )
+            await context.session.flush()
             context.session.add(
                 CRMProfile(
                     id=foreign_scope_id,
