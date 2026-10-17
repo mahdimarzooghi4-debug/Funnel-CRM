@@ -3,7 +3,7 @@ from uuid import UUID
 import httpx
 import pytest
 from fastapi import FastAPI, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_custom_field_definitions import router as definitions_router
@@ -14,6 +14,7 @@ from funnel_crm.platform.models import (
     Role,
     RoleAssignment,
     RolePermission,
+    TenantRecord,
 )
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -174,10 +175,18 @@ async def test_managed_required_custom_fields_are_enforced_atomically_on_profile
         requested_tenant_id=tenant_id,
         identity=identity,
     ) as context:
-        profile = await context.session.scalar(
+        definition = await context.session.scalar(
             select(CRMCustomFieldDefinition).where(
                 CRMCustomFieldDefinition.tenant_id == tenant_id,
                 CRMCustomFieldDefinition.field_key == "loyalty_tier",
             )
         )
-        assert profile is not None
+        assert definition is not None
+        assert definition.is_active is False
+        await context.session.execute(
+            delete(TenantRecord).where(
+                TenantRecord.tenant_id == tenant_id,
+                TenantRecord.id == profile_id,
+            )
+        )
+        await context.session.flush()
