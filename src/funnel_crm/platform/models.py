@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    LargeBinary,
     String,
     UniqueConstraint,
     Uuid,
@@ -544,6 +545,67 @@ class CRMProfile(Base):
     display_name: Mapped[str] = mapped_column(String(240), nullable=False)
     lifecycle_stage: Mapped[str] = mapped_column(
         String(80), nullable=False, default="lead", server_default="lead"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
+
+class CRMContactPoint(Base):
+    """Encrypted customer contact value; cleartext never enters the database."""
+
+    __tablename__ = "crm_contact_points"
+    __table_args__ = (
+        CheckConstraint(
+            "channel IN ('email', 'phone', 'postal_address', 'social_handle', 'website')",
+            name="ck_crm_contact_points_channel",
+        ),
+        CheckConstraint(
+            "verification_status IN ('unverified', 'verified', 'invalid')",
+            name="ck_crm_contact_points_verification_status",
+        ),
+        CheckConstraint(
+            "length(trim(encryption_key_id)) BETWEEN 1 AND 64",
+            name="ck_crm_contact_points_key_id",
+        ),
+        CheckConstraint(
+            "octet_length(encrypted_value) BETWEEN 29 AND 2048",
+            name="ck_crm_contact_points_ciphertext_size",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_contact_points_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        Index("ix_crm_contact_points_tenant_profile", "tenant_id", "profile_id"),
+        Index(
+            "uq_crm_contact_points_one_primary_per_channel",
+            "tenant_id",
+            "profile_id",
+            "channel",
+            unique=True,
+            postgresql_where=text("is_primary"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    verification_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unverified", server_default="unverified"
+    )
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
