@@ -172,7 +172,7 @@ def upgrade() -> None:
             END;
             event_target_key := CASE
                 WHEN TG_TABLE_NAME = 'role_permissions' THEN
-                    row_data ->> 'role_id' || ':' || row_data ->> 'permission_key'
+                    (row_data ->> 'role_id') || ':' || (row_data ->> 'permission_key')
                 ELSE row_data ->> 'id'
             END;
             event_org_unit := CASE
