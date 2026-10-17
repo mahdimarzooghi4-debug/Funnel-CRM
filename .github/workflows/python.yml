@@ -32,4 +32,5 @@ jobs:
           cache: pip
       - run: python -m pip install -e ".[dev]"
       - run: alembic upgrade head
+      - run: PGPASSWORD=postgres psql -h localhost -U postgres -d funnel_crm_test -f scripts/database/ci_runtime_role.sql
       - run: python -m pytest
