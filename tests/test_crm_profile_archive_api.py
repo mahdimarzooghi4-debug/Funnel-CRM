@@ -109,7 +109,7 @@ async def test_profile_archive_restore_is_scoped_and_audited(
                     AuditEvent.tenant_id == tenant_id,
                     AuditEvent.target_type == "crm_profile_archive",
                     AuditEvent.target_key == str(profile_id),
-                ).order_by(AuditEvent.id)
+                ).order_by(AuditEvent.event_id)
             )
         ).all()
         assert [event.action_key for event in events] == ["crm_profile.archived", "crm_profile.restored"]
