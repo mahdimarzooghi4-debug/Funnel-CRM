@@ -1,5 +1,6 @@
 """Tenant-scoped customer profile API with action and row-scope checks."""
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -65,6 +66,7 @@ class CRMProfileRead(BaseModel):
     display_name: str
     lifecycle_stage: str
     merged_into_profile_id: UUID | None
+    archived_at: datetime | None
 
 
 class CRMProfilePage(BaseModel):
@@ -102,6 +104,7 @@ async def list_crm_profiles(
     organization_unit_id: UUID | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    include_archived: bool = Query(default=False),
 ) -> CRMProfilePage:
     """Filter at the database query so out-of-scope rows never enter the result."""
     allowed_units = crm_scope_ids(context, permission_key="crm.profile:view")
@@ -110,6 +113,14 @@ async def list_crm_profiles(
         CRMProfile.organization_unit_id.in_(allowed_units),
         CRMProfile.merged_into_profile_id.is_(None),
     ]
+    if include_archived:
+        archive_units = crm_scope_ids(context, permission_key="crm.profile:archive")
+        filters.extend([
+            CRMProfile.archived_at.is_not(None),
+            CRMProfile.organization_unit_id.in_(archive_units),
+        ])
+    else:
+        filters.append(CRMProfile.archived_at.is_(None))
     if organization_unit_id is not None:
         filters.append(CRMProfile.organization_unit_id == organization_unit_id)
 
@@ -255,6 +266,8 @@ async def merge_crm_profile(
             ):
                 raise HTTPException(status_code=403, detail="CRM profile merge is not authorized")
 
+    if source.archived_at is not None or target.archived_at is not None:
+        raise HTTPException(status_code=409, detail="Archived profiles cannot be merged")
     if source.profile_kind != target.profile_kind:
         raise HTTPException(status_code=409, detail="Only profiles of the same kind can be merged")
     if source.merged_into_profile_id is not None:
@@ -268,6 +281,70 @@ async def merge_crm_profile(
     await context.session.flush()
     return CRMProfileRead.model_validate(source)
 
+
+
+@router.post(
+    "/{profile_id}/archive",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="archiveCRMProfile",
+    summary="Archive a customer profile while preserving its history",
+)
+async def archive_crm_profile(
+    profile_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> None:
+    profile = await context.session.scalar(
+        select(CRMProfile)
+        .where(
+            CRMProfile.tenant_id == context.access.tenant_id,
+            CRMProfile.id == profile_id,
+        )
+        .with_for_update()
+    )
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CRM profile not found")
+    await _require_permission(
+        context,
+        permission_key="crm.profile:archive",
+        organization_unit_id=profile.organization_unit_id,
+    )
+    if profile.merged_into_profile_id is not None:
+        raise HTTPException(status_code=409, detail="Merged profiles cannot be archived")
+    if profile.archived_at is None:
+        profile.archived_at = datetime.now().astimezone()
+        await context.session.flush()
+
+
+@router.post(
+    "/{profile_id}/restore",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="restoreCRMProfile",
+    summary="Restore an archived customer profile",
+)
+async def restore_crm_profile(
+    profile_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> None:
+    profile = await context.session.scalar(
+        select(CRMProfile)
+        .where(
+            CRMProfile.tenant_id == context.access.tenant_id,
+            CRMProfile.id == profile_id,
+        )
+        .with_for_update()
+    )
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CRM profile not found")
+    await _require_permission(
+        context,
+        permission_key="crm.profile:archive",
+        organization_unit_id=profile.organization_unit_id,
+    )
+    if profile.merged_into_profile_id is not None:
+        raise HTTPException(status_code=409, detail="Merged profiles cannot be restored")
+    if profile.archived_at is not None:
+        profile.archived_at = None
+        await context.session.flush()
 
 @router.get(
     "/{profile_id}",
@@ -332,6 +409,8 @@ async def update_crm_profile(
     )
     if profile is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CRM profile not found")
+    if profile.archived_at is not None or profile.merged_into_profile_id is not None:
+        raise HTTPException(status_code=409, detail="Archived or merged profiles are read-only")
 
     for field_name, value in changes.items():
         setattr(profile, field_name, value)
