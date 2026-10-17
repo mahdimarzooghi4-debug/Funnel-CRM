@@ -1,10 +1,12 @@
 """Tenant-scoped customer profile API with action and row-scope checks."""
 
+import csv
+import io
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 
@@ -12,6 +14,7 @@ from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_custom_field_values import _validated_value
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
+    AuditEvent,
     CRMCustomFieldDefinition,
     CRMProfile,
     CRMProfileCustomFieldValue,
@@ -141,6 +144,123 @@ async def list_crm_profiles(
         total=int(total or 0),
         limit=limit,
         offset=offset,
+    )
+
+
+
+@router.get(
+    "/export.csv",
+    response_class=Response,
+    operation_id="exportCRMProfilesCsv",
+    summary="Export in-scope customer profiles as CSV",
+)
+async def export_crm_profiles_csv(
+    context: TenantSessionContext = Depends(require_tenant_session),
+    organization_unit_id: UUID | None = None,
+    limit: int = Query(default=5000, ge=1, le=10000),
+    offset: int = Query(default=0, ge=0),
+) -> Response:
+    view_scope = crm_scope_ids(
+        context,
+        permission_key="crm.profile:view",
+        cte_name="crm_export_view_scope",
+    )
+    export_scope = crm_scope_ids(
+        context,
+        permission_key="crm.profile:export",
+        cte_name="crm_export_permission_scope",
+    )
+    filters = [
+        CRMProfile.tenant_id == context.access.tenant_id,
+        CRMProfile.organization_unit_id.in_(view_scope),
+        CRMProfile.organization_unit_id.in_(export_scope),
+        CRMProfile.merged_into_profile_id.is_(None),
+        CRMProfile.archived_at.is_(None),
+    ]
+    if organization_unit_id is not None:
+        filters.append(CRMProfile.organization_unit_id == organization_unit_id)
+
+    total = int(
+        await context.session.scalar(
+            select(func.count()).select_from(CRMProfile).where(*filters)
+        )
+        or 0
+    )
+    if total > limit:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Export exceeds the requested row limit; increase limit or use offset batches",
+        )
+
+    rows = (
+        await context.session.execute(
+            select(
+                CRMProfile.id,
+                CRMProfile.organization_unit_id,
+                CRMProfile.profile_kind,
+                CRMProfile.display_name,
+                CRMProfile.lifecycle_stage,
+                CRMProfile.created_at,
+                CRMProfile.updated_at,
+            )
+            .where(*filters)
+            .order_by(CRMProfile.created_at, CRMProfile.id)
+            .limit(limit)
+            .offset(offset)
+        )
+    ).all()
+
+    def csv_cell(value: object) -> str:
+        text_value = value.isoformat() if isinstance(value, datetime) else str(value)
+        if text_value.startswith(("=", "+", "-", "@", "\t", "\r")):
+            return "'" + text_value
+        return text_value
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "profile_id",
+            "organization_unit_id",
+            "profile_kind",
+            "display_name",
+            "lifecycle_stage",
+            "created_at",
+            "updated_at",
+        ]
+    )
+    for row in rows:
+        writer.writerow([csv_cell(value) for value in row])
+
+    context.session.add(
+        AuditEvent(
+            tenant_id=context.access.tenant_id,
+            actor_kind="user",
+            actor_identity_id=context.access.identity_id,
+            actor_membership_id=context.access.membership_id,
+            action_key="crm_profile.exported",
+            target_type="crm_profile_export",
+            target_key="csv",
+            organization_unit_id=organization_unit_id,
+            before_state=None,
+            after_state={
+                "format": "csv",
+                "rows": len(rows),
+                "offset": offset,
+                "limit": limit,
+            },
+            correlation_id=None,
+        )
+    )
+    await context.session.flush()
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="crm-profiles.csv"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
