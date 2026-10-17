@@ -124,6 +124,8 @@ async def test_crm_permission_requires_matching_action_and_inherited_org_scope(
                 "crm.settings:manage",
                 "crm.pipeline:manage",
                 "crm.custom_field:manage",
+                "crm.custom_field:view",
+                "crm.custom_field:update",
                 "crm.profile:view",
                 "crm.profile:create",
                 "crm.profile:update",

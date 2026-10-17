@@ -20,6 +20,8 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.settings:manage",
         "crm.pipeline:manage",
         "crm.custom_field:manage",
+        "crm.custom_field:view",
+        "crm.custom_field:update",
         "crm.profile:view",
         "crm.profile:create",
         "crm.profile:update",
