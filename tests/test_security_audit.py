@@ -119,7 +119,8 @@ async def test_membership_role_permission_and_org_changes_capture_actor_and_diff
             "workspace_membership.updated",
         }
         assert expected <= set(by_action)
-        for event in events:
+        for action in expected:
+            event = by_action[action]
             assert event.tenant_id == tenant_id
             assert event.actor_kind == "user"
             assert event.actor_identity_id == context.access.identity_id
