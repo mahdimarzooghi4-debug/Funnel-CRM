@@ -99,13 +99,13 @@ def upgrade() -> None:
             definition_kind text;
             field_active boolean;
         BEGIN
-            SELECT profile_kind INTO profile_kind
-            FROM crm_profiles
-            WHERE tenant_id = NEW.tenant_id AND id = NEW.profile_id;
+            SELECT p.profile_kind INTO profile_kind
+            FROM crm_profiles AS p
+            WHERE p.tenant_id = NEW.tenant_id AND p.id = NEW.profile_id;
 
-            SELECT entity_kind, is_active INTO definition_kind, field_active
-            FROM crm_custom_field_definitions
-            WHERE tenant_id = NEW.tenant_id AND id = NEW.field_definition_id;
+            SELECT d.entity_kind, d.is_active INTO definition_kind, field_active
+            FROM crm_custom_field_definitions AS d
+            WHERE d.tenant_id = NEW.tenant_id AND d.id = NEW.field_definition_id;
 
             IF profile_kind IS NULL OR definition_kind IS NULL
                OR profile_kind <> definition_kind OR NOT field_active THEN
