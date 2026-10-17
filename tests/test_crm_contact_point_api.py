@@ -268,7 +268,7 @@ async def test_contact_point_read_requires_its_own_permission_and_missing_key_fa
             headers=headers,
             json={"channel": "email", "value": "secret@example.test"},
         )
-        assert unavailable.status_code == 403
+        assert unavailable.status_code == 503
 
     async with tenant_session(
         runtime_session_factory,
