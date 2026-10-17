@@ -1,7 +1,7 @@
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -153,6 +153,15 @@ async def test_workspace_settings_and_customer_profile_are_tenant_scoped_and_aud
             "lifecycle_stage": "lead",
         }
         assert "display_name" not in profile_event.after_state
+
+        # Remove the shared anchor so tenant fixtures can delete the organization.
+        await context.session.execute(
+            delete(TenantRecord).where(
+                TenantRecord.tenant_id == tenant_id,
+                TenantRecord.id == profile_id,
+            )
+        )
+        await context.session.flush()
 
     async with tenant_session(
         runtime_session_factory,
