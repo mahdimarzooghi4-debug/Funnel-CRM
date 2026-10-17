@@ -184,17 +184,43 @@ async def test_crm_pipeline_and_custom_field_constraints_are_enforced(
         requested_tenant_id=tenant_id,
         identity=identity,
     ) as context:
+        async with context.session.begin_nested():
+            context.session.add(
+                CRMPipeline(
+                    tenant_id=tenant_id,
+                    pipeline_key="empty",
+                    entity_kind="lead",
+                    display_name="Empty pipeline",
+                    stages=[],
+                )
+            )
+            with pytest.raises(DBAPIError):
+                await context.session.flush()
+
         context.session.add(
             CRMPipeline(
                 tenant_id=tenant_id,
-                pipeline_key="empty",
+                pipeline_key="default-one",
                 entity_kind="lead",
-                display_name="Empty pipeline",
-                stages=[],
+                display_name="Default one",
+                stages=[{"key": "new", "label": "New"}],
+                is_default=True,
             )
         )
-        with pytest.raises(DBAPIError):
-            await context.session.flush()
+        await context.session.flush()
+        async with context.session.begin_nested():
+            context.session.add(
+                CRMPipeline(
+                    tenant_id=tenant_id,
+                    pipeline_key="default-two",
+                    entity_kind="lead",
+                    display_name="Default two",
+                    stages=[{"key": "new", "label": "New"}],
+                    is_default=True,
+                )
+            )
+            with pytest.raises(DBAPIError):
+                await context.session.flush()
 
         async with context.session.begin_nested():
             context.session.add(
