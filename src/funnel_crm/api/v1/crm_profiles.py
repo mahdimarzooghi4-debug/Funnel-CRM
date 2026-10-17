@@ -290,6 +290,19 @@ async def get_crm_profile(
     )
     if profile is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CRM profile not found")
+    if profile.merged_into_profile_id is not None:
+        target_org_id = await context.session.scalar(
+            select(CRMProfile.organization_unit_id).where(
+                CRMProfile.tenant_id == context.access.tenant_id,
+                CRMProfile.id == profile.merged_into_profile_id,
+            )
+        )
+        if target_org_id is None or not await has_crm_permission(
+            context,
+            permission_key="crm.profile:view",
+            organization_unit_id=target_org_id,
+        ):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CRM profile not found")
     return CRMProfileRead.model_validate(profile)
 
 
