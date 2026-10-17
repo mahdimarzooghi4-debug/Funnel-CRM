@@ -41,7 +41,7 @@ class CRMProfileUpdate(BaseModel):
     @classmethod
     def strip_optional_text(cls, value: str | None) -> str | None:
         if value is None:
-            return value
+            raise ValueError("explicit null is not allowed")
         value = value.strip()
         if not value:
             raise ValueError("must contain a non-whitespace character")
