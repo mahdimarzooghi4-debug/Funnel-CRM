@@ -243,3 +243,42 @@ class RoleAssignment(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )
+
+
+class TenantRecord(Base):
+    """Tenant-owned anchor for records from CRM modules and connected products.
+
+    Module-specific tables can extend this stable identity using the composite
+    (tenant_id, id) key, so a record reference cannot cross workspaces.
+    """
+
+    __tablename__ = "tenant_records"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_tenant_records_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "id", "record_type", name="uq_tenant_records_tenant_id_type"
+        ),
+        CheckConstraint("length(trim(record_type)) > 0", name="ck_tenant_records_type_nonempty"),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_tenant_records_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_tenant_records_org_same_tenant",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_tenant_records_tenant_type_created", "tenant_id", "record_type", "created_at"),
+        Index("ix_tenant_records_tenant_org", "tenant_id", "organization_unit_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    record_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
