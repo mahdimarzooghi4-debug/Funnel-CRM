@@ -1,6 +1,6 @@
 """Tenant-scoped customer profile API with action and row-scope checks."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -311,7 +311,7 @@ async def archive_crm_profile(
     if profile.merged_into_profile_id is not None:
         raise HTTPException(status_code=409, detail="Merged profiles cannot be archived")
     if profile.archived_at is None:
-        profile.archived_at = datetime.now().astimezone()
+        profile.archived_at = datetime.now(timezone.utc)
         await context.session.flush()
 
 
