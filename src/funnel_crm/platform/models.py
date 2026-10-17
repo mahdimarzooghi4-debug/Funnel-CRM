@@ -575,7 +575,7 @@ class CRMContactPoint(Base):
             name="ck_crm_contact_points_key_id",
         ),
         CheckConstraint(
-            "octet_length(encrypted_value) BETWEEN 29 AND 2048",
+            "octet_length(encrypted_value) BETWEEN 29 AND 4096",
             name="ck_crm_contact_points_ciphertext_size",
         ),
         ForeignKeyConstraint(
