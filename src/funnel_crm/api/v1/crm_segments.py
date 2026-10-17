@@ -280,7 +280,7 @@ async def update_crm_profile_segment(
         criteria = changes["criteria"]
         if criteria is None:
             raise HTTPException(status_code=422, detail="criteria cannot be null")
-        segment.criteria = criteria.model_dump(exclude_none=True)
+        segment.criteria = criteria
     segment.updated_at = datetime.now(timezone.utc)
     await context.session.flush()
     _audit(
