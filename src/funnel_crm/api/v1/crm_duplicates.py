@@ -133,11 +133,11 @@ async def list_duplicate_candidates(
                     crm_scope_ids(context, permission_key="crm.profile:view")
                 ),
                 CRMContactPoint.tenant_id == tenant_id,
-                CRMContactPoint.channel.in_(channels),
+                CRMContactPoint.channel.in_(sorted(channels)),
                 tuple_(
                     CRMContactPoint.fingerprint_key_id,
                     CRMContactPoint.match_fingerprint,
-                ).in_(fingerprints),
+                ).in_(sorted(fingerprints)),
             )
             .distinct()
             .order_by(CRMProfile.display_name, CRMProfile.id, CRMContactPoint.channel)
