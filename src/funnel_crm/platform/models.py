@@ -580,6 +580,12 @@ class CRMContactPoint(Base):
             "octet_length(encrypted_value) BETWEEN 29 AND 4096",
             name="ck_crm_contact_points_ciphertext_size",
         ),
+        CheckConstraint(
+            "(match_fingerprint IS NULL AND fingerprint_key_id IS NULL) OR "
+            "(octet_length(match_fingerprint) = 32 AND "
+            "length(trim(fingerprint_key_id)) BETWEEN 1 AND 64)",
+            name="ck_crm_contact_points_fingerprint_pair",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "profile_id"],
             ["crm_profiles.tenant_id", "crm_profiles.id"],
@@ -587,6 +593,13 @@ class CRMContactPoint(Base):
             ondelete="CASCADE",
         ),
         Index("ix_crm_contact_points_tenant_profile", "tenant_id", "profile_id"),
+        Index(
+            "ix_crm_contact_points_blind_match",
+            "tenant_id",
+            "channel",
+            "fingerprint_key_id",
+            "match_fingerprint",
+        ),
         Index(
             "uq_crm_contact_points_one_primary_per_channel",
             "tenant_id",
@@ -603,6 +616,8 @@ class CRMContactPoint(Base):
     channel: Mapped[str] = mapped_column(String(32), nullable=False)
     encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     encryption_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fingerprint_key_id: Mapped[str | None] = mapped_column(String(64))
+    match_fingerprint: Mapped[bytes | None] = mapped_column(LargeBinary)
     verification_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="unverified", server_default="unverified"
     )
