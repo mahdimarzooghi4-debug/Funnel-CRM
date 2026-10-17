@@ -501,6 +501,59 @@ class CRMCustomFieldDefinition(Base):
     )
 
 
+class CRMProfileCustomFieldValue(Base):
+    """Typed value attached to one profile and same-tenant field definition."""
+
+    __tablename__ = "crm_profile_custom_field_values"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(value) IN ('string', 'number', 'boolean')",
+            name="ck_crm_profile_custom_value_json_scalar",
+        ),
+        CheckConstraint(
+            "octet_length(value::text) <= 8192",
+            name="ck_crm_profile_custom_value_size",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_custom_value_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "field_definition_id"],
+            ["crm_custom_field_definitions.tenant_id", "crm_custom_field_definitions.id"],
+            name="fk_crm_custom_value_definition_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "profile_id",
+            "field_definition_id",
+            name="uq_crm_custom_value_profile_definition",
+        ),
+        Index(
+            "ix_crm_custom_values_tenant_profile",
+            "tenant_id",
+            "profile_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    field_definition_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
 class CRMProfile(Base):
     """Tenant-owned person or organization profile anchored to a tenant record."""
 
