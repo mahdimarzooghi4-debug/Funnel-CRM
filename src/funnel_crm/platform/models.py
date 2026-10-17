@@ -280,5 +280,8 @@ class TenantRecord(Base):
     organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     record_type: Mapped[str] = mapped_column(String(80), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
     )
