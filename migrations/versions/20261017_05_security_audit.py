@@ -142,11 +142,7 @@ def upgrade() -> None:
             event_action text;
         BEGIN
             -- Tenant deletion cascades already remove the audit rows. Do not
-            -- create new audit rows while those parent rows are being purged.
-            IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
-                RETURN OLD;
-            END IF;
-
+            -- create new audit rows after the parent workspace has been removed.
             IF TG_OP = 'INSERT' THEN
                 row_data := to_jsonb(NEW);
                 new_data := row_data;
@@ -162,6 +158,12 @@ def upgrade() -> None:
             END IF;
 
             tenant_value := (row_data ->> 'tenant_id')::uuid;
+            IF TG_OP = 'DELETE' AND NOT EXISTS (
+                SELECT 1 FROM workspaces WHERE id = tenant_value
+            ) THEN
+                RETURN OLD;
+            END IF;
+
             actor_identity_value :=
                 NULLIF(current_setting('app.actor_identity_id', true), '')::uuid;
             actor_membership_value :=
