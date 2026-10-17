@@ -198,7 +198,11 @@ def upgrade() -> None:
                     (row_data ->> 'organization_unit_id')::uuid
                 ELSE NULL
             END;
-            event_action := event_target_type || '.' || CASE TG_OP\n                WHEN 'INSERT' THEN 'created'\n                WHEN 'UPDATE' THEN 'updated'\n                ELSE 'deleted'\n            END;
+            event_action := event_target_type || '.' || CASE TG_OP
+                WHEN 'INSERT' THEN 'created'
+                WHEN 'UPDATE' THEN 'updated'
+                ELSE 'deleted'
+            END;
 
             INSERT INTO audit_events (
                 tenant_id,
