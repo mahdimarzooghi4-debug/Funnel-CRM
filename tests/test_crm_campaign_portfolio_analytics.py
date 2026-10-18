@@ -229,6 +229,64 @@ async def test_campaign_portfolio_analytics_groups_observed_results_without_curr
         ]
         assert objective["campaign_list_truncated"] is True
 
+        comparison = await client.get(
+            "/api/v1/crm/analytics/campaign-performance/comparison",
+            headers=headers,
+            params={
+                "current_period_start": "2026-10-17",
+                "current_period_end": "2026-10-17",
+                "comparison_period_start": "2026-10-16",
+                "comparison_period_end": "2026-10-16",
+                "grouped_by": "channel",
+            },
+        )
+        assert comparison.status_code == 200, comparison.text
+        comparison_result = comparison.json()
+        click_change = comparison_result["total"]["change"]["totals"]["clicks"]
+        assert click_change == {
+            "current_value": 25,
+            "comparison_value": 70,
+            "absolute_change": -45,
+            "percent_change": -64.2857,
+            "comparable": True,
+        }
+        usd_spend_change = comparison_result["total"]["change"]["actual_spend_by_currency"]["USD"]
+        assert usd_spend_change == {
+            "current_value": None,
+            "comparison_value": "50.000000",
+            "absolute_change": None,
+            "percent_change": None,
+            "comparable": False,
+        }
+        group_comparison = {item["key"]: item for item in comparison_result["groups"]}
+        assert group_comparison["web"]["change"]["totals"]["clicks"]["absolute_change"] == -25
+        assert group_comparison["store"]["current"] is None
+        assert group_comparison["store"]["change"]["totals"]["clicks"]["comparable"] is False
+
+        unequal_periods = await client.get(
+            "/api/v1/crm/analytics/campaign-performance/comparison",
+            headers=headers,
+            params={
+                "current_period_start": "2026-10-16",
+                "current_period_end": "2026-10-17",
+                "comparison_period_start": "2026-10-16",
+                "comparison_period_end": "2026-10-16",
+            },
+        )
+        assert unequal_periods.status_code == 422
+
+        overlapping_periods = await client.get(
+            "/api/v1/crm/analytics/campaign-performance/comparison",
+            headers=headers,
+            params={
+                "current_period_start": "2026-10-16",
+                "current_period_end": "2026-10-17",
+                "comparison_period_start": "2026-10-17",
+                "comparison_period_end": "2026-10-18",
+            },
+        )
+        assert overlapping_periods.status_code == 422
+
         invalid_period = await client.get(
             "/api/v1/crm/analytics/campaign-performance/portfolio",
             headers=headers,
