@@ -566,7 +566,51 @@ class ProductConnection(Base):
             name="uq_product_connections_tenant_credential",
         ),
         CheckConstraint(
-            "source_product ~ '^[a-z0-9][a-z0-9._-]{1,79}
+            "length(trim(source_product)) BETWEEN 2 AND 80",
+            name="ck_product_connections_source",
+        ),
+        CheckConstraint(
+            "octet_length(credential_digest) = 32",
+            name="ck_product_connections_credential_digest",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(allowed_event_types) = 'array' AND "
+            "jsonb_array_length(allowed_event_types) BETWEEN 1 AND 50 AND "
+            "octet_length(allowed_event_types::text) <= 8192",
+            name="ck_product_connections_event_grants",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(contract_grants) = 'array' AND "
+            "jsonb_array_length(contract_grants) BETWEEN 1 AND 50 AND "
+            "octet_length(contract_grants::text) <= 8192",
+            name="ck_product_connections_contract_grants",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_product_connections_workspace",
+            ondelete="CASCADE",
+        ),
+        Index("ix_product_connections_tenant_created", "tenant_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    credential_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    credential_digest: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    source_product: Mapped[str] = mapped_column(String(80), nullable=False)
+    allowed_event_types: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    contract_grants: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class IntegrationEventInbox(Base):
     """Durable tenant-scoped receipt for an event from a verified product connection."""
 
     __tablename__ = "integration_event_inbox"
