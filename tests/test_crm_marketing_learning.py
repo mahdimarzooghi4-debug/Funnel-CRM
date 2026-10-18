@@ -1,0 +1,193 @@
+from datetime import date
+from uuid import UUID, uuid4
+
+import httpx
+import pytest
+from fastapi import FastAPI, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from funnel_crm.api.v1.crm_marketing_learning import router
+from funnel_crm.platform.models import (
+    AuditEvent,
+    CRMMarketingCampaign,
+    CRMMarketingCampaignMeasurement,
+    CRMMarketingCampaignTargetPlan,
+    CRMProfileSegment,
+    Role,
+    RoleAssignment,
+    RolePermission,
+)
+from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
+
+
+def make_app(session_factory: async_sessionmaker[AsyncSession], identity: AuthenticatedIdentity) -> FastAPI:
+    app = FastAPI()
+    app.state.session_factory = session_factory
+
+    @app.middleware("http")
+    async def add_test_identity(request: Request, call_next):
+        request.state.authenticated_identity = identity
+        return await call_next(request)
+
+    app.include_router(router, prefix="/api/v1")
+    return app
+
+
+@pytest.mark.asyncio
+async def test_marketing_learning_review_connects_targets_action_and_measured_follow_up(
+    runtime_session_factory: async_sessionmaker[AsyncSession],
+    tenant_case: dict[str, object],
+) -> None:
+    tenant_id, root_id = tenant_case["workspace_a"], tenant_case["root_a"]
+    identity = tenant_case["identity"]
+    assert isinstance(tenant_id, UUID)
+    assert isinstance(root_id, UUID)
+    assert isinstance(identity, AuthenticatedIdentity)
+
+    segment_id, campaign_id = uuid4(), uuid4()
+    baseline_id, follow_up_id, empty_follow_up_id = uuid4(), uuid4(), uuid4()
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        context.session.add(CRMProfileSegment(
+            id=segment_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            name=f"Learning audience {uuid4().hex[:8]}",
+            criteria={"profile_kinds": ["person"]}, is_active=True,
+        ))
+        await context.session.flush()
+        context.session.add(CRMMarketingCampaign(
+            id=campaign_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            segment_id=segment_id, name="Learning campaign", objective_key="acquisition",
+            channel="web", planned_budget_amount=None, planned_budget_currency=None,
+            starts_at=None, ends_at=None, status="draft",
+        ))
+        await context.session.flush()
+
+        def target(plan_id, start, end):
+            return CRMMarketingCampaignTargetPlan(
+                id=plan_id, tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=campaign_id, period_start=start, period_end=end,
+                conversions_target=2,
+            )
+
+        context.session.add_all([
+            target(baseline_id, date(2026, 10, 16), date(2026, 10, 17)),
+            target(follow_up_id, date(2026, 10, 18), date(2026, 10, 19)),
+            target(empty_follow_up_id, date(2026, 10, 20), date(2026, 10, 21)),
+            CRMMarketingCampaignMeasurement(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=campaign_id, measured_on=date(2026, 10, 16),
+                source_label="analytics", conversions=1,
+            ),
+            CRMMarketingCampaignMeasurement(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=campaign_id, measured_on=date(2026, 10, 19),
+                source_label="analytics", conversions=3,
+            ),
+        ])
+        role = Role(tenant_id=tenant_id, name=f"Learning manager {uuid4().hex[:8]}")
+        context.session.add(role)
+        await context.session.flush()
+        context.session.add_all([
+            RoleAssignment(
+                tenant_id=tenant_id, membership_id=context.access.membership_id,
+                role_id=role.id, organization_unit_id=root_id,
+            ),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
+        ])
+        await context.session.flush()
+
+    app = make_app(runtime_session_factory, identity)
+    headers = {"X-Workspace-ID": str(tenant_id)}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        base = "/api/v1/crm/marketing-learning/reviews"
+        created = await client.post(base, headers=headers, json={
+            "campaign_id": str(campaign_id),
+            "target_plan_id": str(baseline_id),
+            "assessment": "The campaign missed its conversion target in the measured period.",
+            "corrective_action": "Revise the landing page and monitor the next period.",
+        })
+        assert created.status_code == 201, created.text
+        review_id = created.json()["id"]
+        assert created.json()["status"] == "planned"
+        assert created.json()["lesson_learned"] is None
+
+        initial = await client.get(f"{base}/{review_id}", headers=headers)
+        assert initial.status_code == 200, initial.text
+        assert initial.json()["baseline"]["metrics"]["conversions"]["actual"] == 1
+        assert initial.json()["baseline"]["metrics"]["conversions"]["status"] == "not_met"
+        assert initial.json()["follow_up"] is None
+
+        missing_data = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
+            "follow_up_target_plan_id": str(empty_follow_up_id),
+            "follow_up_effectiveness": "We expect improvement after the change.",
+            "lesson_learned": "Landing page changes need follow-up measurement.",
+        })
+        assert missing_data.status_code == 422
+        assert "observed target data" in missing_data.text
+
+        evaluated = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
+            "follow_up_target_plan_id": str(follow_up_id),
+            "follow_up_effectiveness": "Conversions improved in observed follow-up data.",
+            "lesson_learned": "The revised page is associated with a higher observed conversion count.",
+        })
+        assert evaluated.status_code == 200, evaluated.text
+        body = evaluated.json()
+        assert body["review"]["status"] == "evaluated"
+        assert body["review"]["corrective_action"].startswith("Revise")
+        assert body["baseline"]["metrics"]["conversions"]["actual"] == 1
+        assert body["follow_up"]["metrics"]["conversions"]["actual"] == 3
+        assert body["follow_up"]["metrics"]["conversions"]["status"] == "met"
+
+        repeated = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
+            "follow_up_target_plan_id": str(follow_up_id),
+            "follow_up_effectiveness": "Updated note.",
+            "lesson_learned": "Updated lesson.",
+        })
+        assert repeated.status_code == 409
+
+        listed = await client.get(base, headers=headers, params={"campaign_id": str(campaign_id)})
+        assert listed.status_code == 200, listed.text
+        assert len(listed.json()) == 1
+        assert listed.json()[0]["id"] == review_id
+
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        events = (await context.session.scalars(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == tenant_id,
+                AuditEvent.target_type == "crm_marketing_learning_review",
+            )
+        )).all()
+        assert {event.action_key for event in events} >= {
+            "crm_marketing_learning_review.created",
+            "crm_marketing_learning_review.viewed",
+            "crm_marketing_learning_review.evaluated",
+        }
+
+
+@pytest.mark.asyncio
+async def test_marketing_learning_review_requires_campaign_scope(
+    runtime_session_factory: async_sessionmaker[AsyncSession],
+    tenant_case: dict[str, object],
+) -> None:
+    tenant_id = tenant_case["workspace_a"]
+    identity = tenant_case["identity"]
+    assert isinstance(tenant_id, UUID)
+    assert isinstance(identity, AuthenticatedIdentity)
+    app = make_app(runtime_session_factory, identity)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/crm/marketing-learning/reviews",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            json={
+                "campaign_id": str(uuid4()),
+                "target_plan_id": str(uuid4()),
+                "assessment": "Assessment",
+                "corrective_action": "Action",
+            },
+        )
+    assert response.status_code == 404
