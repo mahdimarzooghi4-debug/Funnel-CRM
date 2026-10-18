@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import select
 
 from funnel_crm.api.v1.integrations import VerifiedProductConnection, router
 from funnel_crm.platform.models import AuditEvent, IntegrationEventInbox
@@ -67,9 +68,7 @@ async def test_postgres_event_inbox_is_durable_idempotent_and_tenant_scoped(
         duplicate = await client.post("/api/v1/integrations/events", json=body)
         changed = {**body, "payload": {"order_id": "different-order"}}
         reused_id = await client.post("/api/v1/integrations/events", json=changed)
-        cross_tenant = {
-            **event_body(tenant_case["workspace_b"], event_id=uuid4()),
-        }
+        cross_tenant = event_body(tenant_case["workspace_b"], event_id=uuid4())
         denied = await client.post("/api/v1/integrations/events", json=cross_tenant)
 
     assert first.status_code == 202
@@ -88,16 +87,12 @@ async def test_postgres_event_inbox_is_durable_idempotent_and_tenant_scoped(
         requested_tenant_id=tenant_id,
         identity=identity,
     ) as context:
-        inbox_rows = (
-            await context.session.scalars(
-                IntegrationEventInbox.__table__.select().where(
-                    IntegrationEventInbox.tenant_id == tenant_id,
-                    IntegrationEventInbox.event_id == event_id,
-                )
+        persisted = await context.session.scalar(
+            select(IntegrationEventInbox).where(
+                IntegrationEventInbox.tenant_id == tenant_id,
+                IntegrationEventInbox.event_id == event_id,
             )
-        ).all()
-        # Select ORM entities below as well to assert persisted state and payload.
-        persisted = await context.session.get(IntegrationEventInbox, inbox_rows[0].id)
+        )
         assert persisted is not None
         assert persisted.processing_status == "received"
         assert persisted.payload == body["payload"]
@@ -105,7 +100,7 @@ async def test_postgres_event_inbox_is_durable_idempotent_and_tenant_scoped(
 
         audits = (
             await context.session.scalars(
-                __import__("sqlalchemy").select(AuditEvent).where(
+                select(AuditEvent).where(
                     AuditEvent.tenant_id == tenant_id,
                     AuditEvent.action_key == "integration.event.received",
                     AuditEvent.target_key == f"funnel.store:{event_id}",
