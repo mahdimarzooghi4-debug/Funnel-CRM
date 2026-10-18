@@ -1,5 +1,6 @@
 """Tenant- and organization-scoped planning scenarios for campaign budgets."""
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
@@ -71,8 +72,8 @@ class BudgetScenarioSummary(BaseModel):
     name: str
     status: Literal["draft", "archived"]
     allocation_count: int
-    created_at: object
-    updated_at: object
+    created_at: datetime
+    updated_at: datetime
 
 
 class BudgetScenarioAllocationRead(BaseModel):
@@ -300,7 +301,8 @@ async def _scenario_detail(
         ).join(
             CRMMarketingCampaign,
             (CRMMarketingCampaign.tenant_id == CRMMarketingBudgetScenarioLine.tenant_id)
-            & (CRMMarketingCampaign.id == CRMMarketingBudgetScenarioLine.campaign_id),
+            & (CRMMarketingCampaign.id == CRMMarketingBudgetScenarioLine.campaign_id)
+            & (CRMMarketingCampaign.organization_unit_id == CRMMarketingBudgetScenarioLine.organization_unit_id),
         ).where(
             CRMMarketingBudgetScenarioLine.tenant_id == context.access.tenant_id,
             CRMMarketingBudgetScenarioLine.scenario_id == scenario.id,
@@ -440,7 +442,7 @@ async def replace_budget_scenario_allocations(
     ]
     context.session.add_all(lines)
     await context.session.flush()
-    scenario.updated_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+    scenario.updated_at = datetime.now(timezone.utc)
     _audit(context, scenario, "crm_marketing_budget_scenario.allocations_replaced", len(lines))
     await context.session.flush()
     return await _scenario_detail(context, scenario)
