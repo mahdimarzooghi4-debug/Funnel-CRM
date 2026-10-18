@@ -170,6 +170,7 @@ def _finish(acc: dict[str, object]) -> PerformanceAggregate:
     ci = paired["clicks_impressions"]
     lc = paired["leads_clicks"]
     vc = paired["conversions_clicks"]
+    return PerformanceAggregate(
         campaign_count=acc["campaign_count"],
         measurement_record_count=acc["measurement_record_count"],
         observed_campaign_days=coverage,
