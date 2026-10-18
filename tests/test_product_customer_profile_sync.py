@@ -18,7 +18,9 @@ from funnel_crm.platform.models import (
     CRMCommunicationConsentEvent,
     CRMContactPoint,
     CRMCustomerActivity,
+    CRMMarketingCampaign,
     CRMProfile,
+    CRMProfileSegment,
     ProductConnection,
     ProductCustomerIdentity,
 )
@@ -61,7 +63,7 @@ def body(tenant_id: UUID, *, event_id: UUID, external_id: str, display_name: str
 
 
 
-def activity_body(tenant_id: UUID, *, event_id: UUID, external_id: str) -> dict:
+def activity_body(tenant_id: UUID, *, event_id: UUID, external_id: str, campaign_id: UUID | None = None) -> dict:
     event = body(
         tenant_id,
         event_id=event_id,
@@ -75,6 +77,7 @@ def activity_body(tenant_id: UUID, *, event_id: UUID, external_id: str) -> dict:
         "activity_type": "order.completed",
         "channel": "online",
         "source_record_id": "order-71",
+        "campaign_id": str(campaign_id) if campaign_id else None,
     }
     return event
 
@@ -85,6 +88,8 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
 ) -> None:
     tenant_id = tenant_case["workspace_a"]
     identity = tenant_case["identity"]
+    root_id = tenant_case["root_a"]
+    campaign_id = uuid4()
     assert isinstance(tenant_id, UUID)
     assert isinstance(identity, AuthenticatedIdentity)
     connection = VerifiedProductConnection(
@@ -99,7 +104,24 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
         requested_tenant_id=tenant_id,
         identity=identity,
     ) as context:
-        context.session.add(
+        segment_id = uuid4()
+        context.session.add_all([
+            CRMProfileSegment(
+                id=segment_id,
+                tenant_id=tenant_id,
+                organization_unit_id=root_id,
+                name="Store purchase audience",
+                criteria={},
+            ),
+            CRMMarketingCampaign(
+                id=campaign_id,
+                tenant_id=tenant_id,
+                organization_unit_id=root_id,
+                segment_id=segment_id,
+                name="Store launch",
+                objective_key="sales",
+                channel="store",
+            ),
             ProductConnection(
                 id=connection.connection_id,
                 tenant_id=tenant_id,
@@ -111,8 +133,8 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
                     {"contract_name": "crm.customer", "contract_version": 1},
                     {"contract_name": "crm.customer.activity", "contract_version": 1}
                 ],
-            )
-        )
+            ),
+        ])
         await context.session.flush()
 
     app = make_app(connection, runtime_session_factory)
@@ -162,6 +184,7 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
                 tenant_id,
                 event_id=activity_event,
                 external_id="store-customer-71",
+                campaign_id=campaign_id,
             ),
         )
         assert activity_response.status_code == 202
@@ -211,6 +234,7 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
         ).all()
         assert len(activities) == 1
         assert activities[0].activity_type == "order.completed"
+        assert activities[0].campaign_id == campaign_id
         assert activities[0].channel == "online"
         assert activities[0].source_record_id == "order-71"
         assert activities[0].source_event_id == activity_event
