@@ -115,7 +115,7 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         )
         assert moved.status_code == 200, moved.text
         assert moved.json()["stage_key"] == "proposal"
-        assert moved.json()["amount"] == "13250.000000"
+        assert moved.json()["amount"] == "13250.00"
 
         invalid_stage = await client.patch(
             f"/api/v1/crm/opportunities/{opportunity_id}",
