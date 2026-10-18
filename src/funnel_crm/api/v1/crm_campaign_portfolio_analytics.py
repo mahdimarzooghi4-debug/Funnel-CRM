@@ -274,7 +274,7 @@ async def get_campaign_portfolio_performance(
     all_acc = _empty_accumulator()
     group_accs: dict[str, dict[str, object]] = {}
     items: list[tuple[dict[str, object], CampaignPerformanceItem]] = []
-    sort_column = f"total_{sort_by}"
+    sort_column = sort_by
 
     for row in aggregate_rows:
         campaign_id = row["campaign_id"]
@@ -290,7 +290,7 @@ async def get_campaign_portfolio_performance(
             "planned_budget_currency": row["planned_budget_currency"],
             "measurement_record_count": int(row["measurement_record_count"]),
             "coverage": {key: int(row[f"days_{key}"] or 0) for key in METRICS},
-            "totals": {key: row[f"total_{key}"] for key in METRICS},
+            "totals": {key: int(row[f"total_{key}"]) if row[f"total_{key}"] is not None else None for key in METRICS},
             "pairs": {
                 name: [
                     int(row[f"pair_{name}_numerator"] or 0),
