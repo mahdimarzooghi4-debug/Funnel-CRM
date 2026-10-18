@@ -14,6 +14,10 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, or_, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from funnel_crm.platform.integration_payload_crypto import (
+    IntegrationPayloadCryptoError,
+    IntegrationPayloadKeyring,
+)
 from funnel_crm.platform.models import IntegrationEventInbox
 
 _ERROR_CODE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
@@ -58,6 +62,7 @@ class PostgresProductEventProcessor:
         max_attempts: int = 8,
         base_retry_seconds: int = 5,
         max_retry_seconds: int = 3600,
+        keyring: IntegrationPayloadKeyring | None = None,
     ) -> None:
         if not 1 <= lease_seconds <= 86_400:
             raise ValueError("lease_seconds must be between 1 and 86400")
@@ -70,6 +75,7 @@ class PostgresProductEventProcessor:
         self._max_attempts = max_attempts
         self._base_retry_seconds = base_retry_seconds
         self._max_retry_seconds = max_retry_seconds
+        self._keyring = keyring
 
     async def claim(
         self, tenant_id: UUID, *, limit: int = 10
@@ -136,6 +142,26 @@ class PostgresProductEventProcessor:
                 ).all()
 
                 for row in rows:
+                    payload = row.payload
+                    if row.encrypted_payload is not None and row.payload_key_id is not None:
+                        keyring = self._keyring
+                        if keyring is None:
+                            keyring = IntegrationPayloadKeyring.from_environment()
+                        try:
+                            payload = keyring.decrypt(
+                                tenant_id=row.tenant_id,
+                                event_id=row.event_id,
+                                source_product=row.source_product,
+                                event_type=row.event_type,
+                                contract_name=row.contract_name,
+                                contract_version=row.contract_version,
+                                key_id=row.payload_key_id,
+                                ciphertext=row.encrypted_payload,
+                            )
+                        except IntegrationPayloadCryptoError as exc:
+                            raise ValueError(
+                                "claimed integration payload cannot be safely decrypted"
+                            ) from exc
                     token = uuid4()
                     lease_until = now + timedelta(seconds=self._lease_seconds)
                     row.processing_status = "processing"
@@ -153,7 +179,7 @@ class PostgresProductEventProcessor:
                             contract_version=row.contract_version,
                             correlation_id=row.correlation_id,
                             occurred_at=row.occurred_at,
-                            payload=row.payload,
+                            payload=payload,
                             attempt_count=row.attempt_count,
                             lease_token=token,
                             lease_until=lease_until,
