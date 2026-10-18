@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import hmac
 import os
 import re
 from dataclasses import dataclass
@@ -70,6 +71,23 @@ class IntegrationPayloadKeyring:
             raise IntegrationPayloadCryptoError(
                 "integration payload keyring is invalid"
             ) from exc
+
+    def digest(
+        self, canonical_event: bytes, *, key_id: str | None = None
+    ) -> tuple[str, bytes]:
+        """Return a keyed, domain-separated digest for idempotency checks."""
+        selected_key_id = key_id or self.active_key_id
+        key = self.keys.get(selected_key_id)
+        if key is None:
+            raise IntegrationPayloadCryptoError(
+                "integration event digest key is unavailable"
+            )
+        digest = hmac.new(
+            key,
+            b"funnel-crm:integration-event-digest:v1:" + canonical_event,
+            "sha256",
+        ).digest()
+        return selected_key_id, digest
 
     @staticmethod
     def _aad(
