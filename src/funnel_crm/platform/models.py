@@ -1488,3 +1488,114 @@ class CRMMarketingCampaignTargetPlan(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
     )
+
+
+class CRMMarketingCampaignExperiment(Base):
+    """A manager-defined comparison of campaign variants over a shared period."""
+
+    __tablename__ = "crm_marketing_campaign_experiments"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_campaign_experiments_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "organization_unit_id", "id",
+            name="uq_crm_marketing_campaign_experiments_tenant_org_id",
+        ),
+        CheckConstraint(
+            "length(trim(name)) BETWEEN 1 AND 160 AND length(trim(hypothesis)) BETWEEN 1 AND 1000",
+            name="ck_crm_marketing_campaign_experiments_text",
+        ),
+        CheckConstraint(
+            "period_start <= period_end AND period_end - period_start < 366",
+            name="ck_crm_marketing_campaign_experiments_period",
+        ),
+        CheckConstraint(
+            "primary_metric IN ('impressions', 'clicks', 'leads', 'conversions', "
+            "'click_through_rate_percent', 'conversion_rate_per_click_percent', "
+            "'cost_per_lead', 'cost_per_conversion', 'roas')",
+            name="ck_crm_marketing_campaign_experiments_metric",
+        ),
+        CheckConstraint(
+            "(primary_metric IN ('cost_per_lead', 'cost_per_conversion', 'roas') "
+            "AND currency IS NOT NULL AND length(currency) = 3 AND currency = upper(currency) "
+            "AND currency ~ '^[A-Z][A-Z][A-Z]') OR "
+            "(primary_metric NOT IN ('cost_per_lead', 'cost_per_conversion', 'roas') AND currency IS NULL)",
+            name="ck_crm_marketing_campaign_experiments_currency",
+        ),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_campaign_experiments_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_marketing_campaign_experiments_org_same_tenant", ondelete="RESTRICT"),
+        Index(
+            "ix_crm_marketing_campaign_experiments_tenant_org_period",
+            "tenant_id", "organization_unit_id", "period_start", "period_end",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    hypothesis: Mapped[str] = mapped_column(String(1000), nullable=False)
+    primary_metric: Mapped[str] = mapped_column(String(40), nullable=False)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    period_start: Mapped[date] = mapped_column(Date(), nullable=False)
+    period_end: Mapped[date] = mapped_column(Date(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
+class CRMMarketingCampaignExperimentVariant(Base):
+    """Campaign assignment and manager-supplied label for one experiment arm."""
+
+    __tablename__ = "crm_marketing_campaign_experiment_variants"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "experiment_id", "campaign_id",
+            name="uq_crm_marketing_campaign_experiment_variants_campaign",
+        ),
+        CheckConstraint("length(trim(label)) BETWEEN 1 AND 80",
+                        name="ck_crm_marketing_campaign_experiment_variants_label"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_campaign_experiment_variants_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "experiment_id"],
+            ["crm_marketing_campaign_experiments.tenant_id",
+             "crm_marketing_campaign_experiments.organization_unit_id",
+             "crm_marketing_campaign_experiments.id"],
+            name="fk_crm_marketing_campaign_experiment_variants_experiment_same_org",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_marketing_campaign_experiment_variants_campaign_same_org",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "uq_crm_marketing_campaign_experiment_variants_one_control",
+            "tenant_id", "experiment_id", unique=True,
+            postgresql_where=text("is_control"),
+        ),
+        Index(
+            "ix_crm_marketing_campaign_experiment_variants_tenant_campaign",
+            "tenant_id", "campaign_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    experiment_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    label: Mapped[str] = mapped_column(String(80), nullable=False)
+    is_control: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
