@@ -77,6 +77,7 @@ class CustomerActivityPayload(BaseModel):
         pattern=r"^(online|phone|store|field|support|campaign|other)$"
     )
     source_record_id: str | None = Field(default=None, min_length=1, max_length=200)
+    campaign_id: UUID | None = None
 
     @field_validator("external_customer_id", "source_record_id")
     @classmethod
@@ -401,12 +402,24 @@ class PostgresProductEventConsumer:
                         "crm.customer.activity.profile_merged"
                     )
 
+                if payload.campaign_id is not None:
+                    campaign = await session.scalar(
+                        select(CRMMarketingCampaign).where(
+                            CRMMarketingCampaign.tenant_id == event.tenant_id,
+                            CRMMarketingCampaign.id == payload.campaign_id,
+                            CRMMarketingCampaign.organization_unit_id == profile.organization_unit_id,
+                        )
+                    )
+                    if campaign is None:
+                        raise CustomerSyncError("crm.customer.activity.campaign_unavailable")
+
                 activity = CRMCustomerActivity(
                     id=uuid4(),
                     tenant_id=event.tenant_id,
                     profile_id=profile.id,
                     source_product=event.source_product,
                     source_event_id=event.event_id,
+                    campaign_id=payload.campaign_id,
                     activity_type=payload.activity_type,
                     channel=payload.channel,
                     source_record_id=payload.source_record_id,
@@ -429,6 +442,7 @@ class PostgresProductEventConsumer:
                             "source_event_id": str(event.event_id),
                             "activity_type": payload.activity_type,
                             "channel": payload.channel,
+                            "campaign_id": str(payload.campaign_id) if payload.campaign_id else None,
                         },
                         correlation_id=event.correlation_id,
                     )
