@@ -199,42 +199,51 @@ def _map_change(
 
 
 def _performance_change(
-    current: PerformanceAggregate,
-    comparison: PerformanceAggregate,
+    current: PerformanceAggregate | None,
+    comparison: PerformanceAggregate | None,
 ) -> PerformanceChange:
     def efficiency_values(
-        aggregate: PerformanceAggregate, attribute: str, value_attribute: str
+        aggregate: PerformanceAggregate | None, attribute: str, value_attribute: str
     ) -> dict[str, Decimal | None]:
+        if aggregate is None:
+            return {}
         metrics = getattr(aggregate.efficiency, attribute)
         return {
             currency: getattr(metric, value_attribute)
             for currency, metric in metrics.items()
         }
 
+    current_campaign_count = current.campaign_count if current is not None else None
+    comparison_campaign_count = comparison.campaign_count if comparison is not None else None
+    current_record_count = current.measurement_record_count if current is not None else None
+    comparison_record_count = comparison.measurement_record_count if comparison is not None else None
+    current_observed = current.observed_campaign_days if current is not None else {}
+    comparison_observed = comparison.observed_campaign_days if comparison is not None else {}
+    current_totals = current.totals if current is not None else {}
+    comparison_totals = comparison.totals if comparison is not None else {}
+    current_spend = current.actual_spend_by_currency if current is not None else {}
+    comparison_spend = comparison.actual_spend_by_currency if comparison is not None else {}
+    current_revenue = current.attributed_revenue_by_currency if current is not None else {}
+    comparison_revenue = comparison.attributed_revenue_by_currency if comparison is not None else {}
+
     return PerformanceChange(
-        campaign_count=_value_change(current.campaign_count, comparison.campaign_count),
-        measurement_record_count=_value_change(
-            current.measurement_record_count, comparison.measurement_record_count
-        ),
-        observed_campaign_days=_map_change(
-            current.observed_campaign_days, comparison.observed_campaign_days
-        ),
-        totals=_map_change(current.totals, comparison.totals),
+        campaign_count=_value_change(current_campaign_count, comparison_campaign_count),
+        measurement_record_count=_value_change(current_record_count, comparison_record_count),
+        observed_campaign_days=_map_change(current_observed, comparison_observed),
+        totals=_map_change(current_totals, comparison_totals),
         rates={
-            key: _value_change(getattr(current, key), getattr(comparison, key))
+            key: _value_change(
+                getattr(current, key) if current is not None else None,
+                getattr(comparison, key) if comparison is not None else None,
+            )
             for key in (
                 "click_through_rate_percent",
                 "lead_rate_per_click_percent",
                 "conversion_rate_per_click_percent",
             )
         },
-        actual_spend_by_currency=_map_change(
-            current.actual_spend_by_currency, comparison.actual_spend_by_currency
-        ),
-        attributed_revenue_by_currency=_map_change(
-            current.attributed_revenue_by_currency,
-            comparison.attributed_revenue_by_currency,
-        ),
+        actual_spend_by_currency=_map_change(current_spend, comparison_spend),
+        attributed_revenue_by_currency=_map_change(current_revenue, comparison_revenue),
         cost_per_lead_by_currency=_map_change(
             efficiency_values(current, "cost_per_lead_by_currency", "cost_per_outcome"),
             efficiency_values(comparison, "cost_per_lead_by_currency", "cost_per_outcome"),
@@ -709,8 +718,8 @@ async def compare_campaign_portfolio_performance(
                 current=current_groups.get(key),
                 comparison=comparison_groups.get(key),
                 change=_performance_change(
-                    current_groups[key] if key in current_groups else _finish(_empty_accumulator()),
-                    comparison_groups[key] if key in comparison_groups else _finish(_empty_accumulator()),
+                    current_groups.get(key),
+                    comparison_groups.get(key),
                 ),
             )
             for key in sorted(set(current_groups) | set(comparison_groups))
