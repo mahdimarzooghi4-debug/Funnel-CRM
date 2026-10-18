@@ -86,6 +86,7 @@ class PostgresProductEventProcessor:
         event_type: str | None = None,
         contract_name: str | None = None,
         contract_version: int | None = None,
+        event_id: UUID | None = None,
     ) -> list[ClaimedIntegrationEvent]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -147,6 +148,8 @@ class PostgresProductEventProcessor:
                     claim_filters.append(
                         IntegrationEventInbox.contract_version == contract_version
                     )
+                if event_id is not None:
+                    claim_filters.append(IntegrationEventInbox.event_id == event_id)
                 rows = (
                     await session.scalars(
                         select(IntegrationEventInbox)
