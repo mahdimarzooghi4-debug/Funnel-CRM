@@ -31,6 +31,7 @@ class LeaseLostError(Exception):
 class ClaimedIntegrationEvent:
     id: UUID
     tenant_id: UUID
+    connection_id: UUID
     event_id: UUID
     source_product: str
     event_type: str
@@ -191,6 +192,7 @@ class PostgresProductEventProcessor:
                         ClaimedIntegrationEvent(
                             id=row.id,
                             tenant_id=row.tenant_id,
+                            connection_id=row.connection_id,
                             event_id=row.event_id,
                             source_product=row.source_product,
                             event_type=row.event_type,
