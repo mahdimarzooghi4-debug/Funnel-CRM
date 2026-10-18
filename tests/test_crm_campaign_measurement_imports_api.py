@@ -125,7 +125,7 @@ async def test_campaign_measurement_csv_preview_atomic_import_and_idempotent_rep
             json={"csv_content": csv_content},
         )
         assert preview.status_code == 200, preview.text
-        assert preview.json()["valid"] is True
+        assert preview.json()["valid"] is True, preview.json()
         assert preview.json()["row_count"] == 2
         assert preview.json()["would_create"] == 1
         assert preview.json()["would_update"] == 1
