@@ -100,7 +100,7 @@ def authorize_product_event(
     operation_id="ingestProductEvent",
     summary="Accept an event from a connected product",
     responses={
-        401: {"description": "No verified product connection"},
+        401: {"description": "Missing or invalid product credential"},
         403: {"description": "Connection is inactive or outside its Workspace grant"},
         503: {"description": "Durable event inbox is not configured"},
     },
@@ -111,9 +111,17 @@ async def ingest_product_event(
     """Validate scope then hand off to a durable, idempotent inbox."""
     connection = getattr(request.state, "verified_product_connection", None)
     if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=event.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="A verified product connection is required",
+            detail="A valid product credential is required",
         )
     authorize_product_event(connection, event)
 
