@@ -18,6 +18,7 @@ from funnel_crm.platform.models import (
     CRMCommunicationConsentEvent,
     CRMContactPoint,
     CRMProfile,
+    ProductConnection,
     ProductCustomerIdentity,
 )
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
@@ -73,6 +74,26 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
         allowed_event_types=frozenset({"customer.upserted"}),
         supported_contract_versions=frozenset({("crm.customer", 1)}),
     )
+    async with tenant_session(
+        runtime_session_factory,
+        requested_tenant_id=tenant_id,
+        identity=identity,
+    ) as context:
+        context.session.add(
+            ProductConnection(
+                id=connection.connection_id,
+                tenant_id=tenant_id,
+                credential_id=uuid4(),
+                credential_digest=b"d" * 32,
+                source_product="funnel.store",
+                allowed_event_types=["customer.upserted"],
+                contract_grants=[
+                    {"contract_name": "crm.customer", "contract_version": 1}
+                ],
+            )
+        )
+        await context.session.flush()
+
     app = make_app(connection, runtime_session_factory)
     first_event, second_event = uuid4(), uuid4()
     async with httpx.AsyncClient(
