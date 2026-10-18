@@ -63,9 +63,7 @@ class PostgresProductEventSink:
                 event_type=event.event_type,
                 contract_name=event.contract_name,
                 contract_version=event.contract_version,
-                payload={},
-                        payload_key_id=payload_key_id,
-                        encrypted_payload=encrypted_payload,
+                payload=event.payload,
             )
         except IntegrationPayloadCryptoError as exc:
             raise HTTPException(
@@ -97,7 +95,9 @@ class PostgresProductEventSink:
                         contract_version=event.contract_version,
                         correlation_id=event.correlation_id,
                         occurred_at=event.occurred_at,
-                        payload=event.payload,
+                        payload={},
+                        payload_key_id=payload_key_id,
+                        encrypted_payload=encrypted_payload,
                         event_digest=event_digest,
                         processing_status="received",
                     )
