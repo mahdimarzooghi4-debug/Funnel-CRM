@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_customer_activity_analytics import router
@@ -64,10 +64,7 @@ async def test_customer_activity_analytics_compares_scoped_periods(
         requested_tenant_id=tenant_a,
         identity=identity_a,
     ) as context:
-        for profile_id, name in (
-            (profile_a, "Analytics customer one"),
-            (profile_a2, "Analytics customer two"),
-        ):
+        for profile_id in (profile_a, profile_a2):
             context.session.add(
                 TenantRecord(
                     id=profile_id,
@@ -242,6 +239,25 @@ async def test_customer_activity_analytics_compares_scoped_periods(
             params={"organization_unit_id": str(root_b)},
         )
         assert hidden_scope.status_code == 404
+
+        async with tenant_session(
+            runtime_session_factory,
+            requested_tenant_id=tenant_a,
+            identity=identity_a,
+        ) as context:
+            await context.session.execute(
+                delete(RolePermission).where(
+                    RolePermission.tenant_id == tenant_a,
+                    RolePermission.role_id == role.id,
+                    RolePermission.permission_key == "crm.profile:view",
+                )
+            )
+        denied = await client.get(
+            "/api/v1/crm/analytics/customer-activities/summary",
+            headers=headers,
+            params={"window_days": 30},
+        )
+        assert denied.status_code == 403
 
     async with tenant_session(
         runtime_session_factory,
