@@ -1,6 +1,7 @@
 """Marketing campaign planning endpoints; sending and activation are intentionally absent."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -25,6 +26,8 @@ class CampaignCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     objective_key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
     channel: CampaignChannel
+    planned_budget_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
+    planned_budget_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     starts_at: datetime | None = None
     ends_at: datetime | None = None
 
@@ -47,6 +50,8 @@ class CampaignCreate(BaseModel):
     def validate_schedule(self) -> "CampaignCreate":
         if self.starts_at is not None and self.ends_at is not None and self.starts_at >= self.ends_at:
             raise ValueError("starts_at must be earlier than ends_at")
+        if (self.planned_budget_amount is None) != (self.planned_budget_currency is None):
+            raise ValueError("planned budget amount and currency must be provided together")
         return self
 
 
@@ -57,6 +62,8 @@ class CampaignUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     objective_key: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
     channel: CampaignChannel | None = None
+    planned_budget_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
+    planned_budget_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     starts_at: datetime | None = None
     ends_at: datetime | None = None
 
@@ -68,6 +75,16 @@ class CampaignUpdate(BaseModel):
         if isinstance(value, str) and not value.strip():
             raise ValueError("value must contain a non-whitespace character")
         return value.strip() if isinstance(value, str) and value == value.strip() else value
+
+    @model_validator(mode="after")
+    def validate_budget_pair(self) -> "CampaignUpdate":
+        fields = self.model_fields_set
+        budget_touched = {"planned_budget_amount", "planned_budget_currency"} & fields
+        if budget_touched and budget_touched != {"planned_budget_amount", "planned_budget_currency"}:
+            raise ValueError("planned budget amount and currency must be updated together")
+        if budget_touched and ((self.planned_budget_amount is None) != (self.planned_budget_currency is None)):
+            raise ValueError("planned budget amount and currency must be provided together")
+        return self
 
     @field_validator("starts_at", "ends_at")
     @classmethod
@@ -86,6 +103,8 @@ class CampaignRead(BaseModel):
     name: str
     objective_key: str
     channel: str
+    planned_budget_amount: Decimal | None
+    planned_budget_currency: str | None
     starts_at: datetime | None
     ends_at: datetime | None
     status: str
@@ -140,7 +159,7 @@ def _audit(context: TenantSessionContext, campaign: CRMMarketingCampaign, action
             target_key=str(campaign.id),
             organization_unit_id=campaign.organization_unit_id,
             before_state=None,
-            after_state={"status": campaign.status, "channel": campaign.channel},
+            after_state={"status": campaign.status, "channel": campaign.channel, "planned_budget_amount": str(campaign.planned_budget_amount) if campaign.planned_budget_amount is not None else None, "planned_budget_currency": campaign.planned_budget_currency},
             correlation_id=None,
         )
     )
@@ -194,7 +213,9 @@ async def create_campaign(
         id=uuid4(), tenant_id=context.access.tenant_id,
         organization_unit_id=payload.organization_unit_id, segment_id=payload.segment_id,
         name=payload.name, objective_key=payload.objective_key, channel=payload.channel,
-        starts_at=payload.starts_at, ends_at=payload.ends_at, status="draft",
+        starts_at=payload.starts_at, ends_at=payload.ends_at,
+        planned_budget_amount=payload.planned_budget_amount,
+        planned_budget_currency=payload.planned_budget_currency, status="draft",
     )
     context.session.add(campaign)
     await context.session.flush()
@@ -272,6 +293,8 @@ class CampaignPortfolioItem(BaseModel):
     segment_id: UUID
     channel: str
     objective_key: str
+    planned_budget_amount: Decimal | None
+    planned_budget_currency: str | None
     starts_at: datetime
     ends_at: datetime
     overlapping_campaign_ids: list[UUID]
@@ -283,6 +306,8 @@ class CampaignPortfolioRead(BaseModel):
     total_draft_campaigns: int
     scheduled_campaigns_in_window: int
     unscheduled_campaigns: int
+    unbudgeted_draft_campaigns: int
+    draft_budget_by_currency: dict[str, Decimal]
     exact_same_segment_conflict_pairs: int
     overlap_basis: Literal["same_segment_id_and_overlapping_schedule"]
     items: list[CampaignPortfolioItem]
@@ -324,6 +349,22 @@ async def review_campaign_portfolio(
             (CRMMarketingCampaign.starts_at.is_(None) | CRMMarketingCampaign.ends_at.is_(None)),
         )
     ) or 0)
+    unbudgeted = int(await context.session.scalar(
+        select(func.count()).select_from(CRMMarketingCampaign).where(
+            *base_filters,
+            CRMMarketingCampaign.planned_budget_amount.is_(None),
+        )
+    ) or 0)
+    budget_rows = (await context.session.execute(
+        select(
+            CRMMarketingCampaign.planned_budget_currency,
+            func.sum(CRMMarketingCampaign.planned_budget_amount),
+        ).where(
+            *base_filters,
+            CRMMarketingCampaign.planned_budget_amount.is_not(None),
+        ).group_by(CRMMarketingCampaign.planned_budget_currency)
+    )).all()
+    budget_by_currency = {str(currency): amount for currency, amount in budget_rows}
     rows = (await context.session.scalars(
         select(CRMMarketingCampaign).where(
             *base_filters,
@@ -360,6 +401,8 @@ async def review_campaign_portfolio(
         total_draft_campaigns=total,
         scheduled_campaigns_in_window=len(campaigns),
         unscheduled_campaigns=unscheduled,
+        unbudgeted_draft_campaigns=unbudgeted,
+        draft_budget_by_currency=budget_by_currency,
         exact_same_segment_conflict_pairs=len(pairs),
         overlap_basis="same_segment_id_and_overlapping_schedule",
         items=[
@@ -369,6 +412,8 @@ async def review_campaign_portfolio(
                 segment_id=campaign.segment_id,
                 channel=campaign.channel,
                 objective_key=campaign.objective_key,
+                planned_budget_amount=campaign.planned_budget_amount,
+                planned_budget_currency=campaign.planned_budget_currency,
                 starts_at=campaign.starts_at,
                 ends_at=campaign.ends_at,
                 overlapping_campaign_ids=sorted(overlapping[campaign.id], key=str),
