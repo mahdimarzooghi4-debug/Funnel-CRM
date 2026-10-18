@@ -1,6 +1,5 @@
 """Project verified product activity events into the CRM customer timeline."""
 
-from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
