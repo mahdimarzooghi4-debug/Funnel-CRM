@@ -179,8 +179,16 @@ class PostgresProductEventConsumer:
         async with self._session_factory() as session:
             async with session.begin():
                 await session.execute(
-                    text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
-                    {"tenant_id": str(event.tenant_id)},
+                    text(
+                        "SELECT set_config('app.tenant_id', :tenant_id, true), "
+                        "set_config('app.integration_connection_id', :connection_id, true), "
+                        "set_config('app.correlation_id', :correlation_id, true)"
+                    ),
+                    {
+                        "tenant_id": str(event.tenant_id),
+                        "connection_id": str(event.connection_id),
+                        "correlation_id": str(event.correlation_id),
+                    },
                 )
                 workspace = await session.scalar(
                     select(Workspace).where(Workspace.id == event.tenant_id)
