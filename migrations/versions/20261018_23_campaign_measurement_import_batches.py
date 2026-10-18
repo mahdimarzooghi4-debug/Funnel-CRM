@@ -37,7 +37,7 @@ def upgrade() -> None:
             name="ck_crm_marketing_measurement_import_batches_key",
         ),
         sa.CheckConstraint(
-            "payload_sha256 ~ '^[0-9a-f]{64}'",
+            "length(payload_sha256) = 64 AND payload_sha256 ~ '^[0-9a-f]{64}'",
             name="ck_crm_marketing_measurement_import_batches_hash",
         ),
         sa.CheckConstraint(
