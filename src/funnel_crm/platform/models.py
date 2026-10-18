@@ -706,6 +706,7 @@ class IntegrationEventInbox(Base):
     payload_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     encrypted_payload: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     event_digest: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    event_digest_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     processing_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="received", server_default="received"
     )
