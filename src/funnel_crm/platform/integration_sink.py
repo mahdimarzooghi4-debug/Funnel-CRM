@@ -14,20 +14,40 @@ from funnel_crm.api.v1.integrations import (
     ProductEventEnvelope,
     VerifiedProductConnection,
 )
+from funnel_crm.platform.integration_payload_crypto import (
+    IntegrationPayloadCryptoError,
+    IntegrationPayloadKeyring,
+)
 from funnel_crm.platform.models import IntegrationEventInbox
 
 
 class PostgresProductEventSink:
     """Commit an event receipt before acknowledging the verified producer."""
 
-    def __init__(self, session_factory: async_sessionmaker[Any]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[Any],
+        *,
+        keyring: IntegrationPayloadKeyring | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._keyring = keyring
 
     async def accept(
         self,
         connection: VerifiedProductConnection,
         event: ProductEventEnvelope,
     ) -> EventReceipt:
+        keyring = self._keyring
+        if keyring is None:
+            try:
+                keyring = IntegrationPayloadKeyring.from_environment()
+            except IntegrationPayloadCryptoError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Integration payload encryption is unavailable",
+                ) from exc
+
         canonical_event = json.dumps(
             event.model_dump(mode="json"),
             sort_keys=True,
@@ -35,6 +55,23 @@ class PostgresProductEventSink:
             ensure_ascii=False,
         ).encode("utf-8")
         event_digest = hashlib.sha256(canonical_event).digest()
+        try:
+            payload_key_id, encrypted_payload = keyring.encrypt(
+                tenant_id=connection.tenant_id,
+                event_id=event.event_id,
+                source_product=event.source_product,
+                event_type=event.event_type,
+                contract_name=event.contract_name,
+                contract_version=event.contract_version,
+                payload={},
+                        payload_key_id=payload_key_id,
+                        encrypted_payload=encrypted_payload,
+            )
+        except IntegrationPayloadCryptoError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Integration payload encryption is unavailable",
+            ) from exc
 
         async with self._session_factory() as session:
             async with session.begin():
