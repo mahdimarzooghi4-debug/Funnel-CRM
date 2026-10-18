@@ -3,7 +3,7 @@ import os
 from uuid import uuid4
 
 import pytest_asyncio
-from sqlalchemy import delete, event, select
+from sqlalchemy import delete, event, select, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -108,15 +108,19 @@ async def tenant_case() -> AsyncIterator[dict[str, object]]:
                     (values["workspace_b"], identity_b),
                 ):
                     await session.execute(
-                        __import__("sqlalchemy").text(
+                        text(
                             "SELECT set_config('app.tenant_id', :tenant_id, true)"
                         ),
                         {"tenant_id": str(tenant_id)},
                     )
                     membership = await session.scalar(
-                        select(WorkspaceMembership).where(
+                        select(WorkspaceMembership)
+                        .join(UserIdentity, UserIdentity.id == WorkspaceMembership.identity_id)
+                        .where(
                             WorkspaceMembership.tenant_id == tenant_id,
                             WorkspaceMembership.status == "active",
+                            UserIdentity.issuer == identity.issuer,
+                            UserIdentity.subject == identity.subject,
                         )
                     )
                     if membership is not None:
