@@ -105,14 +105,15 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
         identity=identity,
     ) as context:
         segment_id = uuid4()
+        context.session.add(CRMProfileSegment(
+            id=segment_id,
+            tenant_id=tenant_id,
+            organization_unit_id=root_id,
+            name="Store purchase audience",
+            criteria={},
+        ))
+        await context.session.flush()
         context.session.add_all([
-            CRMProfileSegment(
-                id=segment_id,
-                tenant_id=tenant_id,
-                organization_unit_id=root_id,
-                name="Store purchase audience",
-                criteria={},
-            ),
             CRMMarketingCampaign(
                 id=campaign_id,
                 tenant_id=tenant_id,
