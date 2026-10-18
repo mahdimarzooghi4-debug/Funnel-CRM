@@ -120,6 +120,13 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert listed.json()["total"] == 1
         assert listed.json()["items"][0]["id"] == campaign_id
 
+        partial_budget = await client.patch(
+            f"/api/v1/crm/campaigns/{campaign_id}",
+            headers=headers,
+            json={"planned_budget_amount": "900.00"},
+        )
+        assert partial_budget.status_code == 422
+
         updated = await client.patch(
             f"/api/v1/crm/campaigns/{campaign_id}",
             headers=headers,
