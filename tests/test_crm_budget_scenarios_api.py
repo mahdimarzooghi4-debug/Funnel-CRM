@@ -73,6 +73,7 @@ async def test_budget_scenarios_compare_and_replace_without_changing_campaign_bu
                 criteria={"profile_kinds": ["person"]}, is_active=True,
             )
         )
+        await context.session.flush()
         role = Role(tenant_id=tenant_id, name=f"Budget scenario manager {uuid4().hex[:8]}")
         context.session.add(role)
         context.session.add_all(campaigns)
