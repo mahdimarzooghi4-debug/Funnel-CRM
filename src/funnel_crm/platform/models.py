@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -11,6 +11,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -923,6 +924,724 @@ class CRMMarketingBudgetScenarioLine(Base):
     campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     planned_budget_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     planned_budget_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+
+
+class CRMMarketingCampaignMeasurement(Base):
+    """Externally recorded daily metrics for a planned marketing campaign."""
+
+    __tablename__ = "crm_marketing_campaign_measurements"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_campaign_measurements_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "campaign_id", "measured_on",
+            name="uq_crm_marketing_campaign_measurements_campaign_day",
+        ),
+        CheckConstraint(
+            "length(trim(source_label)) BETWEEN 1 AND 120",
+            name="ck_crm_marketing_campaign_measurements_source",
+        ),
+        CheckConstraint(
+            "(impressions IS NULL OR impressions >= 0) AND "
+            "(reach IS NULL OR reach >= 0) AND "
+            "(clicks IS NULL OR clicks >= 0) AND "
+            "(responses IS NULL OR responses >= 0) AND "
+            "(leads IS NULL OR leads >= 0) AND "
+            "(conversions IS NULL OR conversions >= 0)",
+            name="ck_crm_marketing_campaign_measurements_counts",
+        ),
+        CheckConstraint(
+            "(actual_spend_amount IS NULL AND actual_spend_currency IS NULL) OR "
+            "(actual_spend_amount IS NOT NULL AND actual_spend_amount >= 0 "
+            "AND length(actual_spend_currency) = 3 "
+            "AND actual_spend_currency = upper(actual_spend_currency) "
+            "AND actual_spend_currency ~ '^[A-Z]{3}
+    """Tenant-owned person or organization profile anchored to a tenant record."""
+
+    __tablename__ = "crm_profiles"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_profiles_tenant_id"),
+        CheckConstraint(
+            "record_type = 'crm_profile'",
+            name="ck_crm_profiles_record_type",
+        ),
+        CheckConstraint(
+            "profile_kind IN ('person', 'organization')",
+            name="ck_crm_profiles_profile_kind",
+        ),
+        CheckConstraint(
+            "length(trim(display_name)) BETWEEN 1 AND 240",
+            name="ck_crm_profiles_display_name",
+        ),
+        CheckConstraint(
+            "length(trim(lifecycle_stage)) BETWEEN 1 AND 80",
+            name="ck_crm_profiles_lifecycle_stage",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "record_type"],
+            ["tenant_records.tenant_id", "tenant_records.id", "tenant_records.record_type"],
+            name="fk_crm_profiles_record_anchor", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_profiles_org_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "merged_into_profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_profiles_merge_target_same_tenant",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "merged_into_profile_id IS NULL OR merged_into_profile_id <> id",
+            name="ck_crm_profiles_not_merged_into_self",
+        ),
+        Index("ix_crm_profiles_tenant_kind_stage", "tenant_id", "profile_kind", "lifecycle_stage"),
+        Index("ix_crm_profiles_tenant_merge_target", "tenant_id", "merged_into_profile_id"),
+        Index("ix_crm_profiles_tenant_archived", "tenant_id", "archived_at"),
+        Index("ix_crm_profiles_tenant_org", "tenant_id", "organization_unit_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    record_type: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="crm_profile", server_default="crm_profile"
+    )
+    profile_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(240), nullable=False)
+    lifecycle_stage: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="lead", server_default="lead"
+    )
+    merged_into_profile_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
+
+class CRMContactPoint(Base):
+    """Encrypted customer contact value; cleartext never enters the database."""
+
+    __tablename__ = "crm_contact_points"
+    __table_args__ = (
+        CheckConstraint(
+            "channel IN ('email', 'phone', 'postal_address', 'social_handle', 'website')",
+            name="ck_crm_contact_points_channel",
+        ),
+        CheckConstraint(
+            "verification_status IN ('unverified', 'verified', 'invalid')",
+            name="ck_crm_contact_points_verification_status",
+        ),
+        CheckConstraint(
+            "length(trim(encryption_key_id)) BETWEEN 1 AND 64",
+            name="ck_crm_contact_points_key_id",
+        ),
+        CheckConstraint(
+            "octet_length(encrypted_value) BETWEEN 29 AND 4096",
+            name="ck_crm_contact_points_ciphertext_size",
+        ),
+        CheckConstraint(
+            "(match_fingerprint IS NULL AND fingerprint_key_id IS NULL) OR "
+            "(octet_length(match_fingerprint) = 32 AND "
+            "length(trim(fingerprint_key_id)) BETWEEN 1 AND 64)",
+            name="ck_crm_contact_points_fingerprint_pair",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_contact_points_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        Index("ix_crm_contact_points_tenant_profile", "tenant_id", "profile_id"),
+        Index(
+            "ix_crm_contact_points_blind_match",
+            "tenant_id",
+            "channel",
+            "fingerprint_key_id",
+            "match_fingerprint",
+        ),
+        Index(
+            "uq_crm_contact_points_one_primary_per_channel",
+            "tenant_id",
+            "profile_id",
+            "channel",
+            unique=True,
+            postgresql_where=text("is_primary"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fingerprint_key_id: Mapped[str | None] = mapped_column(String(64))
+    match_fingerprint: Mapped[bytes | None] = mapped_column(LargeBinary)
+    verification_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unverified", server_default="unverified"
+    )
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+class CRMCommunicationConsentEvent(Base):
+    """Append-only, purpose- and channel-specific communication decision."""
+
+    __tablename__ = "crm_communication_consent_events"
+    __table_args__ = (
+        CheckConstraint(
+            "purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}"+chr(36)+"'",
+            name="ck_crm_consent_purpose_key",
+        ),
+        CheckConstraint(
+            "channel IN ('email', 'phone', 'postal_address', 'social_handle', 'website')",
+            name="ck_crm_consent_channel",
+        ),
+        CheckConstraint(
+            "decision IN ('granted', 'withdrawn')",
+            name="ck_crm_consent_decision",
+        ),
+        CheckConstraint(
+            "length(trim(policy_version)) BETWEEN 1 AND 64",
+            name="ck_crm_consent_policy_version",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_consent_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_crm_consent_latest_by_scope",
+            "tenant_id",
+            "profile_id",
+            "purpose_key",
+            "channel",
+            "recorded_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    purpose_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
+    )
+
+
+
+class ProductCustomerIdentity(Base):
+    """Stable source-product customer key mapped to one CRM profile per tenant."""
+
+    __tablename__ = "product_customer_identities"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(source_product)) BETWEEN 2 AND 80",
+            name="ck_product_customer_identities_source",
+        ),
+        CheckConstraint(
+            "length(trim(external_customer_id)) BETWEEN 1 AND 200",
+            name="ck_product_customer_identities_external_id",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_product_customer_identities_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_product_customer_identities_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "source_product",
+            "profile_id",
+            name="uq_product_customer_identities_profile_source",
+        ),
+        Index(
+            "ix_product_customer_identities_tenant_profile",
+            "tenant_id",
+            "profile_id",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    source_product: Mapped[str] = mapped_column(String(80), primary_key=True)
+    external_customer_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
+
+class CRMCustomerActivity(Base):
+    """Append-only, structured activity from an explicitly connected product."""
+
+    __tablename__ = "crm_customer_activities"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(source_product)) BETWEEN 2 AND 80",
+            name="ck_crm_customer_activities_source",
+        ),
+        CheckConstraint(
+            "activity_type ~ '^[a-z][a-z0-9_.-]{0,79}$'",
+            name="ck_crm_customer_activities_type",
+        ),
+        CheckConstraint(
+            "channel IN ('online', 'phone', 'store', 'field', 'support', 'campaign', 'other')",
+            name="ck_crm_customer_activities_channel",
+        ),
+        CheckConstraint(
+            "source_record_id IS NULL OR length(trim(source_record_id)) BETWEEN 1 AND 200",
+            name="ck_crm_customer_activities_source_record",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_crm_customer_activities_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_customer_activities_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "source_product",
+            "source_event_id",
+            name="uq_crm_customer_activities_source_event",
+        ),
+        Index(
+            "ix_crm_customer_activities_tenant_profile_time",
+            "tenant_id",
+            "profile_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_product: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    activity_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    source_record_id: Mapped[str | None] = mapped_column(String(200))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+)",
+            name="ck_crm_marketing_campaign_measurements_spend",
+        ),
+        CheckConstraint(
+            "(attributed_revenue_amount IS NULL AND attributed_revenue_currency IS NULL) OR "
+            "(attributed_revenue_amount IS NOT NULL AND attributed_revenue_amount >= 0 "
+            "AND length(attributed_revenue_currency) = 3 "
+            "AND attributed_revenue_currency = upper(attributed_revenue_currency) "
+            "AND attributed_revenue_currency ~ '^[A-Z]{3}
+    """Tenant-owned person or organization profile anchored to a tenant record."""
+
+    __tablename__ = "crm_profiles"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_profiles_tenant_id"),
+        CheckConstraint(
+            "record_type = 'crm_profile'",
+            name="ck_crm_profiles_record_type",
+        ),
+        CheckConstraint(
+            "profile_kind IN ('person', 'organization')",
+            name="ck_crm_profiles_profile_kind",
+        ),
+        CheckConstraint(
+            "length(trim(display_name)) BETWEEN 1 AND 240",
+            name="ck_crm_profiles_display_name",
+        ),
+        CheckConstraint(
+            "length(trim(lifecycle_stage)) BETWEEN 1 AND 80",
+            name="ck_crm_profiles_lifecycle_stage",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "record_type"],
+            ["tenant_records.tenant_id", "tenant_records.id", "tenant_records.record_type"],
+            name="fk_crm_profiles_record_anchor", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_profiles_org_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "merged_into_profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_profiles_merge_target_same_tenant",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "merged_into_profile_id IS NULL OR merged_into_profile_id <> id",
+            name="ck_crm_profiles_not_merged_into_self",
+        ),
+        Index("ix_crm_profiles_tenant_kind_stage", "tenant_id", "profile_kind", "lifecycle_stage"),
+        Index("ix_crm_profiles_tenant_merge_target", "tenant_id", "merged_into_profile_id"),
+        Index("ix_crm_profiles_tenant_archived", "tenant_id", "archived_at"),
+        Index("ix_crm_profiles_tenant_org", "tenant_id", "organization_unit_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    record_type: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="crm_profile", server_default="crm_profile"
+    )
+    profile_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(240), nullable=False)
+    lifecycle_stage: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="lead", server_default="lead"
+    )
+    merged_into_profile_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
+
+class CRMContactPoint(Base):
+    """Encrypted customer contact value; cleartext never enters the database."""
+
+    __tablename__ = "crm_contact_points"
+    __table_args__ = (
+        CheckConstraint(
+            "channel IN ('email', 'phone', 'postal_address', 'social_handle', 'website')",
+            name="ck_crm_contact_points_channel",
+        ),
+        CheckConstraint(
+            "verification_status IN ('unverified', 'verified', 'invalid')",
+            name="ck_crm_contact_points_verification_status",
+        ),
+        CheckConstraint(
+            "length(trim(encryption_key_id)) BETWEEN 1 AND 64",
+            name="ck_crm_contact_points_key_id",
+        ),
+        CheckConstraint(
+            "octet_length(encrypted_value) BETWEEN 29 AND 4096",
+            name="ck_crm_contact_points_ciphertext_size",
+        ),
+        CheckConstraint(
+            "(match_fingerprint IS NULL AND fingerprint_key_id IS NULL) OR "
+            "(octet_length(match_fingerprint) = 32 AND "
+            "length(trim(fingerprint_key_id)) BETWEEN 1 AND 64)",
+            name="ck_crm_contact_points_fingerprint_pair",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_contact_points_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        Index("ix_crm_contact_points_tenant_profile", "tenant_id", "profile_id"),
+        Index(
+            "ix_crm_contact_points_blind_match",
+            "tenant_id",
+            "channel",
+            "fingerprint_key_id",
+            "match_fingerprint",
+        ),
+        Index(
+            "uq_crm_contact_points_one_primary_per_channel",
+            "tenant_id",
+            "profile_id",
+            "channel",
+            unique=True,
+            postgresql_where=text("is_primary"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fingerprint_key_id: Mapped[str | None] = mapped_column(String(64))
+    match_fingerprint: Mapped[bytes | None] = mapped_column(LargeBinary)
+    verification_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unverified", server_default="unverified"
+    )
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+class CRMCommunicationConsentEvent(Base):
+    """Append-only, purpose- and channel-specific communication decision."""
+
+    __tablename__ = "crm_communication_consent_events"
+    __table_args__ = (
+        CheckConstraint(
+            "purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}"+chr(36)+"'",
+            name="ck_crm_consent_purpose_key",
+        ),
+        CheckConstraint(
+            "channel IN ('email', 'phone', 'postal_address', 'social_handle', 'website')",
+            name="ck_crm_consent_channel",
+        ),
+        CheckConstraint(
+            "decision IN ('granted', 'withdrawn')",
+            name="ck_crm_consent_decision",
+        ),
+        CheckConstraint(
+            "length(trim(policy_version)) BETWEEN 1 AND 64",
+            name="ck_crm_consent_policy_version",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_consent_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_crm_consent_latest_by_scope",
+            "tenant_id",
+            "profile_id",
+            "purpose_key",
+            "channel",
+            "recorded_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    purpose_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
+    )
+
+
+
+class ProductCustomerIdentity(Base):
+    """Stable source-product customer key mapped to one CRM profile per tenant."""
+
+    __tablename__ = "product_customer_identities"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(source_product)) BETWEEN 2 AND 80",
+            name="ck_product_customer_identities_source",
+        ),
+        CheckConstraint(
+            "length(trim(external_customer_id)) BETWEEN 1 AND 200",
+            name="ck_product_customer_identities_external_id",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_product_customer_identities_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_product_customer_identities_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "source_product",
+            "profile_id",
+            name="uq_product_customer_identities_profile_source",
+        ),
+        Index(
+            "ix_product_customer_identities_tenant_profile",
+            "tenant_id",
+            "profile_id",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    source_product: Mapped[str] = mapped_column(String(80), primary_key=True)
+    external_customer_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
+
+class CRMCustomerActivity(Base):
+    """Append-only, structured activity from an explicitly connected product."""
+
+    __tablename__ = "crm_customer_activities"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(source_product)) BETWEEN 2 AND 80",
+            name="ck_crm_customer_activities_source",
+        ),
+        CheckConstraint(
+            "activity_type ~ '^[a-z][a-z0-9_.-]{0,79}$'",
+            name="ck_crm_customer_activities_type",
+        ),
+        CheckConstraint(
+            "channel IN ('online', 'phone', 'store', 'field', 'support', 'campaign', 'other')",
+            name="ck_crm_customer_activities_channel",
+        ),
+        CheckConstraint(
+            "source_record_id IS NULL OR length(trim(source_record_id)) BETWEEN 1 AND 200",
+            name="ck_crm_customer_activities_source_record",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_crm_customer_activities_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_customer_activities_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "source_product",
+            "source_event_id",
+            name="uq_crm_customer_activities_source_event",
+        ),
+        Index(
+            "ix_crm_customer_activities_tenant_profile_time",
+            "tenant_id",
+            "profile_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_product: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    activity_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    source_record_id: Mapped[str | None] = mapped_column(String(200))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+)",
+            name="ck_crm_marketing_campaign_measurements_revenue",
+        ),
+        CheckConstraint(
+            "impressions IS NOT NULL OR reach IS NOT NULL OR clicks IS NOT NULL OR "
+            "responses IS NOT NULL OR leads IS NOT NULL OR conversions IS NOT NULL OR "
+            "actual_spend_amount IS NOT NULL OR attributed_revenue_amount IS NOT NULL",
+            name="ck_crm_marketing_campaign_measurements_has_observation",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_campaign_measurements_workspace", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_marketing_campaign_measurements_org_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_marketing_campaign_measurements_campaign_same_org", ondelete="CASCADE",
+        ),
+        Index(
+            "ix_crm_marketing_campaign_measurements_tenant_org_day",
+            "tenant_id", "organization_unit_id", "measured_on",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    measured_on: Mapped[date] = mapped_column(Date(), nullable=False)
+    source_label: Mapped[str] = mapped_column(String(120), nullable=False)
+    impressions: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    reach: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    clicks: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    responses: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    leads: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    conversions: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    actual_spend_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    actual_spend_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    attributed_revenue_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    attributed_revenue_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
 
 class CRMProfile(Base):
     """Tenant-owned person or organization profile anchored to a tenant record."""
