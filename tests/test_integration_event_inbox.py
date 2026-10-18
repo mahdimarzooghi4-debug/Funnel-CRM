@@ -114,6 +114,7 @@ async def test_postgres_event_inbox_is_durable_idempotent_and_tenant_scoped(
         )
         assert decrypted == body["payload"]
         assert len(persisted.event_digest) == 32
+        assert persisted.event_digest_key_id == "test-v1"
 
         audits = (
             await context.session.scalars(
