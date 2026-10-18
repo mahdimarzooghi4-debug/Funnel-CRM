@@ -807,7 +807,11 @@ class CRMMarketingCampaign(Base):
         CheckConstraint(
             "(planned_budget_amount IS NULL AND planned_budget_currency IS NULL) OR "
             "(planned_budget_amount IS NOT NULL AND planned_budget_amount >= 0 "
-            "AND planned_budget_currency ~ '^[A-Z]{3}
+            "AND length(planned_budget_currency) = 3 "
+            "AND planned_budget_currency = upper(planned_budget_currency) "
+            "AND planned_budget_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaigns_budget_pair",
+        ),
         CheckConstraint(
             "starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at",
             name="ck_crm_marketing_campaigns_schedule_order",
