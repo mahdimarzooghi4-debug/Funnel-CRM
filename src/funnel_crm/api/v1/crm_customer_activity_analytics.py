@@ -356,7 +356,7 @@ async def get_campaign_activity_attribution(
         ) or 0
     )
 
-    async def grouped_counts(column) -> list[ActivityCategoryComparison]:
+    async def grouped_counts(column) -> list[CampaignActivityCategory]:
         rows = (await context.session.execute(
             select(column, func.count(CRMCustomerActivity.id))
             .select_from(CRMCustomerActivity)
