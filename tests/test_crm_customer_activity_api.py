@@ -156,7 +156,7 @@ async def test_customer_activity_read_is_profile_scoped_audited_and_tenant_isola
         assert result["items"][0]["activity_type"] == "order.completed"
         assert result["items"][0]["source_product"] == "funnel.store"
         assert result["items"][0]["source_record_id"] == "order-a-55"
-        assert result["items"][0]["occurred_at"] == occurred_at.isoformat()
+        assert datetime.fromisoformat(result["items"][0]["occurred_at"].replace("Z", "+00:00")) == occurred_at
         assert result["items"][0].get("payload") is None
 
         hidden = await client.get(
