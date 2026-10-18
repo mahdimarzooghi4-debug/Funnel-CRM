@@ -100,7 +100,7 @@ def _parse_csv(csv_content: str) -> tuple[list[dict[str, object]], list[CSVRowEr
     if len(csv_content.encode("utf-8")) > MAX_CSV_CHARS:
         return [], [CSVRowError(row_number=1, detail="CSV exceeds the 1 MB import limit")]
     try:
-        reader = csv.DictReader(StringIO(csv_content.lstrip("\\ufeff")), strict=True)
+        reader = csv.DictReader(StringIO(csv_content.lstrip(chr(65279))), strict=True)
         headers = reader.fieldnames
         if not headers:
             return [], [CSVRowError(row_number=1, detail="CSV header is required")]
