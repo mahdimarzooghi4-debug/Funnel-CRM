@@ -76,7 +76,7 @@ def upgrade() -> None:
             ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
              "crm_marketing_campaigns.id"],
             name="fk_crm_marketing_budget_scenario_lines_campaign_same_org",
-            ondelete="RESTRICT",
+            ondelete="CASCADE",
         ),
         sa.Index(
             "ix_crm_marketing_budget_scenario_lines_scenario",
