@@ -107,7 +107,13 @@ class PostgresProductEventConsumer:
     async def process_batch(
         self, tenant_id: UUID, *, limit: int = 10
     ) -> CustomerSyncBatchResult:
-        events = await self._processor.claim(tenant_id, limit=limit)
+        events = await self._processor.claim(
+            tenant_id,
+            limit=limit,
+            event_type="customer.upserted",
+            contract_name="crm.customer",
+            contract_version=1,
+        )
         processed = failed = retry_scheduled = 0
         for event in events:
             try:
@@ -156,8 +162,7 @@ class PostgresProductEventConsumer:
 
     async def _process_one(self, event: ClaimedIntegrationEvent) -> None:
         if (
-            event.source_product == ""
-            or event.event_type != "customer.upserted"
+            event.event_type != "customer.upserted"
             or event.contract_name != "crm.customer"
             or event.contract_version != 1
         ):
