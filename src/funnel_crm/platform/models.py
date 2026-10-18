@@ -1019,6 +1019,68 @@ class CRMMarketingCampaignMeasurement(Base):
     )
 
 
+
+class CRMMarketingMeasurementImportBatch(Base):
+    """Idempotency receipt for one atomic campaign measurement CSV import."""
+
+    __tablename__ = "crm_marketing_measurement_import_batches"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "id",
+            name="uq_crm_marketing_measurement_import_batches_tenant_id",
+        ),
+        UniqueConstraint(
+            "tenant_id", "campaign_id", "idempotency_key",
+            name="uq_crm_marketing_measurement_import_batches_campaign_key",
+        ),
+        CheckConstraint(
+            "length(trim(idempotency_key)) BETWEEN 1 AND 80",
+            name="ck_crm_marketing_measurement_import_batches_key",
+        ),
+        CheckConstraint(
+            "length(payload_sha256) = 64 AND payload_sha256 ~ '^[0-9a-f]{64}'",
+            name="ck_crm_marketing_measurement_import_batches_hash",
+        ),
+        CheckConstraint(
+            "row_count BETWEEN 1 AND 366 AND created_count >= 0 AND updated_count >= 0 "
+            "AND created_count + updated_count = row_count",
+            name="ck_crm_marketing_measurement_import_batches_counts",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_measurement_import_batches_workspace", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_marketing_measurement_import_batches_org_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_marketing_measurement_import_batches_campaign_same_org", ondelete="CASCADE",
+        ),
+        Index(
+            "ix_crm_marketing_measurement_import_batches_tenant_campaign",
+            "tenant_id", "campaign_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"),
+    )
+
+
 class CRMProfile(Base):
     """Tenant-owned person or organization profile anchored to a tenant record."""
 
