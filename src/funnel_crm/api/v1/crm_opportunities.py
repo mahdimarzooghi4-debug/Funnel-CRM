@@ -48,6 +48,14 @@ class OpportunityPipelineCreate(BaseModel):
     stages: list[OpportunityStageInput] = Field(min_length=2, max_length=30)
     is_default: bool = False
 
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("pipeline display name must not be blank")
+        return value
+
     @model_validator(mode="after")
     def unique_stage_keys_and_positions(self):
         keys = [stage.key for stage in self.stages]
