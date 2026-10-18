@@ -13,7 +13,6 @@ from funnel_crm.platform.models import (
     CRMMarketingBudgetScenarioLine,
     CRMMarketingCampaign,
     CRMProfileSegment,
-    CRMProfileSegment,
     Role,
     RoleAssignment,
     RolePermission,
