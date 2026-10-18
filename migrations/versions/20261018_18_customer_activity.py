@@ -86,6 +86,10 @@ def upgrade() -> None:
         CREATE FUNCTION deny_crm_customer_activity_mutation()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
+            -- Permit cleanup only when an FK cascade removes a parent profile or tenant.
+            IF pg_trigger_depth() > 1 THEN
+                RETURN OLD;
+            END IF;
             RAISE EXCEPTION 'CRM customer activities are append-only';
         END;
         $$
