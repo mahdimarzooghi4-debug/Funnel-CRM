@@ -134,7 +134,7 @@ def _parse_csv(csv_content: str) -> tuple[list[dict[str, object]], list[CSVRowEr
             try:
                 data: dict[str, object] = {}
                 raw_date = (raw_row.get("measured_on") or "").strip()
-                data["measured_on"] = date.fromisoformat(raw_date)
+                measured_on = date.fromisoformat(raw_date)
                 for key in ALLOWED_COLUMNS - {"measured_on"}:
                     raw_value = (raw_row.get(key) or "").strip()
                     if key == "source_label":
@@ -159,10 +159,9 @@ def _parse_csv(csv_content: str) -> tuple[list[dict[str, object]], list[CSVRowEr
                         data[key] = raw_value or None
                 validated = CampaignMeasurementUpsert.model_validate(data)
                 row_data = {
-                    "measured_on": data["measured_on"],
+                    "measured_on": measured_on,
                     **validated.model_dump(),
                 }
-                measured_on = data["measured_on"]
                 assert isinstance(measured_on, date)
                 if measured_on in seen_dates:
                     errors.append(CSVRowError(
