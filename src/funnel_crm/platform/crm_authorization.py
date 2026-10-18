@@ -35,6 +35,7 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.profile:review_duplicates",
         "crm.segment:view",
         "crm.segment:manage",
+        "crm.integration:manage",
     }
 )
 
