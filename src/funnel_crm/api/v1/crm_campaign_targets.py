@@ -134,6 +134,57 @@ def _result(target: int | Decimal, actual: int | Decimal | None, *, lower_is_bet
     )
 
 
+def evaluate_plan_metrics(
+    plan: CRMMarketingCampaignTargetPlan,
+    rows: list[CRMMarketingCampaignMeasurement],
+) -> dict[str, TargetMetricEvaluation]:
+    """Evaluate one plan using only observed and currency-compatible measurement rows."""
+    metrics: dict[str, TargetMetricEvaluation] = {}
+    for name, target_attr, data_attr in (
+        ("impressions", "impressions_target", "impressions"),
+        ("clicks", "clicks_target", "clicks"),
+        ("leads", "leads_target", "leads"),
+        ("conversions", "conversions_target", "conversions"),
+    ):
+        target = getattr(plan, target_attr)
+        if target is not None:
+            values = [getattr(row, data_attr) for row in rows if getattr(row, data_attr) is not None]
+            metrics[name] = _result(target, sum(values) if values else None,
+                                    lower_is_better=False, currency=None, observed_days=len(values))
+    if plan.max_spend_amount is not None:
+        matching = [row for row in rows if row.actual_spend_amount is not None
+                    and row.actual_spend_currency == plan.max_spend_currency]
+        actual = sum((row.actual_spend_amount for row in matching), Decimal("0")) if matching else None
+        metrics["spend"] = _result(plan.max_spend_amount, actual, lower_is_better=True,
+                                   currency=plan.max_spend_currency, observed_days=len(matching))
+    for key, target, currency, outcome_attr in (
+        ("cost_per_lead", plan.max_cpl_amount, plan.cpl_currency, "leads"),
+        ("cost_per_conversion", plan.max_cost_per_conversion_amount,
+         plan.conversion_cost_currency, "conversions"),
+    ):
+        if target is None:
+            continue
+        paired = [row for row in rows if row.actual_spend_amount is not None
+                  and row.actual_spend_currency == currency and getattr(row, outcome_attr) is not None]
+        spend = sum((row.actual_spend_amount for row in paired), Decimal("0"))
+        outcomes = sum((getattr(row, outcome_attr) for row in paired), 0)
+        actual = (spend / Decimal(outcomes)).quantize(Decimal("0.000001")) if paired and outcomes > 0 else None
+        metrics[key] = _result(target, actual, lower_is_better=True, currency=currency,
+                               observed_days=len(paired), paired_days=len(paired))
+    if plan.min_roas is not None:
+        paired = [row for row in rows if row.actual_spend_amount is not None
+                  and row.actual_spend_currency == plan.roas_currency
+                  and row.attributed_revenue_amount is not None
+                  and row.attributed_revenue_currency == plan.roas_currency]
+        spend = sum((row.actual_spend_amount for row in paired), Decimal("0"))
+        revenue = sum((row.attributed_revenue_amount for row in paired), Decimal("0"))
+        actual = (revenue / spend).quantize(Decimal("0.000001")) if paired and spend > 0 else None
+        metrics["roas"] = _result(plan.min_roas, actual, lower_is_better=False,
+                                  currency=plan.roas_currency, observed_days=len(paired),
+                                  paired_days=len(paired))
+    return metrics
+
+
 @router.put("/{campaign_id}/targets", response_model=CampaignTargetRead,
             operation_id="setCRMMarketingCampaignTargets")
 async def set_campaign_targets(
@@ -230,47 +281,5 @@ async def evaluate_campaign_targets(
             CRMMarketingCampaignMeasurement.measured_on <= plan.period_end,
         ).order_by(CRMMarketingCampaignMeasurement.measured_on)
     )).all()
-    metrics: dict[str, TargetMetricEvaluation] = {}
-    for name, target_attr, data_attr in (
-        ("impressions", "impressions_target", "impressions"),
-        ("clicks", "clicks_target", "clicks"),
-        ("leads", "leads_target", "leads"),
-        ("conversions", "conversions_target", "conversions"),
-    ):
-        target = getattr(plan, target_attr)
-        if target is not None:
-            values = [getattr(row, data_attr) for row in rows if getattr(row, data_attr) is not None]
-            metrics[name] = _result(target, sum(values) if values else None,
-                                    lower_is_better=False, currency=None, observed_days=len(values))
-    if plan.max_spend_amount is not None:
-        matching = [row for row in rows if row.actual_spend_amount is not None
-                    and row.actual_spend_currency == plan.max_spend_currency]
-        actual = sum((row.actual_spend_amount for row in matching), Decimal("0")) if matching else None
-        metrics["spend"] = _result(plan.max_spend_amount, actual, lower_is_better=True,
-                                   currency=plan.max_spend_currency, observed_days=len(matching))
-    for key, target, currency, outcome_attr in (
-        ("cost_per_lead", plan.max_cpl_amount, plan.cpl_currency, "leads"),
-        ("cost_per_conversion", plan.max_cost_per_conversion_amount,
-         plan.conversion_cost_currency, "conversions"),
-    ):
-        if target is None:
-            continue
-        paired = [row for row in rows if row.actual_spend_amount is not None
-                  and row.actual_spend_currency == currency and getattr(row, outcome_attr) is not None]
-        spend = sum((row.actual_spend_amount for row in paired), Decimal("0"))
-        outcomes = sum((getattr(row, outcome_attr) for row in paired), 0)
-        actual = (spend / Decimal(outcomes)).quantize(Decimal("0.000001")) if paired and outcomes > 0 else None
-        metrics[key] = _result(target, actual, lower_is_better=True, currency=currency,
-                               observed_days=len(paired), paired_days=len(paired))
-    if plan.min_roas is not None:
-        paired = [row for row in rows if row.actual_spend_amount is not None
-                  and row.actual_spend_currency == plan.roas_currency
-                  and row.attributed_revenue_amount is not None
-                  and row.attributed_revenue_currency == plan.roas_currency]
-        spend = sum((row.actual_spend_amount for row in paired), Decimal("0"))
-        revenue = sum((row.attributed_revenue_amount for row in paired), Decimal("0"))
-        actual = (revenue / spend).quantize(Decimal("0.000001")) if paired and spend > 0 else None
-        metrics["roas"] = _result(plan.min_roas, actual, lower_is_better=False,
-                                  currency=plan.roas_currency, observed_days=len(paired),
-                                  paired_days=len(paired))
+    metrics = evaluate_plan_metrics(plan, rows)
     return CampaignTargetEvaluation(target_plan=CampaignTargetRead.model_validate(plan), metrics=metrics)
