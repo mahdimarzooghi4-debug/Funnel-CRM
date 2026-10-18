@@ -1677,3 +1677,90 @@ class CRMMarketingCampaignExperimentVariant(Base):
     is_control: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+
+
+class CRMMarketingLearningReview(Base):
+    """Manager-authored review linking a target outcome to a corrective action and follow-up."""
+
+    __tablename__ = "crm_marketing_learning_reviews"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_learning_reviews_tenant_id"),
+        CheckConstraint(
+            "length(trim(assessment)) BETWEEN 1 AND 1200 "
+            "AND length(trim(corrective_action)) BETWEEN 1 AND 1200",
+            name="ck_crm_marketing_learning_reviews_required_text",
+        ),
+        CheckConstraint(
+            "status IN ('planned', 'evaluated')",
+            name="ck_crm_marketing_learning_reviews_status",
+        ),
+        CheckConstraint(
+            "(status = 'planned' AND follow_up_target_plan_id IS NULL "
+            "AND follow_up_effectiveness IS NULL AND lesson_learned IS NULL) OR "
+            "(status = 'evaluated' AND follow_up_target_plan_id IS NOT NULL "
+            "AND follow_up_effectiveness IS NOT NULL AND length(trim(follow_up_effectiveness)) > 0 "
+            "AND lesson_learned IS NOT NULL AND length(trim(lesson_learned)) > 0)",
+            name="ck_crm_marketing_learning_reviews_evaluation",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_learning_reviews_workspace", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_marketing_learning_reviews_org_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_marketing_learning_reviews_campaign_same_org", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "target_plan_id"],
+            ["crm_marketing_campaign_target_plans.tenant_id",
+             "crm_marketing_campaign_target_plans.id"],
+            name="fk_crm_marketing_learning_reviews_target_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "follow_up_target_plan_id"],
+            ["crm_marketing_campaign_target_plans.tenant_id",
+             "crm_marketing_campaign_target_plans.id"],
+            name="fk_crm_marketing_learning_reviews_followup_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "experiment_id"],
+            ["crm_marketing_campaign_experiments.tenant_id",
+             "crm_marketing_campaign_experiments.organization_unit_id",
+             "crm_marketing_campaign_experiments.id"],
+            name="fk_crm_marketing_learning_reviews_experiment_same_org", ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_crm_marketing_learning_reviews_tenant_campaign_status",
+            "tenant_id", "campaign_id", "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    target_plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    experiment_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    follow_up_target_plan_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    assessment: Mapped[str] = mapped_column(String(1200), nullable=False)
+    corrective_action: Mapped[str] = mapped_column(String(1200), nullable=False)
+    follow_up_effectiveness: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    lesson_learned: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="planned", server_default="planned"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
