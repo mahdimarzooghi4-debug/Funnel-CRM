@@ -76,7 +76,7 @@ def upgrade() -> None:
             ["crm_marketing_campaign_experiments.tenant_id",
              "crm_marketing_campaign_experiments.organization_unit_id",
              "crm_marketing_campaign_experiments.id"],
-            name="fk_crm_marketing_campaign_experiment_variants_experiment_same_org",
+            name="fk_crm_marketing_campaign_experiment_variants_experiment_org",
             ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["tenant_id", "organization_unit_id", "campaign_id"],
