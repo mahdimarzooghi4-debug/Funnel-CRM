@@ -1394,3 +1394,97 @@ class CRMCustomerActivity(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
+
+
+class CRMMarketingCampaignTargetPlan(Base):
+    """Manager-entered campaign goals for one explicit measurement period."""
+
+    __tablename__ = "crm_marketing_campaign_target_plans"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_campaign_target_plans_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "campaign_id", "period_start", "period_end",
+            name="uq_crm_marketing_campaign_target_plans_campaign_period",
+        ),
+        CheckConstraint("period_start <= period_end AND period_end - period_start < 366",
+                        name="ck_crm_marketing_campaign_target_plans_period"),
+        CheckConstraint(
+            "(impressions_target IS NULL OR impressions_target >= 0) AND "
+            "(clicks_target IS NULL OR clicks_target >= 0) AND "
+            "(leads_target IS NULL OR leads_target >= 0) AND "
+            "(conversions_target IS NULL OR conversions_target >= 0)",
+            name="ck_crm_marketing_campaign_target_plans_counts",
+        ),
+        CheckConstraint(
+            "(max_spend_amount IS NULL AND max_spend_currency IS NULL) OR "
+            "(max_spend_amount IS NOT NULL AND max_spend_amount >= 0 AND "
+            "length(max_spend_currency) = 3 AND max_spend_currency = upper(max_spend_currency) "
+            "AND max_spend_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_target_plans_spend_pair",
+        ),
+        CheckConstraint(
+            "(max_cpl_amount IS NULL AND cpl_currency IS NULL) OR "
+            "(max_cpl_amount IS NOT NULL AND max_cpl_amount >= 0 AND "
+            "length(cpl_currency) = 3 AND cpl_currency = upper(cpl_currency) "
+            "AND cpl_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_target_plans_cpl_pair",
+        ),
+        CheckConstraint(
+            "(max_cost_per_conversion_amount IS NULL AND conversion_cost_currency IS NULL) OR "
+            "(max_cost_per_conversion_amount IS NOT NULL AND max_cost_per_conversion_amount >= 0 AND "
+            "length(conversion_cost_currency) = 3 AND conversion_cost_currency = upper(conversion_cost_currency) "
+            "AND conversion_cost_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_target_plans_conversion_cost_pair",
+        ),
+        CheckConstraint(
+            "(min_roas IS NULL AND roas_currency IS NULL) OR "
+            "(min_roas IS NOT NULL AND min_roas >= 0 AND length(roas_currency) = 3 "
+            "AND roas_currency = upper(roas_currency) AND roas_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_target_plans_roas_pair",
+        ),
+        CheckConstraint(
+            "impressions_target IS NOT NULL OR clicks_target IS NOT NULL OR leads_target IS NOT NULL OR "
+            "conversions_target IS NOT NULL OR max_spend_amount IS NOT NULL OR max_cpl_amount IS NOT NULL OR "
+            "max_cost_per_conversion_amount IS NOT NULL OR min_roas IS NOT NULL",
+            name="ck_crm_marketing_campaign_target_plans_has_goal",
+        ),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_campaign_target_plans_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_marketing_campaign_target_plans_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_marketing_campaign_target_plans_campaign_same_org", ondelete="CASCADE"),
+        Index("ix_crm_marketing_campaign_target_plans_tenant_campaign",
+              "tenant_id", "campaign_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date(), nullable=False)
+    period_end: Mapped[date] = mapped_column(Date(), nullable=False)
+    impressions_target: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    clicks_target: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    leads_target: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    conversions_target: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    max_spend_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    max_spend_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    max_cpl_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    cpl_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    max_cost_per_conversion_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    conversion_cost_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    min_roas: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    roas_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
