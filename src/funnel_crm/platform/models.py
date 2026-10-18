@@ -859,51 +859,6 @@ class CRMMarketingCampaign(Base):
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
     )
 
-        CheckConstraint(
-            "starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at",
-            name="ck_crm_marketing_campaigns_schedule_order",
-        ),
-        ForeignKeyConstraint(
-            ["tenant_id"], ["workspaces.id"],
-            name="fk_crm_marketing_campaigns_workspace", ondelete="CASCADE",
-        ),
-        ForeignKeyConstraint(
-            ["tenant_id", "organization_unit_id"],
-            ["organization_units.tenant_id", "organization_units.id"],
-            name="fk_crm_marketing_campaigns_org_same_tenant", ondelete="RESTRICT",
-        ),
-        ForeignKeyConstraint(
-            ["tenant_id", "segment_id"],
-            ["crm_profile_segments.tenant_id", "crm_profile_segments.id"],
-            name="fk_crm_marketing_campaigns_segment_same_tenant", ondelete="RESTRICT",
-        ),
-        Index(
-            "ix_crm_marketing_campaigns_tenant_org_status",
-            "tenant_id", "organization_unit_id", "status",
-        ),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    segment_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    name: Mapped[str] = mapped_column(String(160), nullable=False)
-    objective_key: Mapped[str] = mapped_column(String(80), nullable=False)
-    channel: Mapped[str] = mapped_column(String(24), nullable=False)
-    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="draft", server_default="draft"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
-        server_default=text("now()"),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
-    )
-
 class CRMProfile(Base):
     """Tenant-owned person or organization profile anchored to a tenant record."""
 
