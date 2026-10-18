@@ -791,6 +791,7 @@ class CRMMarketingCampaign(Base):
     __tablename__ = "crm_marketing_campaigns"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_campaigns_tenant_id"),
+        UniqueConstraint("tenant_id", "organization_unit_id", "id", name="uq_crm_marketing_campaigns_tenant_org_id"),
         CheckConstraint(
             "length(trim(name)) BETWEEN 1 AND 160",
             name="ck_crm_marketing_campaigns_name",
@@ -858,6 +859,70 @@ class CRMMarketingCampaign(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
     )
+
+class CRMMarketingBudgetScenario(Base):
+    """Alternative, non-committing marketing budget allocation scenario."""
+
+    __tablename__ = "crm_marketing_budget_scenarios"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_budget_scenarios_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "id", "organization_unit_id",
+            name="uq_crm_marketing_budget_scenarios_tenant_id_org",
+        ),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 160", name="ck_crm_marketing_budget_scenarios_name"),
+        CheckConstraint("status IN ('draft', 'archived')", name="ck_crm_marketing_budget_scenarios_status"),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_budget_scenarios_workspace", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_marketing_budget_scenarios_org_same_tenant", ondelete="RESTRICT",
+        ),
+        Index("ix_crm_marketing_budget_scenarios_tenant_org_status", "tenant_id", "organization_unit_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"))
+
+
+class CRMMarketingBudgetScenarioLine(Base):
+    """Campaign allocation in one isolated budget scenario."""
+
+    __tablename__ = "crm_marketing_budget_scenario_lines"
+    __table_args__ = (
+        CheckConstraint(
+            "planned_budget_amount >= 0 AND length(planned_budget_currency) = 3 "
+            "AND planned_budget_currency = upper(planned_budget_currency) "
+            "AND planned_budget_currency ~ '^[A-Z][A-Z][A-Z]'",
+            name="ck_crm_marketing_budget_scenario_lines_budget",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "scenario_id", "organization_unit_id"],
+            ["crm_marketing_budget_scenarios.tenant_id", "crm_marketing_budget_scenarios.id", "crm_marketing_budget_scenarios.organization_unit_id"],
+            name="fk_crm_marketing_budget_scenario_lines_scenario_same_org", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id", "crm_marketing_campaigns.id"],
+            name="fk_crm_marketing_budget_scenario_lines_campaign_same_org", ondelete="RESTRICT",
+        ),
+        Index("ix_crm_marketing_budget_scenario_lines_scenario", "tenant_id", "scenario_id"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    scenario_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    planned_budget_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    planned_budget_currency: Mapped[str] = mapped_column(String(3), nullable=False)
 
 class CRMProfile(Base):
     """Tenant-owned person or organization profile anchored to a tenant record."""
