@@ -269,6 +269,11 @@ async def get_customer_activity_analytics(
     )
 
 
+class CampaignActivityCategory(BaseModel):
+    key: str
+    count: int
+
+
 class CampaignActivityDay(BaseModel):
     day: date
     activity_count: int
@@ -280,8 +285,8 @@ class CampaignActivityAnalytics(BaseModel):
     period_end: date
     activity_count: int
     profiles_with_activity: int
-    by_channel: list[ActivityCategoryComparison]
-    by_activity_type: list[ActivityCategoryComparison]
+    by_channel: list[CampaignActivityCategory]
+    by_activity_type: list[CampaignActivityCategory]
     daily_activity: list[CampaignActivityDay]
 
 
@@ -326,15 +331,6 @@ async def get_campaign_activity_attribution(
         CRMProfile.archived_at.is_(None),
         CRMProfile.merged_into_profile_id.is_(None),
     ]
-    activity_query = (
-        select(CRMCustomerActivity)
-        .join(
-            CRMProfile,
-            (CRMProfile.tenant_id == CRMCustomerActivity.tenant_id)
-            & (CRMProfile.id == CRMCustomerActivity.profile_id),
-        )
-        .where(*filters)
-    )
     activity_count = int(
         await context.session.scalar(
             select(func.count(CRMCustomerActivity.id))
@@ -373,7 +369,7 @@ async def get_campaign_activity_attribution(
             .group_by(column)
             .order_by(func.count(CRMCustomerActivity.id).desc(), column)
         )).all()
-        return [ActivityCategoryComparison(key=str(key), current_count=int(count), previous_count=0)
+        return [CampaignActivityCategory(key=str(key), count=int(count))
                 for key, count in rows]
 
     daily_column = cast(func.timezone("UTC", CRMCustomerActivity.occurred_at), SQLDate)
