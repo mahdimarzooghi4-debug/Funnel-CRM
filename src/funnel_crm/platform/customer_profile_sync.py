@@ -22,6 +22,7 @@ from funnel_crm.platform.integration_processing import (
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMContactPoint,
+    CRMCustomerActivity,
     CRMCustomFieldDefinition,
     CRMProfile,
     OrganizationUnit,
@@ -59,6 +60,29 @@ class CustomerProfileUpsertPayload(BaseModel):
     @field_validator("external_customer_id", "display_name")
     @classmethod
     def strip_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must contain a non-whitespace character")
+        return value
+
+
+class CustomerActivityPayload(BaseModel):
+    """Structured customer activity; intentionally excludes free-text and consent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    external_customer_id: str = Field(min_length=1, max_length=200)
+    activity_type: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
+    channel: str = Field(
+        pattern=r"^(online|phone|store|field|support|campaign|other)$"
+    )
+    source_record_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("external_customer_id", "source_record_id")
+    @classmethod
+    def strip_identifiers(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         value = value.strip()
         if not value:
             raise ValueError("must contain a non-whitespace character")
@@ -107,13 +131,21 @@ class PostgresProductEventConsumer:
     async def process_batch(
         self, tenant_id: UUID, *, limit: int = 10
     ) -> CustomerSyncBatchResult:
-        events = await self._processor.claim(
+        upsert_events = await self._processor.claim(
             tenant_id,
             limit=limit,
             event_type="customer.upserted",
             contract_name="crm.customer",
             contract_version=1,
         )
+        activity_events = await self._processor.claim(
+            tenant_id,
+            limit=limit,
+            event_type="customer.activity.recorded",
+            contract_name="crm.customer.activity",
+            contract_version=1,
+        )
+        events = [*upsert_events, *activity_events]
         processed = failed = retry_scheduled = 0
         for event in events:
             try:
@@ -161,6 +193,13 @@ class PostgresProductEventConsumer:
         )
 
     async def _process_one(self, event: ClaimedIntegrationEvent) -> None:
+        if (
+            event.event_type == "customer.activity.recorded"
+            and event.contract_name == "crm.customer.activity"
+            and event.contract_version == 1
+        ):
+            await self._process_activity(event)
+            return
         if (
             event.event_type != "customer.upserted"
             or event.contract_name != "crm.customer"
@@ -304,6 +343,92 @@ class PostgresProductEventConsumer:
                             "event_id": str(event.event_id),
                             "profile_kind": payload.profile_kind,
                             "contact_count": len(payload.contacts),
+                        },
+                        correlation_id=event.correlation_id,
+                    )
+                )
+
+
+    async def _process_activity(self, event: ClaimedIntegrationEvent) -> None:
+        try:
+            payload = CustomerActivityPayload.model_validate(event.payload)
+        except ValidationError as exc:
+            raise CustomerSyncError("crm.customer.activity_invalid_payload") from exc
+
+        async with self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        "SELECT set_config('app.tenant_id', :tenant_id, true), "
+                        "set_config('app.integration_connection_id', :connection_id, true), "
+                        "set_config('app.correlation_id', :correlation_id, true)"
+                    ),
+                    {
+                        "tenant_id": str(event.tenant_id),
+                        "connection_id": str(event.connection_id),
+                        "correlation_id": str(event.correlation_id),
+                    },
+                )
+                identity = await session.scalar(
+                    select(ProductCustomerIdentity)
+                    .where(
+                        ProductCustomerIdentity.tenant_id == event.tenant_id,
+                        ProductCustomerIdentity.source_product == event.source_product,
+                        ProductCustomerIdentity.external_customer_id
+                        == payload.external_customer_id,
+                    )
+                    .with_for_update()
+                )
+                if identity is None:
+                    raise CustomerSyncError(
+                        "crm.customer.activity.profile_mapping_pending",
+                        retryable=True,
+                    )
+                profile = await session.scalar(
+                    select(CRMProfile)
+                    .where(
+                        CRMProfile.tenant_id == event.tenant_id,
+                        CRMProfile.id == identity.profile_id,
+                    )
+                    .with_for_update()
+                )
+                if profile is None or profile.archived_at is not None:
+                    raise CustomerSyncError(
+                        "crm.customer.activity.profile_unavailable"
+                    )
+                if profile.merged_into_profile_id is not None:
+                    raise CustomerSyncError(
+                        "crm.customer.activity.profile_merged"
+                    )
+
+                activity = CRMCustomerActivity(
+                    id=uuid4(),
+                    tenant_id=event.tenant_id,
+                    profile_id=profile.id,
+                    source_product=event.source_product,
+                    source_event_id=event.event_id,
+                    activity_type=payload.activity_type,
+                    channel=payload.channel,
+                    source_record_id=payload.source_record_id,
+                    occurred_at=event.occurred_at,
+                )
+                session.add(activity)
+                session.add(
+                    AuditEvent(
+                        tenant_id=event.tenant_id,
+                        actor_kind="system",
+                        actor_identity_id=None,
+                        actor_membership_id=None,
+                        action_key="integration.customer.activity_recorded",
+                        target_type="crm_customer_activity",
+                        target_key=str(activity.id),
+                        organization_unit_id=profile.organization_unit_id,
+                        before_state=None,
+                        after_state={
+                            "source_product": event.source_product,
+                            "source_event_id": str(event.event_id),
+                            "activity_type": payload.activity_type,
+                            "channel": payload.channel,
                         },
                         correlation_id=event.correlation_id,
                     )
