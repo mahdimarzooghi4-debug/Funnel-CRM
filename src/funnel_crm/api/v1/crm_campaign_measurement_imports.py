@@ -97,7 +97,7 @@ class CSVImportResult(BaseModel):
 
 
 def _parse_csv(csv_content: str) -> tuple[list[dict[str, object]], list[CSVRowError]]:
-    if len(csv_content) > MAX_CSV_CHARS:
+    if len(csv_content.encode("utf-8")) > MAX_CSV_CHARS:
         return [], [CSVRowError(row_number=1, detail="CSV exceeds the 1 MB import limit")]
     try:
         reader = csv.DictReader(StringIO(csv_content.lstrip("\\ufeff")), strict=True)
