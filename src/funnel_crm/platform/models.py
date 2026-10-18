@@ -1033,3 +1033,65 @@ class ProductCustomerIdentity(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
     )
+
+
+
+class CRMCustomerActivity(Base):
+    """Append-only, structured activity from an explicitly connected product."""
+
+    __tablename__ = "crm_customer_activities"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(source_product)) BETWEEN 2 AND 80",
+            name="ck_crm_customer_activities_source",
+        ),
+        CheckConstraint(
+            "activity_type ~ '^[a-z][a-z0-9_.-]{0,79}$'",
+            name="ck_crm_customer_activities_type",
+        ),
+        CheckConstraint(
+            "channel IN ('online', 'phone', 'store', 'field', 'support', 'campaign', 'other')",
+            name="ck_crm_customer_activities_channel",
+        ),
+        CheckConstraint(
+            "source_record_id IS NULL OR length(trim(source_record_id)) BETWEEN 1 AND 200",
+            name="ck_crm_customer_activities_source_record",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_crm_customer_activities_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_customer_activities_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "source_product",
+            "source_event_id",
+            name="uq_crm_customer_activities_source_event",
+        ),
+        Index(
+            "ix_crm_customer_activities_tenant_profile_time",
+            "tenant_id",
+            "profile_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_product: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    activity_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    source_record_id: Mapped[str | None] = mapped_column(String(200))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
