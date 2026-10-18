@@ -1,16 +1,16 @@
 """Scoped aggregate reporting over recorded CRM customer activities."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import cast, func, select, Date as SQLDate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
-from funnel_crm.platform.models import AuditEvent, CRMCustomerActivity, CRMProfile
+from funnel_crm.platform.models import AuditEvent, CRMCustomerActivity, CRMMarketingCampaign, CRMProfile
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
 router = APIRouter(
@@ -266,4 +266,158 @@ async def get_customer_activity_analytics(
         activity_count_change_percent=change,
         by_channel=_comparisons(current_channels, previous_channels),
         by_activity_type=_comparisons(current_types, previous_types),
+    )
+
+
+class CampaignActivityDay(BaseModel):
+    day: date
+    activity_count: int
+
+
+class CampaignActivityAnalytics(BaseModel):
+    campaign_id: UUID
+    period_start: date
+    period_end: date
+    activity_count: int
+    profiles_with_activity: int
+    by_channel: list[ActivityCategoryComparison]
+    by_activity_type: list[ActivityCategoryComparison]
+    daily_activity: list[CampaignActivityDay]
+
+
+@router.get(
+    "/campaigns/{campaign_id}",
+    response_model=CampaignActivityAnalytics,
+    operation_id="getCampaignActivityAttribution",
+    summary="Summarize customer activity attributed to a campaign",
+)
+async def get_campaign_activity_attribution(
+    campaign_id: UUID,
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignActivityAnalytics:
+    """Return scoped aggregate attribution counts without customer-level data."""
+    if period_start > period_end:
+        raise HTTPException(status_code=422, detail="period_start must not be after period_end")
+    if (period_end - period_start).days > 365:
+        raise HTTPException(status_code=422, detail="Activity reports are limited to 366 calendar days")
+
+    allowed_units = crm_scope_ids(context, permission_key="crm.campaign:view")
+    campaign = await context.session.scalar(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaign.id == campaign_id,
+            CRMMarketingCampaign.organization_unit_id.in_(allowed_units),
+        )
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    start = datetime.combine(period_start, datetime.min.time(), tzinfo=timezone.utc)
+    end = datetime.combine(period_end + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+    filters = [
+        CRMCustomerActivity.tenant_id == context.access.tenant_id,
+        CRMCustomerActivity.campaign_id == campaign_id,
+        CRMCustomerActivity.occurred_at >= start,
+        CRMCustomerActivity.occurred_at < end,
+        CRMProfile.tenant_id == context.access.tenant_id,
+        CRMProfile.organization_unit_id == campaign.organization_unit_id,
+        CRMProfile.archived_at.is_(None),
+        CRMProfile.merged_into_profile_id.is_(None),
+    ]
+    activity_query = (
+        select(CRMCustomerActivity)
+        .join(
+            CRMProfile,
+            (CRMProfile.tenant_id == CRMCustomerActivity.tenant_id)
+            & (CRMProfile.id == CRMCustomerActivity.profile_id),
+        )
+        .where(*filters)
+    )
+    activity_count = int(
+        await context.session.scalar(
+            select(func.count(CRMCustomerActivity.id))
+            .select_from(CRMCustomerActivity)
+            .join(
+                CRMProfile,
+                (CRMProfile.tenant_id == CRMCustomerActivity.tenant_id)
+                & (CRMProfile.id == CRMCustomerActivity.profile_id),
+            )
+            .where(*filters)
+        ) or 0
+    )
+    profiles_with_activity = int(
+        await context.session.scalar(
+            select(func.count(func.distinct(CRMCustomerActivity.profile_id)))
+            .select_from(CRMCustomerActivity)
+            .join(
+                CRMProfile,
+                (CRMProfile.tenant_id == CRMCustomerActivity.tenant_id)
+                & (CRMProfile.id == CRMCustomerActivity.profile_id),
+            )
+            .where(*filters)
+        ) or 0
+    )
+
+    async def grouped_counts(column) -> list[ActivityCategoryComparison]:
+        rows = (await context.session.execute(
+            select(column, func.count(CRMCustomerActivity.id))
+            .select_from(CRMCustomerActivity)
+            .join(
+                CRMProfile,
+                (CRMProfile.tenant_id == CRMCustomerActivity.tenant_id)
+                & (CRMProfile.id == CRMCustomerActivity.profile_id),
+            )
+            .where(*filters)
+            .group_by(column)
+            .order_by(func.count(CRMCustomerActivity.id).desc(), column)
+        )).all()
+        return [ActivityCategoryComparison(key=str(key), current_count=int(count), previous_count=0)
+                for key, count in rows]
+
+    daily_column = cast(func.timezone("UTC", CRMCustomerActivity.occurred_at), SQLDate)
+    daily_rows = (await context.session.execute(
+        select(daily_column, func.count(CRMCustomerActivity.id))
+        .select_from(CRMCustomerActivity)
+        .join(
+            CRMProfile,
+            (CRMProfile.tenant_id == CRMCustomerActivity.tenant_id)
+            & (CRMProfile.id == CRMCustomerActivity.profile_id),
+        )
+        .where(*filters)
+        .group_by(daily_column)
+        .order_by(daily_column)
+    )).all()
+
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_campaign.activity_attribution_viewed",
+        target_type="crm_marketing_campaign",
+        target_key=str(campaign_id),
+        organization_unit_id=campaign.organization_unit_id,
+        before_state=None,
+        after_state={
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "activity_count": activity_count,
+            "profiles_with_activity": profiles_with_activity,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+
+    return CampaignActivityAnalytics(
+        campaign_id=campaign_id,
+        period_start=period_start,
+        period_end=period_end,
+        activity_count=activity_count,
+        profiles_with_activity=profiles_with_activity,
+        by_channel=await grouped_counts(CRMCustomerActivity.channel),
+        by_activity_type=await grouped_counts(CRMCustomerActivity.activity_type),
+        daily_activity=[CampaignActivityDay(day=day, activity_count=int(count))
+                        for day, count in daily_rows],
     )
