@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Identity,
+    Integer,
     LargeBinary,
     Numeric,
     String,
