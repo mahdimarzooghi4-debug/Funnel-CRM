@@ -1368,6 +1368,12 @@ class CRMCustomerActivity(Base):
             name="fk_crm_customer_activities_profile_same_tenant",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.id"],
+            name="fk_crm_customer_activities_campaign_same_tenant",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "tenant_id",
             "source_product",
@@ -1380,6 +1386,13 @@ class CRMCustomerActivity(Base):
             "profile_id",
             "occurred_at",
         ),
+        Index(
+            "ix_crm_customer_activities_tenant_campaign_time",
+            "tenant_id",
+            "campaign_id",
+            "occurred_at",
+            postgresql_where=text("campaign_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -1387,6 +1400,7 @@ class CRMCustomerActivity(Base):
     profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     source_product: Mapped[str] = mapped_column(String(80), nullable=False)
     source_event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     activity_type: Mapped[str] = mapped_column(String(80), nullable=False)
     channel: Mapped[str] = mapped_column(String(24), nullable=False)
     source_record_id: Mapped[str | None] = mapped_column(String(200))
