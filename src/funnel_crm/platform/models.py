@@ -859,9 +859,6 @@ class CRMMarketingCampaign(Base):
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
     )
 
-)",
-            name="ck_crm_marketing_campaigns_budget_pair",
-        ),
         CheckConstraint(
             "starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at",
             name="ck_crm_marketing_campaigns_schedule_order",
