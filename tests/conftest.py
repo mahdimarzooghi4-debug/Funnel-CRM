@@ -3,14 +3,19 @@ import os
 from uuid import uuid4
 
 import pytest_asyncio
-from sqlalchemy import delete, event
+from sqlalchemy import delete, event, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 
-from funnel_crm.platform.models import UserIdentity, Workspace, WorkspaceMembership
+from funnel_crm.platform.models import (
+    CRMProfile,
+    UserIdentity,
+    Workspace,
+    WorkspaceMembership,
+)
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity
 from funnel_crm.platform.workspaces import create_workspace
 
@@ -96,8 +101,38 @@ async def tenant_case() -> AsyncIterator[dict[str, object]]:
     finally:
         async with session_factory() as session:
             async with session.begin():
-                # Tenant-owned rows cascade from workspaces. Identities are global
-                # references and are removed after their memberships cascade.
+                # CRM profiles restrict organization deletion, so remove them with
+                # verified tenant actors before deleting the fixture workspaces.
+                for tenant_id, identity in (
+                    (values["workspace_a"], identity_a),
+                    (values["workspace_b"], identity_b),
+                ):
+                    await session.execute(
+                        __import__("sqlalchemy").text(
+                            "SELECT set_config('app.tenant_id', :tenant_id, true)"
+                        ),
+                        {"tenant_id": str(tenant_id)},
+                    )
+                    membership = await session.scalar(
+                        select(WorkspaceMembership).where(
+                            WorkspaceMembership.tenant_id == tenant_id,
+                            WorkspaceMembership.status == "active",
+                        )
+                    )
+                    if membership is not None:
+                        await session.execute(
+                            __import__("sqlalchemy").text(
+                                "SELECT set_config('app.actor_identity_id', :identity_id, true), "
+                                "set_config('app.actor_membership_id', :membership_id, true)"
+                            ),
+                            {
+                                "identity_id": str(membership.identity_id),
+                                "membership_id": str(membership.id),
+                            },
+                        )
+                        await session.execute(
+                            delete(CRMProfile).where(CRMProfile.tenant_id == tenant_id)
+                        )
                 await session.execute(
                     delete(Workspace).where(
                         Workspace.id.in_([values["workspace_a"], values["workspace_b"]])
