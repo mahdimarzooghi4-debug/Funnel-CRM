@@ -92,7 +92,7 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
         tenant_id=tenant_id,
         source_product="funnel.store",
         allowed_event_types=frozenset({"customer.upserted", "customer.activity.recorded"}),
-        supported_contract_versions=frozenset({("crm.customer", 1)}),
+        supported_contract_versions=frozenset({("crm.customer", 1), ("crm.customer.activity", 1)}),
     )
     async with tenant_session(
         runtime_session_factory,
@@ -108,7 +108,8 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
                 source_product="funnel.store",
                 allowed_event_types=["customer.upserted", "customer.activity.recorded"],
                 contract_grants=[
-                    {"contract_name": "crm.customer", "contract_version": 1}
+                    {"contract_name": "crm.customer", "contract_version": 1},
+                    {"contract_name": "crm.customer.activity", "contract_version": 1}
                 ],
             )
         )
