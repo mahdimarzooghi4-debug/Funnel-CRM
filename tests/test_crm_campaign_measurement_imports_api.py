@@ -70,6 +70,7 @@ async def test_campaign_measurement_csv_preview_atomic_import_and_idempotent_rep
                 planned_budget_currency="USD", starts_at=None, ends_at=None, status="draft",
             )
         )
+        await context.session.flush()
         context.session.add(
             CRMMarketingCampaignMeasurement(
                 id=existing_measurement_id, tenant_id=tenant_id,
