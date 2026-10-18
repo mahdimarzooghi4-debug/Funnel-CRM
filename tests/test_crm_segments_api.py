@@ -58,6 +58,7 @@ async def test_saved_segment_previews_scoped_profiles_and_records_audit(
                 lifecycle_stage="lead",
             )
         )
+        await context.session.flush()
         context.session.add(
             CRMCustomerActivity(
                 id=uuid4(),
