@@ -117,9 +117,10 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
         )
         assert accepted.status_code == 202
 
+        invalid_token = token[:-1] + ("A" if token[-1] != "A" else "B")
         invalid = await client.post(
             "/api/v1/integrations/events",
-            headers={"Authorization": f"Bearer {token[:-1]}x"},
+            headers={"Authorization": f"Bearer {invalid_token}"},
             json=event(tenant_id),
         )
         assert invalid.status_code == 401
