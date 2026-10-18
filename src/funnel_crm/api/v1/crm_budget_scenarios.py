@@ -281,7 +281,7 @@ async def create_budget_scenario(
     ]
     context.session.add_all(lines)
     await context.session.flush()
-    _audit(context, scenario, "crm_marketing_budget_scenario.created", len(lines))
+    _audit(context, scenario=scenario, action_key="crm_marketing_budget_scenario.created", allocation_count=len(lines))
     await context.session.flush()
     return await _scenario_detail(context, scenario)
 
@@ -443,7 +443,7 @@ async def replace_budget_scenario_allocations(
     context.session.add_all(lines)
     await context.session.flush()
     scenario.updated_at = datetime.now(timezone.utc)
-    _audit(context, scenario, "crm_marketing_budget_scenario.allocations_replaced", len(lines))
+    _audit(context, scenario=scenario, action_key="crm_marketing_budget_scenario.allocations_replaced", allocation_count=len(lines))
     await context.session.flush()
     return await _scenario_detail(context, scenario)
 
@@ -467,7 +467,7 @@ async def archive_budget_scenario(
     )
     if scenario.status == "draft":
         scenario.status = "archived"
-        scenario.updated_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+        scenario.updated_at = datetime.now(timezone.utc)
         await context.session.flush()
         count = int(await context.session.scalar(
             select(func.count()).select_from(CRMMarketingBudgetScenarioLine).where(
@@ -475,5 +475,5 @@ async def archive_budget_scenario(
                 CRMMarketingBudgetScenarioLine.scenario_id == scenario.id,
             )
         ) or 0)
-        _audit(context, scenario, "crm_marketing_budget_scenario.archived", count)
+        _audit(context, scenario=scenario, action_key="crm_marketing_budget_scenario.archived", allocation_count=count)
         await context.session.flush()
