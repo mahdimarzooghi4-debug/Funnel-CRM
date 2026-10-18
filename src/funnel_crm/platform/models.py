@@ -912,7 +912,7 @@ class CRMMarketingBudgetScenarioLine(Base):
         ForeignKeyConstraint(
             ["tenant_id", "organization_unit_id", "campaign_id"],
             ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id", "crm_marketing_campaigns.id"],
-            name="fk_crm_marketing_budget_scenario_lines_campaign_same_org", ondelete="RESTRICT",
+            name="fk_crm_marketing_budget_scenario_lines_campaign_same_org", ondelete="CASCADE",
         ),
         Index("ix_crm_marketing_budget_scenario_lines_scenario", "tenant_id", "scenario_id"),
     )
