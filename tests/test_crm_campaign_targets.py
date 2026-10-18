@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaign_targets import router
+from funnel_crm.api.v1.crm_campaign_target_analytics import router as target_analytics_router
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
@@ -32,6 +33,7 @@ def make_app(
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(target_analytics_router, prefix="/api/v1")
     return app
 
 
@@ -133,6 +135,27 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert metrics["cost_per_conversion"]["actual"] == "10.000000"
         assert metrics["roas"]["actual"] == "5.000000"
         assert metrics["roas"]["status"] == "met"
+
+        portfolio = await client.get(
+            "/api/v1/crm/analytics/campaign-target-performance/portfolio",
+            headers=headers,
+            params={
+                "period_start": "2026-10-16",
+                "period_end": "2026-10-17",
+                "grouped_by": "channel",
+            },
+        )
+        assert portfolio.status_code == 200, portfolio.text
+        report = portfolio.json()
+        assert report["campaign_count"] == 1
+        assert report["metric_outcomes"]["impressions"] == {
+            "evaluated": 1, "met": 1, "not_met": 0, "no_data": 0,
+        }
+        assert report["metric_outcomes"]["clicks"] == {
+            "evaluated": 1, "met": 0, "not_met": 1, "no_data": 0,
+        }
+        assert report["groups"][0]["key"] == "web"
+        assert report["campaigns"][0]["metrics"]["roas"]["currency"] == "USD"
 
         payload["clicks_target"] = 70
         updated = await client.put(base, headers=headers, json=payload)
