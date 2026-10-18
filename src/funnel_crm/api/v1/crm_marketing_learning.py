@@ -300,11 +300,19 @@ async def evaluate_learning_review(
     campaign = await _campaign(context, review.campaign_id, "crm.campaign:manage")
     if review.status != "planned":
         raise HTTPException(status_code=409, detail="Only planned reviews can be evaluated")
-    await _target_plan(
+    baseline_plan = await _target_plan(
+        context, campaign=campaign, target_plan_id=review.target_plan_id
+    )
+    follow_up_plan = await _target_plan(
         context, campaign=campaign, target_plan_id=payload.follow_up_target_plan_id
     )
     if payload.follow_up_target_plan_id == review.target_plan_id:
         raise HTTPException(status_code=422, detail="Follow-up must use a different target plan")
+    if follow_up_plan.period_start <= baseline_plan.period_end:
+        raise HTTPException(status_code=422, detail="Follow-up target period must start after the reviewed period")
+    follow_up_snapshot = await _snapshot(context, follow_up_plan)
+    if not any(metric.actual is not None for metric in follow_up_snapshot.metrics.values()):
+        raise HTTPException(status_code=422, detail="Follow-up cannot be evaluated without observed target data")
     before = {"status": review.status, "follow_up_target_plan_id": None}
     review.follow_up_target_plan_id = payload.follow_up_target_plan_id
     review.follow_up_effectiveness = payload.follow_up_effectiveness
