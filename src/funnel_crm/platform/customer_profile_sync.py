@@ -23,6 +23,7 @@ from funnel_crm.platform.models import (
     AuditEvent,
     CRMContactPoint,
     CRMCustomerActivity,
+    CRMMarketingCampaign,
     CRMCustomFieldDefinition,
     CRMProfile,
     OrganizationUnit,
