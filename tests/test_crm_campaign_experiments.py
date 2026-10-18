@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from funnel_crm.api.v1.crm_campaign_experiments import router
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
-    CRMMarketingCampaignExperiment,
     CRMMarketingCampaignMeasurement,
     CRMProfileSegment,
     Role,
