@@ -22,14 +22,14 @@ METRICS = ("impressions", "reach", "clicks", "responses", "leads", "conversions"
 
 
 class OutcomeEfficiency(BaseModel):
-    paired_days: int
+    paired_campaign_days: int
     spend_amount: Decimal
     outcome_count: int
     cost_per_outcome: Decimal | None
 
 
 class ReturnEfficiency(BaseModel):
-    paired_days: int
+    paired_campaign_days: int
     spend_amount: Decimal
     attributed_revenue_amount: Decimal
     return_multiple: Decimal | None
@@ -92,8 +92,8 @@ class CampaignPortfolioPerformance(BaseModel):
     sort_by: Literal["conversions", "leads", "clicks"]
 
 
-def _rate(numerator: int, denominator: int, paired_days: int) -> float | None:
-    return round(100 * numerator / denominator, 4) if paired_days and denominator > 0 else None
+def _rate(numerator: int, denominator: int, paired_campaign_days: int) -> float | None:
+    return round(100 * numerator / denominator, 4) if paired_campaign_days and denominator > 0 else None
 
 
 def _empty_accumulator() -> dict[str, object]:
@@ -134,7 +134,7 @@ def _finish_efficiency(state: dict[str, object]) -> CampaignEfficiency:
     return CampaignEfficiency(
         cost_per_lead_by_currency={
             currency: OutcomeEfficiency(
-                paired_days=values[2],
+                paired_campaign_days=values[2],
                 spend_amount=values[0],
                 outcome_count=values[1],
                 cost_per_outcome=_divide(values[0], Decimal(values[1])),
@@ -143,7 +143,7 @@ def _finish_efficiency(state: dict[str, object]) -> CampaignEfficiency:
         },
         cost_per_conversion_by_currency={
             currency: OutcomeEfficiency(
-                paired_days=values[2],
+                paired_campaign_days=values[2],
                 spend_amount=values[0],
                 outcome_count=values[1],
                 cost_per_outcome=_divide(values[0], Decimal(values[1])),
@@ -152,7 +152,7 @@ def _finish_efficiency(state: dict[str, object]) -> CampaignEfficiency:
         },
         roas_by_currency={
             currency: ReturnEfficiency(
-                paired_days=values[2],
+                paired_campaign_days=values[2],
                 spend_amount=values[0],
                 attributed_revenue_amount=values[1],
                 return_multiple=_divide(values[1], values[0]),
