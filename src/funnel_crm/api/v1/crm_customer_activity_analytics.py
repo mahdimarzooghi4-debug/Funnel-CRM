@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
-from funnel_crm.platform.crm_authorization import crm_scope_ids
+from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import AuditEvent, CRMCustomerActivity, CRMProfile
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -148,16 +148,25 @@ async def get_customer_activity_analytics(
 ) -> CustomerActivityAnalytics:
     """Return aggregate counts, never customer-level rows or inferred revenue."""
     allowed_units = crm_scope_ids(context, permission_key="crm.profile:view")
-    if not allowed_units:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="CRM profile view is not authorized for this organization scope",
+    if organization_unit_id is not None:
+        if not await has_crm_permission(
+            context,
+            permission_key="crm.profile:view",
+            organization_unit_id=organization_unit_id,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="CRM organization scope not found",
+            )
+    else:
+        scope_count = await context.session.scalar(
+            select(func.count()).select_from(allowed_units.subquery())
         )
-    if organization_unit_id is not None and organization_unit_id not in allowed_units:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="CRM organization scope not found",
-        )
+        if not scope_count:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CRM profile view is not authorized for this organization scope",
+            )
 
     current_end = datetime.now(timezone.utc)
     current_start = current_end - timedelta(days=window_days)
