@@ -8,13 +8,12 @@ from decimal import Decimal, InvalidOperation
 from io import StringIO
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_campaign_measurements import (
-    CampaignMeasurementRead,
     CampaignMeasurementUpsert,
     _require_permission,
 )
