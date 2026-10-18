@@ -103,7 +103,7 @@ async def test_campaign_measurement_csv_preview_atomic_import_and_idempotent_rep
         )
         await context.session.flush()
 
-    csv_content = (
+    csv_content = chr(65279) + (
         "measured_on,source_label,impressions,reach,clicks,responses,leads,conversions,"
         "actual_spend_amount,actual_spend_currency,attributed_revenue_amount,attributed_revenue_currency\n"
         "2026-10-16,Social report,100,80,10,3,2,1,15,USD,75,USD\n"
