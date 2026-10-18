@@ -112,7 +112,7 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert created.status_code == 201, created.text
         campaign_id = created.json()["id"]
         assert created.json()["status"] == "draft"
-        assert created.json()["planned_budget_amount"] == "1200.500000"
+        assert created.json()["planned_budget_amount"] == "1200.50"
         assert created.json()["planned_budget_currency"] == "USD"
 
         listed = await client.get("/api/v1/crm/campaigns", headers=headers)
@@ -134,7 +134,7 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         )
         assert updated.status_code == 200, updated.text
         assert updated.json()["channel"] == "store"
-        assert updated.json()["planned_budget_amount"] == "1000.000000"
+        assert updated.json()["planned_budget_amount"] == "1000.00"
 
         archived = await client.post(
             f"/api/v1/crm/campaigns/{campaign_id}/archive", headers=headers
