@@ -13,6 +13,7 @@ from funnel_crm.platform.models import (
     CRMMarketingBudgetScenarioLine,
     CRMMarketingCampaign,
     CRMProfileSegment,
+    CRMProfileSegment,
     Role,
     RoleAssignment,
     RolePermission,
@@ -48,16 +49,17 @@ async def test_budget_scenarios_compare_and_replace_without_changing_campaign_bu
     assert isinstance(root_id, UUID)
     assert isinstance(identity, AuthenticatedIdentity)
 
+    segment_id = uuid4()
     campaigns = [
         CRMMarketingCampaign(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
-            segment_id=None, name="Email campaign", objective_key="retention",
+            segment_id=segment_id, name="Email campaign", objective_key="retention",
             channel="email", planned_budget_amount=Decimal("1200.50"),
             planned_budget_currency="USD", starts_at=None, ends_at=None, status="draft",
         ),
         CRMMarketingCampaign(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
-            segment_id=None, name="Store campaign", objective_key="awareness",
+            segment_id=segment_id, name="Store campaign", objective_key="awareness",
             channel="store", planned_budget_amount=Decimal("300"),
             planned_budget_currency="EUR", starts_at=None, ends_at=None, status="draft",
         ),
@@ -65,6 +67,13 @@ async def test_budget_scenarios_compare_and_replace_without_changing_campaign_bu
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
+        context.session.add(
+            CRMProfileSegment(
+                id=segment_id, tenant_id=tenant_id, organization_unit_id=root_id,
+                name=f"Budget scenario audience {uuid4().hex[:8]}",
+                criteria={"profile_kinds": ["person"]}, is_active=True,
+            )
+        )
         role = Role(tenant_id=tenant_id, name=f"Budget scenario manager {uuid4().hex[:8]}")
         context.session.add(role)
         context.session.add_all(campaigns)
