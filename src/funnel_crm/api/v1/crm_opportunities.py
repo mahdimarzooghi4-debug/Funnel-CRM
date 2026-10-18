@@ -377,6 +377,8 @@ async def update_opportunity(
     if "name" in changes and changes["name"] is None:
         raise HTTPException(status_code=422, detail="Opportunity name cannot be cleared")
     new_stage = changes.get("stage_key", opportunity.stage_key)
+    if new_stage is None:
+        raise HTTPException(status_code=422, detail="Opportunity stage cannot be cleared")
     await _validate_pipeline_stage(context, opportunity.pipeline_id, new_stage)
     new_amount = changes.get("amount", opportunity.amount)
     new_currency = changes.get("currency", opportunity.currency)
