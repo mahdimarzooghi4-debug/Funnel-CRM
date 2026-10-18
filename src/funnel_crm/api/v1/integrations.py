@@ -124,6 +124,13 @@ async def ingest_product_event(
             detail="A valid product credential is required",
         )
     authorize_product_event(connection, event)
+    if event.event_type == "customer.activity.recorded" and (
+        event.contract_name != "funnel.customer-activity" or event.contract_version != 1
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Customer activity events require contract funnel.customer-activity version 1",
+        )
 
     sink = getattr(request.app.state, "product_event_sink", None)
     if sink is None:
@@ -141,4 +148,20 @@ async def ingest_product_event(
             detail="Durable event ingestion is not configured",
         )
     receipt = await sink.accept(connection, event)
-    return {"event_id": str(receipt.event_id), "accepted": True, "duplicate": receipt.duplicate}
+    projection_status = "not_applicable"
+    if event.event_type == "customer.activity.recorded":
+        from funnel_crm.platform.customer_activity_projection import CustomerActivityProjection
+
+        projection = CustomerActivityProjection(
+            getattr(request.app.state, "session_factory"),
+            keyring=getattr(request.app.state, "integration_payload_keyring", None),
+        )
+        projection_status = await projection.project_event(
+            connection.tenant_id, event.event_id
+        )
+    return {
+        "event_id": str(receipt.event_id),
+        "accepted": True,
+        "duplicate": receipt.duplicate,
+        "projection_status": projection_status,
+    }
