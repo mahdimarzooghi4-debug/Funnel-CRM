@@ -20,6 +20,7 @@ class CRMCustomerActivityRead(BaseModel):
 
     id: UUID
     source_product: str
+    campaign_id: UUID | None
     activity_type: str
     channel: str
     source_record_id: str | None
