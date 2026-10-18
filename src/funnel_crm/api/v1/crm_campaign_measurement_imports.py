@@ -9,7 +9,7 @@ from io import StringIO
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
@@ -49,6 +49,14 @@ class CSVPreviewInput(BaseModel):
 
 class CSVImportInput(CSVPreviewInput):
     idempotency_key: str = Field(min_length=1, max_length=80)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("idempotency_key must contain a non-whitespace character")
+        return normalized
 
 
 class CSVRowError(BaseModel):
