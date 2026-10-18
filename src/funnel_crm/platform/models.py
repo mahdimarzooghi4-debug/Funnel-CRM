@@ -1346,7 +1346,59 @@ class CRMOpportunity(Base):
             name="ck_crm_opportunities_name",
         ),
         CheckConstraint(
-            "stage_key ~ '^[a-z][a-z0-9_.-]{0,79}
+            "stage_key ~ '^[a-z][a-z0-9_.-]{0,79}$'",
+            name="ck_crm_opportunities_stage_key",
+        ),
+        CheckConstraint(
+            "(amount IS NULL AND currency IS NULL) OR "
+            "(amount IS NOT NULL AND amount >= 0 AND currency IS NOT NULL "
+            "AND currency ~ '^[A-Z]{3}$')",
+            name="ck_crm_opportunities_amount_currency",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_crm_opportunities_workspace", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_opportunities_org_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_opportunities_profile_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "pipeline_id"],
+            ["crm_pipelines.tenant_id", "crm_pipelines.id"],
+            name="fk_crm_opportunities_pipeline_same_tenant", ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_crm_opportunities_tenant_org_stage",
+            "tenant_id", "organization_unit_id", "pipeline_id", "stage_key",
+        ),
+        Index("ix_crm_opportunities_tenant_profile", "tenant_id", "profile_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    pipeline_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    stage_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    expected_close_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
     """Append-only, structured activity from an explicitly connected product."""
 
     __tablename__ = "crm_customer_activities"
