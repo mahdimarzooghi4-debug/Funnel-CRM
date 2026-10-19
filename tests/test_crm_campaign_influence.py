@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaign_influence import router
@@ -244,6 +244,14 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
             AuditEvent.action_key == "crm_campaign.influence_report_viewed",
         ))).all()
         assert len(events) == 1
+        await context.session.execute(
+            delete(CRMOpportunity).where(
+                CRMOpportunity.tenant_id == tenant_id,
+                CRMOpportunity.id.in_([
+                    opportunity_one, opportunity_two, opportunity_unlinked,
+                ]),
+            )
+        )
 
 
 @pytest.mark.asyncio
