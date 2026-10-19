@@ -106,6 +106,13 @@ class WorkItemUpdate(BaseModel):
             raise ValueError("due_at must include a timezone")
         return value
 
+    @model_validator(mode="after")
+    def reject_null_required_fields(self):
+        for key in ("title", "priority", "status"):
+            if key in self.model_fields_set and getattr(self, key) is None:
+                raise ValueError(f"{key} cannot be null")
+        return self
+
 
 class WorkItemRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -286,15 +293,19 @@ async def list_work_items(
     items = (await context.session.scalars(
         stmt.order_by(CRMWorkItem.due_at.asc().nulls_last(), CRMWorkItem.created_at.desc()).limit(limit)
     )).all()
-    _audit(context, items[0] if items else CRMWorkItem(
-        id=uuid4(), tenant_id=context.access.tenant_id,
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_work_item.listed",
+        target_type="crm_work_item_collection",
+        target_key=str(organization_unit_id),
         organization_unit_id=organization_unit_id,
-        created_by_membership_id=context.access.membership_id,
-        title="list", priority="normal", status="open",
-    ), "crm_work_item.listed", None, {
-        "organization_unit_id": str(organization_unit_id),
-        "status": status, "assigned_to_me": assigned_to_me, "result_count": len(items),
-    })
+        before_state=None,
+        after_state={"status": status, "assigned_to_me": assigned_to_me, "result_count": len(items)},
+        correlation_id=None,
+    ))
     await context.session.flush()
     return [WorkItemRead.model_validate(item) for item in items]
 
