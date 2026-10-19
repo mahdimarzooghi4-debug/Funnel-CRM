@@ -113,6 +113,14 @@ async def test_work_queue_assigns_campaign_follow_up_and_enforces_lifecycle(
         })
         assert invalid_reference.status_code == 422
 
+        invalid_assignee = await client.post(base, headers=headers, json={
+            "organization_unit_id": str(root_id),
+            "campaign_id": str(campaign_id),
+            "assigned_membership_id": str(uuid4()),
+            "title": "Invalid assignee",
+        })
+        assert invalid_assignee.status_code == 422
+
         in_progress = await client.patch(f"{base}/{item_id}", headers=headers, json={
             "status": "in_progress",
         })
@@ -140,7 +148,7 @@ async def test_work_queue_assigns_campaign_follow_up_and_enforces_lifecycle(
         events = (await context.session.scalars(
             select(AuditEvent).where(
                 AuditEvent.tenant_id == tenant_id,
-                AuditEvent.target_type == "crm_work_item",
+                AuditEvent.target_type.in_(("crm_work_item", "crm_work_item_collection")),
             )
         )).all()
         assert {event.action_key for event in events} >= {
@@ -150,7 +158,7 @@ async def test_work_queue_assigns_campaign_follow_up_and_enforces_lifecycle(
 
 
 @pytest.mark.asyncio
-async def test_work_queue_requires_timezone_and_valid_active_assignee(
+async def test_work_queue_rejects_naive_due_timestamps(
     runtime_session_factory: async_sessionmaker[AsyncSession],
     tenant_case: dict[str, object],
 ) -> None:
