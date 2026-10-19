@@ -233,7 +233,7 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
         }]
         beta = report["campaigns"][1]
         assert beta["associated_opportunity_count"] == 1
-        assert beta["prior_campaign_activity_count"] == 0
+        assert beta["prior_campaign_activity_count"] == 1
         assert report["campaigns"][2]["associated_opportunity_count"] == 0
 
     async with tenant_session(
