@@ -113,7 +113,7 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
             CRMMarketingCampaign(
                 id=campaign_one, tenant_id=tenant_id, organization_unit_id=root_id,
                 segment_id=segment_id, name="Campaign Alpha", objective_key="acquisition",
-                channel="web", planned_budget_amount=None, planned_budget_currency=None,
+                channel="online", planned_budget_amount=None, planned_budget_currency=None,
                 starts_at=None, ends_at=None, status="draft",
             ),
             CRMMarketingCampaign(
@@ -158,7 +158,7 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
                 id=uuid4(), tenant_id=tenant_id, profile_id=profile_one,
                 source_product="funnel.online", source_event_id=uuid4(),
                 campaign_id=campaign_one, activity_type="campaign.clicked",
-                channel="web", source_record_id="click-1",
+                channel="online", source_record_id="click-1",
                 occurred_at=datetime(2026, 10, 14, 10, tzinfo=timezone.utc),
             ),
             CRMCustomerActivity(
@@ -172,14 +172,14 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
                 id=uuid4(), tenant_id=tenant_id, profile_id=profile_one,
                 source_product="funnel.online", source_event_id=uuid4(),
                 campaign_id=campaign_two, activity_type="campaign.clicked",
-                channel="web", source_record_id="click-2",
+                channel="online", source_record_id="click-2",
                 occurred_at=datetime(2026, 10, 15, 11, tzinfo=timezone.utc),
             ),
             CRMCustomerActivity(
                 id=uuid4(), tenant_id=tenant_id, profile_id=profile_two,
                 source_product="funnel.online", source_event_id=uuid4(),
                 campaign_id=campaign_two, activity_type="campaign.clicked",
-                channel="web", source_record_id="click-after-opportunity",
+                channel="online", source_record_id="click-after-opportunity",
                 occurred_at=datetime(2026, 10, 16, 10, tzinfo=timezone.utc),
             ),
         ])
