@@ -191,7 +191,9 @@ async def get_sales_forecast(
             probability = None
         gross: dict[str, Decimal] = {}
         weighted: dict[str, Decimal] = {}
-        stage_unpriced = stage_unknown = 0
+        stage_unpriced = 0
+        stage_unknown = len(stage_rows) if probability is None else 0
+        unknown_probability_count += stage_unknown
         for row in stage_rows:
             if row.amount is None or row.currency is None:
                 stage_unpriced += 1
@@ -201,8 +203,6 @@ async def get_sales_forecast(
             gross[row.currency] = gross.get(row.currency, Decimal("0")) + row.amount
             total_gross[row.currency] = total_gross.get(row.currency, Decimal("0")) + row.amount
             if probability is None:
-                stage_unknown += 1
-                unknown_probability_count += 1
                 total_unknown[row.currency] = total_unknown.get(row.currency, Decimal("0")) + row.amount
                 continue
             expected = (row.amount * Decimal(probability) / Decimal(100)).quantize(Decimal("0.000001"))
