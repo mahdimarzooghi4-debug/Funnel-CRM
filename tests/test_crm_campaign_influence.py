@@ -113,7 +113,7 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
             CRMMarketingCampaign(
                 id=campaign_one, tenant_id=tenant_id, organization_unit_id=root_id,
                 segment_id=segment_id, name="Campaign Alpha", objective_key="acquisition",
-                channel="online", planned_budget_amount=None, planned_budget_currency=None,
+                channel="web", planned_budget_amount=None, planned_budget_currency=None,
                 starts_at=None, ends_at=None, status="draft",
             ),
             CRMMarketingCampaign(
