@@ -1847,3 +1847,75 @@ class CRMWorkItem(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
     )
+
+class CRMProductCommerceEvent(Base):
+    """Source fact for an explicitly recorded paid order or refund event."""
+
+    __tablename__ = "crm_product_commerce_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "source_product", "source_event_id",
+            name="uq_crm_product_commerce_events_source_event",
+        ),
+        CheckConstraint(
+            "event_kind IN ('paid', 'refunded')",
+            name="ck_crm_product_commerce_events_kind",
+        ),
+        CheckConstraint(
+            "length(trim(order_reference)) BETWEEN 1 AND 200",
+            name="ck_crm_product_commerce_events_order_reference",
+        ),
+        CheckConstraint(
+            "amount >= 0 AND currency ~ '^[A-Z]{3}$'",
+            name="ck_crm_product_commerce_events_money",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_crm_product_commerce_events_workspace", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_product_commerce_events_org_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_product_commerce_events_profile_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id",
+             "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_product_commerce_events_campaign_same_org",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_crm_product_commerce_events_tenant_org_time",
+            "tenant_id", "organization_unit_id", "occurred_at",
+        ),
+        Index(
+            "ix_crm_product_commerce_events_tenant_campaign_time",
+            "tenant_id", "campaign_id", "occurred_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    profile_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    source_product: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    order_reference: Mapped[str] = mapped_column(String(200), nullable=False)
+    event_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
