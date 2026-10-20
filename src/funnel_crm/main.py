@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from funnel_crm.api.v1.router import router as v1_router
+from funnel_crm.web.budget_scenario_comparison import router as budget_scenario_workspace_router
 
 app = FastAPI(
     title="Funnel CRM API",
@@ -35,3 +36,4 @@ async def readiness() -> dict[str, str]:
 
 
 app.include_router(v1_router)
+app.include_router(budget_scenario_workspace_router)
