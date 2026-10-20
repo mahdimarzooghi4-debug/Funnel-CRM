@@ -161,7 +161,7 @@ _METRICS.extend([
         key="reported_roas", name="ROAS گزارش‌شده", category="marketing_cost",
         description="درآمد انتساب‌یافتهٔ گزارش‌شده نسبت به هزینهٔ کمپین.",
         formula="جمع درآمد و هزینهٔ روزهای جفت‌شده با ارز برابر؛ درآمد ÷ هزینه",
-        source="CRMMarketingCampaignMeasurement: attributed revenue, actual spend",
+        source="CRMMarketingCampaignMeasurement: attributed_revenue_amount, attributed_revenue_currency, actual_spend_amount, actual_spend_currency",
         aggregation="نسبت مجموع‌های روزهای دارای هر دو مبلغ و ارز یکسان.",
         dimensions=["campaign", "currency", "date range"],
         unit="multiple", currency_behavior="فقط ارزهای یکسان با هم تقسیم می‌شوند؛ تبدیل ارز ندارد.",

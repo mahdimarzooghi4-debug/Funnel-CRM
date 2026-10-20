@@ -44,7 +44,7 @@ def test_metric_catalog_distinguishes_commerce_evidence_and_filters_by_permissio
     paid_to_spend = next(metric for metric in with_commerce if metric.key == "paid_to_spend")
     assert "attributed_revenue_amount" in reported_roas.source
     assert "CRMProductCommerceEvent" in paid_to_spend.source
-    assert "انتساب علّی" in paid_to_spend.limitations
+    assert "بازده علّی تبلیغ" in paid_to_spend.limitations
 
 
 @pytest.mark.asyncio
@@ -107,7 +107,7 @@ async def test_metric_catalog_is_scoped_searchable_and_audited(
             headers={"X-Workspace-ID": str(tenant_id)},
             params={
                 "organization_unit_id": str(root_id),
-                "search": "انتساب علّی",
+                "search": "بازده علّی تبلیغ",
             },
         )
         assert search_response.status_code == 200, search_response.text
