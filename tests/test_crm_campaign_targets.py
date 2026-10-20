@@ -126,13 +126,14 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         metrics = evaluation.json()["metrics"]
         assert metrics["impressions"]["actual"] == 1500
         assert metrics["impressions"]["status"] == "met"
-        assert metrics["impressions"]["observed_days"] == 1
         assert metrics["impressions"]["period_days"] == 2
-        assert metrics["impressions"]["recorded_day_coverage_percent"] == "50.00"
+        assert metrics["impressions"]["recorded_day_coverage_percent"] == "100.00"
         assert metrics["clicks"]["actual"] == 75
         assert metrics["clicks"]["status"] == "not_met"
         assert metrics["spend"]["actual"] == "20.000000"
         assert metrics["spend"]["observed_days"] == 1
+        assert metrics["spend"]["period_days"] == 2
+        assert metrics["spend"]["recorded_day_coverage_percent"] == "50.00"
         assert metrics["cost_per_lead"]["actual"] == "4.000000"
         assert metrics["cost_per_lead"]["paired_days"] == 1
         assert metrics["cost_per_conversion"]["actual"] == "10.000000"
