@@ -164,7 +164,8 @@ def evaluate_plan_metrics(
                     and row.actual_spend_currency == plan.max_spend_currency]
         actual = sum((row.actual_spend_amount for row in matching), Decimal("0")) if matching else None
         metrics["spend"] = _result(plan.max_spend_amount, actual, lower_is_better=True,
-                                   currency=plan.max_spend_currency, observed_days=len(matching))
+                                   currency=plan.max_spend_currency, observed_days=len(matching),
+                                   period_days=period_days)
     for key, target, currency, outcome_attr in (
         ("cost_per_lead", plan.max_cpl_amount, plan.cpl_currency, "leads"),
         ("cost_per_conversion", plan.max_cost_per_conversion_amount,
@@ -178,7 +179,8 @@ def evaluate_plan_metrics(
         outcomes = sum((getattr(row, outcome_attr) for row in paired), 0)
         actual = (spend / Decimal(outcomes)).quantize(Decimal("0.000001")) if paired and outcomes > 0 else None
         metrics[key] = _result(target, actual, lower_is_better=True, currency=currency,
-                               observed_days=len(paired), paired_days=len(paired))
+                               observed_days=len(paired), paired_days=len(paired),
+                               period_days=period_days)
     if plan.min_roas is not None:
         paired = [row for row in rows if row.actual_spend_amount is not None
                   and row.actual_spend_currency == plan.roas_currency
