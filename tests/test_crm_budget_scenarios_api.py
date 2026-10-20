@@ -83,6 +83,23 @@ async def test_budget_scenarios_compare_and_replace_without_changing_campaign_bu
         await context.session.flush()
         context.session.add_all(
             [
+                CRMMarketingCampaignMeasurement(
+                    id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                    campaign_id=campaigns[0].id, measured_on=date(2026, 10, 2),
+                    source_label="budget-scenario-comparison-email", leads=12, conversions=3,
+                    actual_spend_amount=Decimal("200"), actual_spend_currency="USD",
+                ),
+                CRMMarketingCampaignMeasurement(
+                    id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                    campaign_id=campaigns[1].id, measured_on=date(2026, 10, 2),
+                    source_label="budget-scenario-comparison-store", leads=6, conversions=1,
+                    actual_spend_amount=Decimal("30"), actual_spend_currency="USD",
+                ),
+            ]
+        )
+        await context.session.flush()
+        context.session.add_all(
+            [
                 RoleAssignment(
                     tenant_id=tenant_id,
                     membership_id=context.access.membership_id,
@@ -143,6 +160,37 @@ async def test_budget_scenarios_compare_and_replace_without_changing_campaign_bu
         )
         assert comparison.status_code == 200, comparison.text
         by_name = {item["name"]: item for item in comparison.json()["scenarios"]}
+
+        evidence_comparison = await client.get(
+            "/api/v1/crm/budget-scenarios/compare/performance-context",
+            headers=headers,
+            params={
+                "scenario_ids": [first.json()["id"], second.json()["id"]],
+                "period_start": "2026-10-01",
+                "period_end": "2026-10-03",
+            },
+        )
+        assert evidence_comparison.status_code == 200, evidence_comparison.text
+        evidence = evidence_comparison.json()
+        assert evidence["period_calendar_days"] == 3
+        assert evidence["currency_conversion_applied"] is False
+        assert evidence["causal_attribution_applied"] is False
+        assert evidence["counterfactual_outcomes_predicted"] is False
+        summaries = {item["name"]: item for item in evidence["scenarios"]}
+        conservative_usd = summaries["Conservative"]["reconciliation_by_currency"]["USD"]
+        growth_usd = summaries["Growth"]["reconciliation_by_currency"]["USD"]
+        assert conservative_usd["comparable_planned_amount"] == "900.000000"
+        assert conservative_usd["observed_spend_amount"] == "200.000000"
+        assert conservative_usd["variance_amount"] == "700.000000"
+        assert growth_usd["variance_amount"] == "1300.000000"
+        conservative_eur = summaries["Conservative"]["reconciliation_by_currency"]["EUR"]
+        assert conservative_eur["observed_spend_amount"] is None
+        assert conservative_eur["currency_mismatch_allocation_count"] == 1
+        campaign_evidence = {item["campaign_name"]: item for item in evidence["campaigns"]}
+        assert campaign_evidence["Email campaign"]["metrics"]["leads"]["actual"] == 12
+        store = campaign_evidence["Store campaign"]
+        assert store["recorded_spend_by_currency"] == {"USD": "30.000000"}
+        assert store["scenario_allocations"][0]["actual_spend_in_allocation_currency"] is None
         assert by_name["Conservative"]["totals_by_currency"] == {
             "USD": "900.000000", "EUR": "250.000000"
         }
