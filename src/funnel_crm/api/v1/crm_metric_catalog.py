@@ -225,6 +225,11 @@ _METRICS.extend([
 ])
 
 
+def get_metric_definition(key: str) -> MetricDefinition | None:
+    """Return the canonical definition for one currently supported KPI."""
+    return next((metric for metric in _METRICS if metric.key == key), None)
+
+
 def _visible_metrics(
     definitions: list[MetricDefinition],
     *,
