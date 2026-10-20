@@ -322,8 +322,7 @@ async def get_campaign_decision_workspace(
 
     metric_definitions: dict[str, MetricDefinition] = {}
     for metric_key in metrics:
-        definition_key = "actual_spend" if metric_key == "spend" else metric_key
-        definition = get_metric_definition(definition_key)
+        definition = get_metric_definition(metric_key)
         if definition is not None:
             metric_definitions[metric_key] = definition
     coverage_definition = get_metric_definition("recorded_day_coverage")

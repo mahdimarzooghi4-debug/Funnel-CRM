@@ -226,8 +226,10 @@ _METRICS.extend([
 
 
 def get_metric_definition(key: str) -> MetricDefinition | None:
-    """Return the canonical definition for one currently supported KPI."""
-    return next((metric for metric in _METRICS if metric.key == key), None)
+    """Return the canonical definition for a workspace or target evaluation KPI."""
+    aliases = {"spend": "actual_spend", "roas": "reported_roas"}
+    canonical_key = aliases.get(key, key)
+    return next((metric for metric in _METRICS if metric.key == canonical_key), None)
 
 
 def _visible_metrics(
