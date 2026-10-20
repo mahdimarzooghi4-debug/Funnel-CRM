@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -9,9 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_budget_scenarios import router
 from funnel_crm.platform.models import (
+    AuditEvent,
     CRMMarketingBudgetScenario,
     CRMMarketingBudgetScenarioLine,
     CRMMarketingCampaign,
+    CRMMarketingCampaignMeasurement,
     CRMProfileSegment,
     Role,
     RoleAssignment,
@@ -226,3 +229,127 @@ async def test_budget_scenarios_compare_and_replace_without_changing_campaign_bu
             )
         )
         assert count is not None
+
+
+@pytest.mark.asyncio
+async def test_budget_scenario_performance_context_uses_matching_currency_and_shows_coverage(
+    runtime_session_factory: async_sessionmaker[AsyncSession],
+    tenant_case: dict[str, object],
+) -> None:
+    tenant_id = tenant_case["workspace_a"]
+    root_id = tenant_case["root_a"]
+    identity = tenant_case["identity"]
+    assert isinstance(tenant_id, UUID)
+    assert isinstance(root_id, UUID)
+    assert isinstance(identity, AuthenticatedIdentity)
+
+    segment_id, campaign_usd_id, campaign_eur_id, scenario_id = uuid4(), uuid4(), uuid4(), uuid4()
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        context.session.add(CRMProfileSegment(
+            id=segment_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            name=f"Scenario context audience {uuid4().hex[:8]}",
+            criteria={"profile_kinds": ["person"]}, is_active=True,
+        ))
+        await context.session.flush()
+        context.session.add_all([
+            CRMMarketingCampaign(
+                id=campaign_usd_id, tenant_id=tenant_id, organization_unit_id=root_id,
+                segment_id=segment_id, name="USD Campaign", objective_key="acquisition",
+                channel="web", planned_budget_amount=None, planned_budget_currency=None,
+                starts_at=None, ends_at=None, status="draft",
+            ),
+            CRMMarketingCampaign(
+                id=campaign_eur_id, tenant_id=tenant_id, organization_unit_id=root_id,
+                segment_id=segment_id, name="EUR Allocation", objective_key="retention",
+                channel="store", planned_budget_amount=None, planned_budget_currency=None,
+                starts_at=None, ends_at=None, status="draft",
+            ),
+        ])
+        role = Role(tenant_id=tenant_id, name=f"Scenario reviewer {uuid4().hex[:8]}")
+        context.session.add(role)
+        await context.session.flush()
+        context.session.add_all([
+            CRMMarketingBudgetScenario(
+                id=scenario_id, tenant_id=tenant_id, organization_unit_id=root_id,
+                name="Observed performance context", status="draft",
+            ),
+            CRMMarketingBudgetScenarioLine(
+                tenant_id=tenant_id, organization_unit_id=root_id,
+                scenario_id=scenario_id, campaign_id=campaign_usd_id,
+                planned_budget_amount=Decimal("900"), planned_budget_currency="USD",
+            ),
+            CRMMarketingBudgetScenarioLine(
+                tenant_id=tenant_id, organization_unit_id=root_id,
+                scenario_id=scenario_id, campaign_id=campaign_eur_id,
+                planned_budget_amount=Decimal("250"), planned_budget_currency="EUR",
+            ),
+            CRMMarketingCampaignMeasurement(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=campaign_usd_id, measured_on=date(2026, 10, 2),
+                source_label="scenario-context", leads=12, conversions=3,
+                actual_spend_amount=Decimal("200"), actual_spend_currency="USD",
+            ),
+            CRMMarketingCampaignMeasurement(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=campaign_eur_id, measured_on=date(2026, 10, 2),
+                source_label="scenario-context", leads=6, conversions=1,
+                actual_spend_amount=Decimal("30"), actual_spend_currency="USD",
+            ),
+            RoleAssignment(
+                tenant_id=tenant_id, membership_id=context.access.membership_id,
+                role_id=role.id, organization_unit_id=root_id,
+            ),
+            RolePermission(
+                tenant_id=tenant_id, role_id=role.id,
+                permission_key="crm.budget_scenario:view",
+            ),
+            RolePermission(
+                tenant_id=tenant_id, role_id=role.id,
+                permission_key="crm.campaign:view",
+            ),
+        ])
+        await context.session.flush()
+
+    app = make_app(runtime_session_factory, identity)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/v1/crm/budget-scenarios/{scenario_id}/performance-context",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": "2026-10-01", "period_end": "2026-10-03"},
+        )
+        assert response.status_code == 200, response.text
+        report = response.json()
+
+    assert report["period_calendar_days"] == 3
+    assert report["currency_conversion_applied"] is False
+    assert report["causal_attribution_applied"] is False
+    assert report["automatic_recommendation_issued"] is False
+    assert report["metric_definitions"]["actual_spend"]["key"] == "actual_spend"
+    allocations = {item["campaign_name"]: item for item in report["allocations"]}
+    usd = allocations["USD Campaign"]
+    assert usd["actual_spend_in_allocation_currency"] == "200.000000"
+    assert usd["budget_variance_amount"] == "700.000000"
+    assert usd["budget_used_percent"] == "22.22"
+    assert usd["spend_recorded_day_coverage_percent"] == "33.33"
+    assert usd["metrics"]["leads"]["actual"] == 12
+    assert usd["metrics"]["leads"]["recorded_day_coverage_percent"] == "33.33"
+
+    eur = allocations["EUR Allocation"]
+    assert eur["recorded_spend_by_currency"] == {"USD": "30.000000"}
+    assert eur["actual_spend_in_allocation_currency"] is None
+    assert eur["budget_variance_amount"] is None
+    assert eur["metrics"]["leads"]["actual"] == 6
+
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        audits = (await context.session.scalars(select(AuditEvent).where(
+            AuditEvent.tenant_id == tenant_id,
+            AuditEvent.action_key == "crm_marketing_budget_scenario.performance_context_viewed",
+            AuditEvent.target_key == str(scenario_id),
+        ))).all()
+        assert len(audits) == 1

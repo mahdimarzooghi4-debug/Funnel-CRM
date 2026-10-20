@@ -1,6 +1,6 @@
 """Tenant- and organization-scoped planning scenarios for campaign budgets."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, func, select
 
+from funnel_crm.api.v1.crm_metric_catalog import MetricDefinition, get_metric_definition
+
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
@@ -16,6 +18,7 @@ from funnel_crm.platform.models import (
     CRMMarketingBudgetScenario,
     CRMMarketingBudgetScenarioLine,
     CRMMarketingCampaign,
+    CRMMarketingCampaignMeasurement,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -105,6 +108,45 @@ class BudgetScenarioComparison(BaseModel):
     organization_unit_id: UUID
     common_campaign_ids: list[UUID]
     scenarios: list[BudgetScenarioComparisonItem]
+
+class ScenarioObservedMetric(BaseModel):
+    actual: int | None
+    observed_days: int
+    period_days: int
+    recorded_day_coverage_percent: Decimal
+
+
+class BudgetScenarioPerformanceAllocation(BaseModel):
+    campaign_id: UUID
+    campaign_name: str
+    channel: str
+    objective_key: str
+    planned_budget_amount: Decimal
+    planned_budget_currency: str
+    recorded_spend_by_currency: dict[str, Decimal]
+    actual_spend_in_allocation_currency: Decimal | None
+    budget_variance_amount: Decimal | None
+    budget_used_percent: Decimal | None
+    spend_observed_days: int
+    spend_period_days: int
+    spend_recorded_day_coverage_percent: Decimal
+    metrics: dict[str, ScenarioObservedMetric]
+
+
+class BudgetScenarioPerformanceContext(BaseModel):
+    scenario_id: UUID
+    scenario_name: str
+    organization_unit_id: UUID
+    period_start: date
+    period_end: date
+    period_calendar_days: int
+    metric_definitions: dict[str, MetricDefinition]
+    coverage_basis: str
+    allocations: list[BudgetScenarioPerformanceAllocation]
+    totals_by_currency: dict[str, Decimal]
+    currency_conversion_applied: bool
+    causal_attribution_applied: bool
+    automatic_recommendation_issued: bool
 
 
 async def _require_scenario_permission(
@@ -382,6 +424,166 @@ async def compare_budget_scenarios(
             )
             for scenario in sorted(scenarios, key=lambda item: item.name)
         ],
+    )
+
+
+
+@router.get(
+    "/{scenario_id}/performance-context",
+    response_model=BudgetScenarioPerformanceContext,
+    operation_id="getCRMMarketingBudgetScenarioPerformanceContext",
+)
+async def get_budget_scenario_performance_context(
+    scenario_id: UUID,
+    period_start: date,
+    period_end: date,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> BudgetScenarioPerformanceContext:
+    if period_start > period_end or (period_end - period_start).days >= 366:
+        raise HTTPException(status_code=422, detail="Period must be ordered and no longer than 366 days")
+    scenario = await _load_scenario(context, scenario_id)
+    await _require_scenario_permission(
+        context, permission_key="crm.budget_scenario:view",
+        organization_unit_id=scenario.organization_unit_id,
+    )
+    await _require_campaign_view(context, scenario.organization_unit_id)
+
+    campaign_rows = (await context.session.execute(
+        select(
+            CRMMarketingBudgetScenarioLine.campaign_id,
+            CRMMarketingBudgetScenarioLine.planned_budget_amount,
+            CRMMarketingBudgetScenarioLine.planned_budget_currency,
+            CRMMarketingCampaign.name,
+            CRMMarketingCampaign.channel,
+            CRMMarketingCampaign.objective_key,
+        ).join(
+            CRMMarketingCampaign,
+            (CRMMarketingCampaign.tenant_id == CRMMarketingBudgetScenarioLine.tenant_id)
+            & (CRMMarketingCampaign.organization_unit_id == CRMMarketingBudgetScenarioLine.organization_unit_id)
+            & (CRMMarketingCampaign.id == CRMMarketingBudgetScenarioLine.campaign_id),
+        ).where(
+            CRMMarketingBudgetScenarioLine.tenant_id == context.access.tenant_id,
+            CRMMarketingBudgetScenarioLine.organization_unit_id == scenario.organization_unit_id,
+            CRMMarketingBudgetScenarioLine.scenario_id == scenario.id,
+        ).order_by(CRMMarketingCampaign.name, CRMMarketingCampaign.id)
+    )).all()
+    campaign_ids = [row.campaign_id for row in campaign_rows]
+    measurements = []
+    if campaign_ids:
+        measurements = (await context.session.scalars(
+            select(CRMMarketingCampaignMeasurement).where(
+                CRMMarketingCampaignMeasurement.tenant_id == context.access.tenant_id,
+                CRMMarketingCampaignMeasurement.organization_unit_id == scenario.organization_unit_id,
+                CRMMarketingCampaignMeasurement.campaign_id.in_(campaign_ids),
+                CRMMarketingCampaignMeasurement.measured_on >= period_start,
+                CRMMarketingCampaignMeasurement.measured_on <= period_end,
+            ).order_by(CRMMarketingCampaignMeasurement.measured_on)
+        )).all()
+
+    rows_by_campaign: dict[UUID, list[CRMMarketingCampaignMeasurement]] = {}
+    for measurement in measurements:
+        rows_by_campaign.setdefault(measurement.campaign_id, []).append(measurement)
+
+    period_days = (period_end - period_start).days + 1
+
+    def observed_metric(values: list[int | None]) -> ScenarioObservedMetric:
+        present = [value for value in values if value is not None]
+        observed_days = len(present)
+        return ScenarioObservedMetric(
+            actual=sum(present) if present else None,
+            observed_days=observed_days,
+            period_days=period_days,
+            recorded_day_coverage_percent=(
+                (Decimal(observed_days) * Decimal("100") / Decimal(period_days)).quantize(Decimal("0.01"))
+                if period_days > 0 else Decimal("0")
+            ),
+        )
+
+    allocations: list[BudgetScenarioPerformanceAllocation] = []
+    for row in campaign_rows:
+        campaign_measurements = rows_by_campaign.get(row.campaign_id, [])
+        spend_by_currency: dict[str, Decimal] = {}
+        spend_days_by_currency: dict[str, int] = {}
+        for measurement in campaign_measurements:
+            if measurement.actual_spend_amount is None or measurement.actual_spend_currency is None:
+                continue
+            currency = measurement.actual_spend_currency
+            spend_by_currency[currency] = spend_by_currency.get(currency, Decimal("0")) + measurement.actual_spend_amount
+            spend_days_by_currency[currency] = spend_days_by_currency.get(currency, 0) + 1
+
+        allocation_currency = row.planned_budget_currency
+        matching_spend = spend_by_currency.get(allocation_currency)
+        spend_days = spend_days_by_currency.get(allocation_currency, 0)
+        variance = row.planned_budget_amount - matching_spend if matching_spend is not None else None
+        used_percent = (
+            (matching_spend * Decimal("100") / row.planned_budget_amount).quantize(Decimal("0.01"))
+            if matching_spend is not None and row.planned_budget_amount > 0
+            else None
+        )
+        allocations.append(BudgetScenarioPerformanceAllocation(
+            campaign_id=row.campaign_id,
+            campaign_name=row.name,
+            channel=row.channel,
+            objective_key=row.objective_key,
+            planned_budget_amount=row.planned_budget_amount,
+            planned_budget_currency=allocation_currency,
+            recorded_spend_by_currency=spend_by_currency,
+            actual_spend_in_allocation_currency=matching_spend,
+            budget_variance_amount=variance,
+            budget_used_percent=used_percent,
+            spend_observed_days=spend_days,
+            spend_period_days=period_days,
+            spend_recorded_day_coverage_percent=(
+                (Decimal(spend_days) * Decimal("100") / Decimal(period_days)).quantize(Decimal("0.01"))
+                if period_days > 0 else Decimal("0")
+            ),
+            metrics={
+                "leads": observed_metric([item.leads for item in campaign_measurements]),
+                "conversions": observed_metric([item.conversions for item in campaign_measurements]),
+            },
+        ))
+
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_budget_scenario.performance_context_viewed",
+        target_type="crm_marketing_budget_scenario_performance_context",
+        target_key=str(scenario.id),
+        organization_unit_id=scenario.organization_unit_id,
+        before_state=None,
+        after_state={
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "allocation_count": len(allocations),
+            "measurement_count": len(measurements),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    metric_definitions = {
+        key: definition
+        for key in ("actual_spend", "leads", "conversions")
+        if (definition := get_metric_definition(key)) is not None
+    }
+    return BudgetScenarioPerformanceContext(
+        scenario_id=scenario.id,
+        scenario_name=scenario.name,
+        organization_unit_id=scenario.organization_unit_id,
+        period_start=period_start,
+        period_end=period_end,
+        period_calendar_days=period_days,
+        metric_definitions=metric_definitions,
+        coverage_basis=(
+            "Coverage is observed measurement days divided by calendar days in the selected period. "
+            "Missing days are not zero; spend variance uses only recorded spend in the allocation currency."
+        ),
+        allocations=allocations,
+        totals_by_currency=await _scenario_totals(context, scenario_id=scenario.id),
+        currency_conversion_applied=False,
+        causal_attribution_applied=False,
+        automatic_recommendation_issued=False,
     )
 
 
