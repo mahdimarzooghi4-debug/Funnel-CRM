@@ -170,7 +170,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert workspace["metric_definitions"]["spend"]["key"] == "actual_spend"
     assert workspace["metric_definitions"]["impressions"]["key"] == "impressions"
     assert workspace["metric_definitions"]["paid_to_spend"]["key"] == "paid_to_spend"
-    assert "انتساب علّی" in workspace["metric_definitions"]["paid_to_spend"]["limitations"]
+    assert "بازده علّی تبلیغ" in workspace["metric_definitions"]["paid_to_spend"]["limitations"]
     assert workspace["coverage_definition"]["key"] == "recorded_day_coverage"
     currency_rows = {
         row["currency"]: row for row in workspace["commerce_outcomes_by_currency"]
