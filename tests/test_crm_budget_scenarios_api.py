@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_budget_scenarios import router
+from funnel_crm.api.v1.crm_workspace_context import router as workspace_context_router
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingBudgetScenario,
@@ -36,6 +37,7 @@ def make_app(
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(workspace_context_router, prefix="/api/v1")
     return app
 
 
@@ -126,6 +128,20 @@ async def test_budget_scenarios_compare_and_replace_without_changing_campaign_bu
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
+        workspace_response = await client.get("/api/v1/system/workspaces")
+        assert workspace_response.status_code == 200, workspace_response.text
+        assert workspace_response.json() == [{
+            "id": str(tenant_id),
+            "name": "Tenant A",
+            "root_organization_id": str(root_id),
+        }]
+
+        organization_response = await client.get(
+            "/api/v1/system/organization-units", headers=headers
+        )
+        assert organization_response.status_code == 200, organization_response.text
+        assert [unit["id"] for unit in organization_response.json()] == [str(root_id)]
+
         first = await client.post(
             "/api/v1/crm/budget-scenarios",
             headers=headers,
@@ -152,6 +168,14 @@ async def test_budget_scenarios_compare_and_replace_without_changing_campaign_bu
             },
         )
         assert second.status_code == 201, second.text
+
+        scenario_list = await client.get(
+            "/api/v1/crm/budget-scenarios",
+            headers=headers,
+            params={"organization_unit_id": str(root_id), "status": "draft"},
+        )
+        assert scenario_list.status_code == 200, scenario_list.text
+        assert {item["name"] for item in scenario_list.json()} == {"Conservative", "Growth"}
 
         comparison = await client.get(
             "/api/v1/crm/budget-scenarios/compare",

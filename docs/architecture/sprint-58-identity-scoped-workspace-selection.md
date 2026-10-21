@@ -10,5 +10,4 @@ Replaces manual workspace and organization UUID entry in the budget-scenario com
 
 ## Validation
 
-- Exact tested head before this documentation-only update: `5c3462115055a45c688a23406663d98f8950cdb3`.
-- GitHub Actions run `39633937699`: Python service succeeded; Alembic upgrade and full pytest suite passed.
+- GitHub Actions run `39634157843`: Alembic upgrade and full pytest suite passed on the final Sprint 58 head.
