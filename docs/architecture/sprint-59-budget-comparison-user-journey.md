@@ -8,4 +8,5 @@ The journey remains read-only with respect to campaign execution and makes no bu
 
 ## Validation
 
-Pending exact-head CI.
+- Exact implementation head `d240b8f57d715fd811f70179604f0e2ad47ee9a6`: GitHub Actions run `39637177209` succeeded; Alembic upgrade passed and pytest reported 94 passed, 3 warnings.
+- The initial run found a same-name CTE collision in the combined permission query; the implementation was corrected and the full suite passed.
