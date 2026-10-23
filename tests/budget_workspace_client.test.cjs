@@ -65,6 +65,7 @@ const ids = [
   "selection-count", "compare", "load-scenarios", "period-start", "period-end", "export-csv",
   "period-comparison-period", "period-comparison", "channel-period-comparison", "unit-cost-comparison",
   "target-outcomes-note", "target-outcomes",
+  "channel-target-summary-note", "channel-target-summary",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -206,6 +207,12 @@ async function main() {
     ["Spring launch", "تبدیل", "۴", "ثبت نشده", "دادهٔ کافی ثبت نشده", "۰٪"],
     ["Spring launch", "سرنخ", "۱۰", "۱۲", "هدف محقق‌شده", "۷٫۱۴٪"],
   ]);
+  assert.deepEqual(elements.get("channel-target-summary").children.map((row) =>
+    row.children.map((cell) => cell.textContent)), [
+    ["email", "تبدیل", "۱", "۰", "۰", "۱", "۰"],
+    ["email", "سرنخ", "۱", "۱", "۰", "۰", "۰"],
+  ]);
+  assert.match(elements.get("channel-target-summary-note").textContent, /وضعیت‌های نامشخص/);
   assert.match(elements.get("period-comparison-period").textContent, /2026-09-17 تا 2026-09-30/);
   const periodRows = elements.get("period-comparison").children;
   assert.deepEqual(periodRows.map((row) => row.children.map((cell) => cell.textContent)), [
@@ -294,6 +301,8 @@ async function main() {
   assert.ok(csv.includes('"هزینه به‌ازای هر سرنخ"'));
   assert.ok(csv.includes('"وضعیت هدف کمپین"'));
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
+  assert.ok(csv.includes('"خلاصه هدف کانال"'));
+  assert.ok(csv.includes('"محقق‌شده: 1؛ محقق‌نشده: 0؛ داده ناکافی: 0؛ نامشخص: 0"'));
   assert.ok(csv.includes('"شکاف شواهد"'));
   assert.ok(csv.includes('"دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
