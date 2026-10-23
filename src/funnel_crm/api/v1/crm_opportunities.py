@@ -159,6 +159,41 @@ class OpportunityWorklistRead(BaseModel):
     limit: int
     offset: int
 
+
+
+class OpportunityStageAgingBucket(BaseModel):
+    stage_key: str
+    opportunity_count: int
+    known_duration_count: int
+    unknown_duration_count: int
+    median_days_in_stage: int | None
+    max_days_in_stage: int | None
+
+
+class OpportunityStageAgingItem(BaseModel):
+    id: UUID
+    name: str
+    organization_unit_id: UUID
+    pipeline_id: UUID
+    profile_id: UUID | None
+    stage_key: str
+    stage_since: datetime | None
+    days_in_stage: int | None
+    history_complete: bool
+    amount: Decimal | None
+    currency: str | None
+    expected_close_date: date | None
+
+
+class OpportunityStageAgingRead(BaseModel):
+    as_of: date
+    buckets: list[OpportunityStageAgingBucket]
+    items: list[OpportunityStageAgingItem]
+    total: int
+    limit: int
+    offset: int
+
+
 class OpportunityHistoryItem(BaseModel):
     event_id: UUID
     occurred_at: datetime
@@ -521,6 +556,113 @@ async def create_opportunity(
            before=None, after=_state(opportunity))
     await context.session.flush()
     return OpportunityRead.model_validate(opportunity)
+
+
+
+
+@router.get(
+    "/stage-aging",
+    response_model=OpportunityStageAgingRead,
+    operation_id="listCRMOpportunityStageAging",
+)
+async def list_opportunity_stage_aging(
+    context: TenantSessionContext = Depends(require_tenant_session),
+    as_of: date = Query(default_factory=lambda: datetime.now(timezone.utc).date()),
+    organization_unit_id: UUID | None = None,
+    pipeline_id: UUID | None = None,
+    stage_key: str | None = Query(default=None, min_length=1, max_length=80),
+    minimum_days: int = Query(default=0, ge=0, le=3650),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> OpportunityStageAgingRead:
+    scopes = crm_scope_ids(context, permission_key="crm.opportunity:view")
+    filters = [
+        CRMOpportunity.tenant_id == context.access.tenant_id,
+        CRMOpportunity.organization_unit_id.in_(scopes),
+    ]
+    if organization_unit_id is not None:
+        if not await has_crm_permission(
+            context, permission_key="crm.opportunity:view",
+            organization_unit_id=organization_unit_id,
+        ):
+            raise HTTPException(status_code=404, detail="CRM opportunity scope not found")
+        filters.append(CRMOpportunity.organization_unit_id == organization_unit_id)
+    if pipeline_id is not None:
+        filters.append(CRMOpportunity.pipeline_id == pipeline_id)
+    if stage_key is not None:
+        filters.append(CRMOpportunity.stage_key == stage_key)
+
+    opportunities = (await context.session.scalars(
+        select(CRMOpportunity).where(*filters)
+        .order_by(CRMOpportunity.stage_key, CRMOpportunity.updated_at, CRMOpportunity.id)
+    )).all()
+    opportunity_ids = [row.id for row in opportunities]
+    events = []
+    if opportunity_ids:
+        events = (await context.session.scalars(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == context.access.tenant_id,
+                AuditEvent.target_type == "crm_opportunity",
+                AuditEvent.target_key.in_([str(value) for value in opportunity_ids]),
+                AuditEvent.organization_unit_id.in_(scopes),
+            ).order_by(AuditEvent.occurred_at.desc(), AuditEvent.event_id.desc())
+        )).all()
+
+    transitions: dict[str, list[AuditEvent]] = {}
+    for event in events:
+        transitions.setdefault(event.target_key, []).append(event)
+    items = []
+    by_stage: dict[str, list[int | None]] = {}
+    for opportunity in opportunities:
+        stage_events = transitions.get(str(opportunity.id), [])
+        entry_event = next((event for event in stage_events
+            if (event.after_state or {}).get("stage_key") == opportunity.stage_key
+            and (event.action_key == "crm_opportunity.created"
+                 or (event.before_state or {}).get("stage_key") != opportunity.stage_key)), None)
+        stage_since = entry_event.occurred_at if entry_event else None
+        days = None
+        if stage_since is not None:
+            entered_on = stage_since.astimezone(timezone.utc).date() if stage_since.tzinfo else stage_since.date()
+            days = max(0, (as_of - entered_on).days)
+        by_stage.setdefault(opportunity.stage_key, []).append(days)
+        if days is not None and days < minimum_days:
+            continue
+        items.append(OpportunityStageAgingItem(
+            id=opportunity.id, name=opportunity.name,
+            organization_unit_id=opportunity.organization_unit_id,
+            pipeline_id=opportunity.pipeline_id, profile_id=opportunity.profile_id,
+            stage_key=opportunity.stage_key, stage_since=stage_since, days_in_stage=days,
+            history_complete=entry_event is not None, amount=opportunity.amount,
+            currency=opportunity.currency, expected_close_date=opportunity.expected_close_date,
+        ))
+
+    buckets = []
+    for key, values in sorted(by_stage.items()):
+        known = sorted(value for value in values if value is not None)
+        middle = len(known) // 2
+        median = None if not known else known[middle] if len(known) % 2 else (known[middle - 1] + known[middle]) // 2
+        buckets.append(OpportunityStageAgingBucket(
+            stage_key=key, opportunity_count=len(values), known_duration_count=len(known),
+            unknown_duration_count=len(values) - len(known), median_days_in_stage=median,
+            max_days_in_stage=max(known) if known else None,
+        ))
+    total = len(items)
+    page = items[offset:offset + limit]
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id, actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_opportunity.stage_aging_viewed",
+        target_type="crm_opportunity_stage_aging",
+        target_key=str(organization_unit_id or "authorized-scope"),
+        organization_unit_id=organization_unit_id, before_state=None,
+        after_state={"as_of": as_of.isoformat(), "pipeline_id": str(pipeline_id) if pipeline_id else None,
+            "stage_key": stage_key, "minimum_days": minimum_days, "total": total,
+            "returned": len(page), "limit": limit, "offset": offset}, correlation_id=None,
+    ))
+    await context.session.flush()
+    return OpportunityStageAgingRead(as_of=as_of, buckets=buckets, items=page,
+                                     total=total, limit=limit, offset=offset)
 
 
 @router.get(
