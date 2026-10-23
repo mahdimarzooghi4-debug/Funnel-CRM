@@ -6,4 +6,4 @@ Only API-provided spend and variance in the allocation currency are comparable. 
 
 ## Validation
 
-Pending exact-head CI.
+Code and browser tests passed on implementation commit `0f0f35048c5744f73a8dd79f59275a74bef093d3` in GitHub Actions run `39971920799`. Final documentation commit validation is pending.
