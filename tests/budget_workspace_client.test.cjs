@@ -116,7 +116,7 @@ const fetch = async (path, options = {}) => {
           actual_spend_in_allocation_currency: null, variance_amount: null,
         }],
       }, {
-        campaign_name: "Brand awareness", channel: "social",
+        campaign_name: "Brand awareness", channel: "email",
         recorded_spend_by_currency: {},
         metrics: { leads: { actual: null }, conversions: { actual: 3 } },
         scenario_allocations: [],
@@ -194,17 +194,19 @@ async function main() {
   assert.equal(coverage[2].children[0].textContent, "۱");
   assert.equal(coverage[3].children[0].textContent, "۱");
   assert.equal(coverage[4].children[0].textContent, "۱");
-  assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · از 2 کمپین");
+  assert.equal(coverage[2].children[1].textContent, "کمپین دارای هزینهٔ ثبت‌شده · 1 از 2 کمپین · پوشش ۵۰٪");
+  assert.equal(coverage[3].children[1].textContent, "کمپین دارای دادهٔ سرنخ · 1 از 2 کمپین · پوشش ۵۰٪");
+  assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · 2 از 2 کمپین · پوشش ۱۰۰٪");
   const channelRows = elements.get("channel-coverage").children;
-  assert.equal(channelRows.length, 2);
-  assert.deepEqual(channelRows[0].children.map((cell) => cell.textContent), ["email", "۱", "۱", "۱", "۰"]);
-  assert.deepEqual(channelRows[1].children.map((cell) => cell.textContent), ["social", "۱", "۰", "۰", "۱"]);
+  assert.equal(channelRows.length, 1);
+  assert.deepEqual(channelRows[0].children.map((cell) => cell.textContent),
+    ["email", "۲", "۱ / ۲ · ۵۰٪", "۱ / ۲ · ۵۰٪", "۲ / ۲ · ۱۰۰٪"]);
   const gaps = elements.get("evidence-gaps").children;
   assert.equal(gaps.length, 2);
   assert.deepEqual(gaps[0].children.map((cell) => cell.textContent),
     ["Spring launch", "email", "دادهٔ تبدیل"]);
   assert.deepEqual(gaps[1].children.map((cell) => cell.textContent),
-    ["Brand awareness", "social", "هزینهٔ ثبت‌شده، دادهٔ سرنخ"]);  assert.equal(elements.get("scenario-results").children[0].children[0].textContent,
+    ["Brand awareness", "email", "هزینهٔ ثبت‌شده، دادهٔ سرنخ"]);  assert.equal(elements.get("scenario-results").children[0].children[0].textContent,
     "<img src=x onerror=alert(1)>");
   await elements.get("export-csv").dispatch("click");
   assert.equal(elements.get("status").textContent, "فایل CSV گزارش آماده شد.");
@@ -220,6 +222,9 @@ async function main() {
   assert.ok(csv.includes('"هزینه ثبت‌شده"'));
   assert.ok(csv.includes('"کمپین دارای دادهٔ تبدیل"'));
   assert.ok(csv.includes('"پوشش کانال"'));
+  assert.ok(csv.includes('"نرخ پوشش هزینهٔ ثبت‌شده (درصد)"'));
+  assert.ok(csv.includes('"نرخ پوشش دادهٔ تبدیل (درصد)","100"'));
+  assert.ok(csv.includes('"نرخ پوشش دادهٔ سرنخ (درصد)","50"'));
   assert.ok(csv.includes('"social"'));
   assert.ok(csv.includes('"شکاف شواهد"'));
   assert.ok(csv.includes('"دادهٔ تبدیل"'));
