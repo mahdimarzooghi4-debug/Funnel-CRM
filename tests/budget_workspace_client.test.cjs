@@ -145,7 +145,7 @@ const fetch = async (path, options = {}) => {
         period_calendar_days: 14,
         scenarios: [],
         campaigns: [{
-          campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email", objective_key: "acquisition",
+          campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email", objective_key: "acquisition", objective_key: "acquisition",
           recorded_spend_by_currency: { USD: 600 },
           metrics: { leads: { actual: 10 }, conversions: { actual: 2 } },
           scenario_allocations: [],
@@ -170,7 +170,7 @@ const fetch = async (path, options = {}) => {
           actual_spend_in_allocation_currency: null, variance_amount: null,
         }],
       }, {
-        campaign_id: "campaign-2", campaign_name: "Brand awareness", channel: "email", objective_key: "awareness",
+        campaign_id: "campaign-2", campaign_name: "Brand awareness", channel: "email", objective_key: "awareness", objective_key: "awareness",
         recorded_spend_by_currency: {},
         metrics: { leads: { actual: null }, conversions: { actual: 3 } },
         scenario_allocations: [],
