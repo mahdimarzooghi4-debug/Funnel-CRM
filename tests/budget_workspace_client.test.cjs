@@ -293,7 +293,7 @@ async function main() {
   assert.ok(csv.includes('"هزینهٔ واحد ثبت‌شده"'));
   assert.ok(csv.includes('"هزینه به‌ازای هر سرنخ"'));
   assert.ok(csv.includes('"وضعیت هدف کمپین"'));
-  assert.ok(csv.includes('"هدف محقق‌شده"'));
+  assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
   assert.ok(csv.includes('"شکاف شواهد"'));
   assert.ok(csv.includes('"دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
