@@ -6,4 +6,4 @@ A zero campaign denominator is displayed as unknown and exported as a blank nume
 
 ## Validation
 
-Pending exact-head CI.
+Exact head `e19b79c4b5e8e692987970bef3afd0778d093ad2`: GitHub Actions run `39956968364` succeeded; Alembic passed, pytest reported 94 passed with 3 warnings, and the Node client behavior test passed.
