@@ -67,7 +67,7 @@ const ids = [
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
   "target-period-comparison-note", "target-period-comparison",
-  "lead-conversion-ratio", "campaign-unit-cost",
+  "lead-conversion-ratio", "campaign-unit-cost", "objective-performance",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -145,7 +145,7 @@ const fetch = async (path, options = {}) => {
         period_calendar_days: 14,
         scenarios: [],
         campaigns: [{
-          campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email",
+          campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email", objective_key: "acquisition",
           recorded_spend_by_currency: { USD: 600 },
           metrics: { leads: { actual: 10 }, conversions: { actual: 2 } },
           scenario_allocations: [],
@@ -162,7 +162,7 @@ const fetch = async (path, options = {}) => {
         { name: scenarios[1].name, reconciliation_by_currency: {} },
       ],
       campaigns: reportCampaigns || [{
-        campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email",
+        campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email", objective_key: "acquisition",
         recorded_spend_by_currency: { USD: 900 },
         metrics: { leads: { actual: 12, recorded_day_coverage_percent: 80 }, conversions: { actual: null, recorded_day_coverage_percent: 60 } },
         scenario_allocations: [{
@@ -170,7 +170,7 @@ const fetch = async (path, options = {}) => {
           actual_spend_in_allocation_currency: null, variance_amount: null,
         }],
       }, {
-        campaign_id: "campaign-2", campaign_name: "Brand awareness", channel: "email",
+        campaign_id: "campaign-2", campaign_name: "Brand awareness", channel: "email", objective_key: "awareness",
         recorded_spend_by_currency: {},
         metrics: { leads: { actual: null }, conversions: { actual: 3 } },
         scenario_allocations: [],
@@ -327,6 +327,7 @@ async function main() {
   assert.ok(csv.includes('"هزینهٔ واحد ثبت‌شده"'));
   assert.ok(csv.includes('"هزینه به‌ازای هر سرنخ"'));
   assert.ok(csv.includes('"هزینهٔ واحد کمپین"'));
+  assert.ok(csv.includes('"عملکرد هدف بازاریابی"'));
   assert.ok(csv.includes('"وضعیت هدف کمپین"'));
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
   assert.ok(csv.includes('"خلاصه هدف کانال"'));
@@ -354,6 +355,13 @@ async function main() {
     },
   ];
   await elements.get("compare").dispatch("click");
+  assert.deepEqual(elements.get("objective-performance").children.map((row) =>
+    row.children.map((cell) => cell.textContent)), [
+    ["acquisition", "email", "سرنخ ثبت‌شده", "۱۰", "۱۲", "۲", "۱ / ۱", "۱ / ۱"],
+    ["acquisition", "email", "تبدیل ثبت‌شده", "۲", "۳", "۱", "۱ / ۱", "۱ / ۱"],
+    ["awareness", "email", "سرنخ ثبت‌شده", "ثبت نشده", "۵", "نامشخص", "۰ / ۰", "۱ / ۱"],
+    ["awareness", "email", "تبدیل ثبت‌شده", "ثبت نشده", "۳", "نامشخص", "۰ / ۰", "۱ / ۱"],
+  ]);
   assert.deepEqual(elements.get("lead-conversion-ratio").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
     ["email", "۲۰٪ · ۱ کمپین · ۲ / ۱۰", "۳۵٫۲۹٪ · ۲ کمپین · ۶ / ۱۷", "۱۵٫۲۹ واحد درصد"],
