@@ -6,4 +6,4 @@ Include channel-level changes and their prior/current values in the CSV. This is
 
 ## Validation
 
-Pending exact-head CI.
+Exact head `c8f27198874b209b1cacad6f63d42ce90dc3dbed`: GitHub Actions run `39958704107` succeeded; Alembic passed, pytest reported 94 passed with 3 warnings, and the Node client behavior test passed.
