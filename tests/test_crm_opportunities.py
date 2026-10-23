@@ -367,8 +367,8 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert outcomes["basis"] == "recorded_terminal_stage_transition"
         assert outcomes["won_count"] == 1
         assert outcomes["lost_count"] == 1
-        assert outcomes["won_amount_by_currency"] == {"USD": "7000.000000"}
-        assert outcomes["lost_amount_by_currency"] == {"USD": "3000.000000"}
+        assert outcomes["won_amount_by_currency"] == {"USD": "7000"}
+        assert outcomes["lost_amount_by_currency"] == {"USD": "3000"}
         assert {bucket["outcome_key"] for bucket in outcomes["buckets"]} == {"won", "lost"}
 
         invalid_stage = await client.patch(
