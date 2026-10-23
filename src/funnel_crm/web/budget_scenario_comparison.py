@@ -128,6 +128,15 @@ _PAGE = """<!doctype html>
           <tbody id="evidence-gaps"></tbody>
         </table>
       </div>
+      <h2 style="margin-top:28px">مقایسه با بازهٔ قبلی هم‌طول</h2>
+      <p id="period-comparison-period" class="muted"></p>
+      <p class="muted">تغییرها توصیفی هستند و انتساب علّی به سناریوها انجام نمی‌شود. ارزها جداگانه مقایسه می‌شوند.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">شاخص</th><th scope="col">بازهٔ قبلی</th><th scope="col">بازهٔ جاری</th><th scope="col">تغییر</th><th scope="col">درصد تغییر</th></tr></thead>
+          <tbody id="period-comparison"></tbody>
+        </table>
+      </div>
       <div id="scenario-results" class="cards"></div>
       <h2 style="margin-top:28px">عملکرد کمپین‌ها در همین بازه</h2>
       <div class="table-wrap">
@@ -153,6 +162,7 @@ _CLIENT_SCRIPT = r"""(() => {
   const resultsPanel = byId("results");
   const formatNumber = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 2 });
   let latestComparison = null;
+  let latestPreviousComparison = null;
   let latestFields = null;
 
   const params = new URLSearchParams(window.location.search);
@@ -168,7 +178,10 @@ _CLIENT_SCRIPT = r"""(() => {
   }
   function clearResults() {
     latestComparison = null;
+    latestPreviousComparison = null;
     latestFields = null;
+    byId("period-comparison-period").textContent = "";
+    byId("period-comparison").replaceChildren();
     resultsPanel.hidden = true;
     byId("evidence-coverage").replaceChildren();
     byId("channel-coverage").replaceChildren();
@@ -424,6 +437,82 @@ _CLIENT_SCRIPT = r"""(() => {
       body.appendChild(row);
     });
   }
+  function precedingPeriod(fields) {
+    const day = 24 * 60 * 60 * 1000;
+    const start = new Date(fields.start + "T00:00:00Z");
+    const end = new Date(fields.end + "T00:00:00Z");
+    const periodDays = Math.round((end.getTime() - start.getTime()) / day) + 1;
+    const previousEnd = new Date(start.getTime() - day);
+    const previousStart = new Date(start.getTime() - periodDays * day);
+    return { start: previousStart.toISOString().slice(0, 10), end: previousEnd.toISOString().slice(0, 10) };
+  }
+  function aggregateReportEvidence(report) {
+    const campaigns = report.campaigns || [];
+    const spend = {};
+    const metricValues = { leads: [], conversions: [] };
+    campaigns.forEach((campaign) => {
+      Object.entries(campaign.recorded_spend_by_currency || {}).forEach(([currency, amount]) => {
+        spend[currency] = (spend[currency] || 0) + Number(amount);
+      });
+      ["leads", "conversions"].forEach((key) => {
+        const actual = (campaign.metrics || {})[key]?.actual;
+        if (actual !== null && actual !== undefined) metricValues[key].push(Number(actual));
+      });
+    });
+    return {
+      spend,
+      leads: metricValues.leads.length ? metricValues.leads.reduce((sum, value) => sum + value, 0) : null,
+      conversions: metricValues.conversions.length ? metricValues.conversions.reduce((sum, value) => sum + value, 0) : null,
+    };
+  }
+  function comparisonRows(currentReport, previousReport) {
+    if (!previousReport) return [];
+    const current = aggregateReportEvidence(currentReport);
+    const previous = aggregateReportEvidence(previousReport);
+    const rows = [];
+    [["سرنخ", "leads"], ["تبدیل", "conversions"]].forEach(([label, key]) => {
+      const before = previous[key];
+      const now = current[key];
+      rows.push({ label, currency: "", before, now, delta: before === null || now === null ? null : now - before,
+        percent: before === null || now === null || before === 0 ? null : ((now - before) / Math.abs(before)) * 100 });
+    });
+    Array.from(new Set([...Object.keys(previous.spend), ...Object.keys(current.spend)])).sort().forEach((currency) => {
+      const before = Object.hasOwn(previous.spend, currency) ? previous.spend[currency] : null;
+      const now = Object.hasOwn(current.spend, currency) ? current.spend[currency] : null;
+      rows.push({ label: "هزینهٔ ثبت‌شده", currency, before, now, delta: before === null || now === null ? null : now - before,
+        percent: before === null || now === null || before === 0 ? null : ((now - before) / Math.abs(before)) * 100 });
+    });
+    return rows;
+  }
+  function comparisonValue(value, currency) {
+    if (value === null || value === undefined) return "ثبت نشده";
+    return currency ? displayAmount(value, currency) : formatNumber.format(value);
+  }
+  function renderPeriodComparison(currentReport, previousReport, fields) {
+    const body = byId("period-comparison");
+    body.replaceChildren();
+    const prior = precedingPeriod(fields);
+    byId("period-comparison-period").textContent =
+      "بازهٔ قبلی: " + prior.start + " تا " + prior.end + " · بازهٔ گزارش: " + fields.start + " تا " + fields.end;
+    if (!previousReport) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "دادهٔ بازهٔ قبلی در دسترس نیست.");
+      cell.colSpan = 5;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    comparisonRows(currentReport, previousReport).forEach((item) => {
+      const row = document.createElement("tr");
+      const change = item.delta === null ? "نامشخص" : comparisonValue(item.delta, item.currency);
+      const percent = item.percent === null ? "نامشخص" : formatNumber.format(item.percent) + "٪";
+      row.append(element("td", "", item.label + (item.currency ? " · " + item.currency : "")),
+        element("td", "", comparisonValue(item.before, item.currency)),
+        element("td", "", comparisonValue(item.now, item.currency)),
+        element("td", "", change), element("td", "", percent));
+      body.appendChild(row);
+    });
+  }
   function renderScenarioSummaries(scenarios) {
     const container = byId("scenario-results");
     container.replaceChildren();
@@ -532,6 +621,15 @@ _CLIENT_SCRIPT = r"""(() => {
         "درصد از " + group.campaigns + " کمپین کانال",
       ]));
     });
+    if (latestPreviousComparison) {
+      comparisonRows(result, latestPreviousComparison).forEach((item) => rows.push([
+        "مقایسه با بازه قبلی", fields.start, fields.end, "", "", "", item.currency,
+        item.label + " · تغییر", item.delta,
+        "بازه قبلی " + precedingPeriod(fields).start + " تا " + precedingPeriod(fields).end
+          + "؛ مقدار قبلی: " + (item.before ?? "ثبت نشده") + "؛ مقدار جاری: " + (item.now ?? "ثبت نشده")
+          + "؛ درصد تغییر: " + (item.percent === null ? "نامشخص" : item.percent + "٪"),
+      ]));
+    }
     (result.scenarios || []).forEach((scenario) => {
       Object.keys(scenario.reconciliation_by_currency || {}).sort().forEach((currency) => {
         const values = scenario.reconciliation_by_currency[currency];
@@ -628,13 +726,22 @@ _CLIENT_SCRIPT = r"""(() => {
       setStatus("در حال محاسبهٔ مقایسه…", false);
       byId("compare").disabled = true;
       const result = await getJson("/api/v1/crm/budget-scenarios/compare/performance-context?" + query.toString(), fields.workspace);
+      const prior = precedingPeriod(fields);
+      const priorQuery = new URLSearchParams({ period_start: prior.start, period_end: prior.end });
+      ids.forEach((id) => priorQuery.append("scenario_ids", id));
+      let previousResult = null;
+      try {
+        previousResult = await getJson("/api/v1/crm/budget-scenarios/compare/performance-context?" + priorQuery.toString(), fields.workspace);
+      } catch (_) {}
       renderEvidenceCoverage(result);
       renderChannelCoverage(result.campaigns || []);
       renderEvidenceGaps(result.campaigns || []);
       renderScenarioSummaries(result.scenarios || []);
       renderCampaignRows(result.campaigns || []);
+      renderPeriodComparison(result, previousResult, fields);
       updateReportUrl(fields, ids);
       latestComparison = result;
+      latestPreviousComparison = previousResult;
       latestFields = fields;
       resultsPanel.hidden = false;
       setStatus("گزارش برای " + result.period_calendar_days + " روز تقویمی آماده شد.", false);
