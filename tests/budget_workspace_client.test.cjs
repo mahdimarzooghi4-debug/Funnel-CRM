@@ -145,7 +145,7 @@ const fetch = async (path, options = {}) => {
         { name: scenarios[1].name, reconciliation_by_currency: {} },
       ],
       campaigns: reportCampaigns || [{
-        campaign_name: "Spring launch", channel: "email",
+        campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email",
         recorded_spend_by_currency: { USD: 900 },
         metrics: { leads: { actual: 12, recorded_day_coverage_percent: 80 }, conversions: { actual: null, recorded_day_coverage_percent: 60 } },
         scenario_allocations: [{
@@ -153,7 +153,7 @@ const fetch = async (path, options = {}) => {
           actual_spend_in_allocation_currency: null, variance_amount: null,
         }],
       }, {
-        campaign_name: "Brand awareness", channel: "email",
+        campaign_id: "campaign-2", campaign_name: "Brand awareness", channel: "email",
         recorded_spend_by_currency: {},
         metrics: { leads: { actual: null }, conversions: { actual: 3 } },
         scenario_allocations: [],
