@@ -108,7 +108,7 @@ vm.runInNewContext(script[1], {
     },
     createElement: (tagName) => new Element(tagName),
   },
-  window: { location: { search: "" } },
+  window: { location: { search: "?period_start=2026-10-01&period_end=2026-10-14" } },
   URLSearchParams,
   Intl,
   fetch,
