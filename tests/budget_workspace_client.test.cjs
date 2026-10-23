@@ -63,6 +63,7 @@ const ids = [
   "workspace-id", "organization-id", "status", "scenario-list",
   "scenario-panel", "results", "scenario-results", "campaign-results", "evidence-coverage", "channel-coverage", "evidence-gaps",
   "selection-count", "compare", "load-scenarios", "period-start", "period-end", "export-csv",
+  "period-comparison-period", "period-comparison",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
