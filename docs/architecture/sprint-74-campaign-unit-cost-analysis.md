@@ -6,4 +6,4 @@ Display the reason a campaign cost is unavailable and include the current value 
 
 ## Validation
 
-Pending exact-head CI.
+Initial implementation commit `e7934cc46ebbef42dfbba2f0e59bd982e74cd7c3` passed GitHub Actions run `39969705949`: 94 Python tests passed (3 existing warnings), and the budget comparison browser behavior test passed.
