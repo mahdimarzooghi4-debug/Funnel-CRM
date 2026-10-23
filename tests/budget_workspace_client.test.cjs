@@ -41,10 +41,11 @@ class Element {
     }
   }
   querySelectorAll(selector) {
-    assert.equal(selector, "input[type=checkbox]:checked");
+    assert.ok(["input[type=checkbox]:checked", 'input[type="checkbox"]'].includes(selector));
+    const onlyChecked = selector.endsWith(":checked");
     const matches = [];
     const visit = (node) => {
-      if (node.tagName === "INPUT" && node.type === "checkbox" && node.checked) {
+      if (node.tagName === "INPUT" && node.type === "checkbox" && (!onlyChecked || node.checked)) {
         matches.push(node);
       }
       node.children.forEach(visit);
@@ -70,6 +71,15 @@ elements.get("period-start").value = "2026-10-01";
 elements.get("period-end").value = "2026-10-14";
 
 const calls = [];
+const reportUrls = [];
+const pageWindow = {
+  location: {
+    search: "?workspace_id=workspace-1&organization_unit_id=root-1&period_start=2026-10-01&period_end=2026-10-14&scenario_ids=scenario-1&scenario_ids=scenario-2",
+    pathname: "/workspace/budget-scenario-comparison",
+    hash: "#results",
+  },
+  history: { replaceState: (_state, _title, url) => reportUrls.push(url) },
+};
 const downloads = [];
 const body = { appendChild: (node) => downloads.push(node) };
 const urlApi = { createObjectURL: (blob) => { downloads.push(blob); return "blob:report"; }, revokeObjectURL: (url) => downloads.push("revoked:" + url) };
@@ -134,7 +144,7 @@ vm.runInNewContext(script[1], {
     createElement: (tagName) => new Element(tagName),
     body,
   },
-  window: { location: { search: "?period_start=2026-10-01&period_end=2026-10-14" } },
+  window: pageWindow,
   URLSearchParams,
   Intl,
   fetch,
@@ -149,9 +159,18 @@ async function settle() {
 
 async function main() {
   await settle();
+  await settle();
   assert.equal(elements.get("workspace-id").value, workspace.id);
   assert.equal(elements.get("organization-id").value, "root-1");
   assert.equal(elements.get("organization-id").children[1].textContent, "مرکز اصلی");
+  assert.equal(elements.get("results").hidden, false, "a valid report link should reload its report");
+  assert.equal(elements.get("scenario-list").children[0].children[0].checked, true);
+  assert.equal(elements.get("scenario-list").children[1].children[0].checked, true);
+  assert.ok(reportUrls[0].includes("workspace_id=workspace-1"));
+  assert.ok(reportUrls[0].includes("organization_unit_id=root-1"));
+  assert.ok(reportUrls[0].includes("scenario_ids=scenario-1"));
+  assert.ok(reportUrls[0].includes("scenario_ids=scenario-2"));
+  assert.ok(reportUrls[0].endsWith("#results"));
 
   await elements.get("load-scenarios").dispatch("click");
   assert.equal(elements.get("scenario-panel").hidden, false);

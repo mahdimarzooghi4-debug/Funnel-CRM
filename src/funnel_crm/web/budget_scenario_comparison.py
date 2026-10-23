@@ -109,6 +109,7 @@ _PAGE = """<!doctype html>
       <h2 id="results-title">خلاصهٔ بودجه و شواهد واقعی</h2>
       <div class="actions"><button id="export-csv" type="button">دریافت فایل CSV</button><span class="hint">فایل شامل خلاصهٔ سناریوها و شواهد کمپین همین بازه است.</span></div>
       <p class="notice">نتایج ثبت‌شده برای کمپین‌های مشترک نمایش داده می‌شوند و به یک سناریوی بودجه نسبت داده نمی‌شوند. جمع واریانس فقط شامل هزینه‌های ثبت‌شده با ارز همسان است؛ ارزها تبدیل نمی‌شوند و نبود رکورد به معنی عملکرد صفر نیست.</p>
+      <p class="muted">پیوند صفحه محدوده، بازه و سناریوهای انتخاب‌شده را نگه می‌دارد؛ با بازکردن دوباره، داده‌ها با مجوز فعلی از سامانه بازخوانی می‌شوند.</p>
       <h2>پوشش شواهد این گزارش</h2>
       <p class="muted">این شمارنده‌ها میزان ثبت داده را نشان می‌دهند، نه عملکرد بهتر یا بدتر را.</p>
       <div id="evidence-coverage" class="cards" aria-live="polite"></div>
@@ -157,6 +158,7 @@ _CLIENT_SCRIPT = r"""(() => {
   const params = new URLSearchParams(window.location.search);
   const requestedWorkspaceId = params.get("workspace_id") || "";
   const requestedOrganizationId = params.get("organization_unit_id") || "";
+  const requestedScenarioIds = params.getAll("scenario_ids");
   byId("period-start").value = params.get("period_start") || "";
   byId("period-end").value = params.get("period_end") || "";
 
@@ -181,6 +183,17 @@ _CLIENT_SCRIPT = r"""(() => {
     const count = selectedIds().length;
     byId("selection-count").textContent = count + " از ۵ سناریو انتخاب شده";
     byId("compare").disabled = count < 2 || count > 5;
+  }
+  function updateReportUrl(fields, ids) {
+    const query = new URLSearchParams();
+    query.set("workspace_id", workspaceInput.value.trim());
+    query.set("organization_unit_id", organizationInput.value.trim());
+    query.set("period_start", fields.start);
+    query.set("period_end", fields.end);
+    ids.forEach((id) => query.append("scenario_ids", id));
+    if (window.history && typeof window.history.replaceState === "function") {
+      window.history.replaceState(null, "", window.location.pathname + "?" + query.toString() + (window.location.hash || ""));
+    }
   }
   function selectedRequestFields() {
     const workspace = workspaceInput.value.trim();
@@ -236,8 +249,13 @@ _CLIENT_SCRIPT = r"""(() => {
     const requested = workspaces.find((workspace) => workspace.id === requestedWorkspaceId);
     if (requested) workspaceInput.value = requested.id;
     else if (workspaces.length === 1) workspaceInput.value = workspaces[0].id;
-    if (workspaceInput.value) await loadOrganizationChoices();
-    else organizationInput.replaceChildren();
+    if (workspaceInput.value) {
+      await loadOrganizationChoices();
+      if (requestedScenarioIds.length >= 2 && requestedScenarioIds.length <= 5
+          && byId("period-start").value && byId("period-end").value) {
+        await loadScenarios();
+      }
+    } else organizationInput.replaceChildren();
   }
   async function loadAllScenarios(fields) {
     const result = [];
@@ -560,6 +578,17 @@ _CLIENT_SCRIPT = r"""(() => {
       renderScenarioOptions(scenarios);
       scenarioPanel.hidden = false;
       setStatus(scenarios.length + " سناریو بارگذاری شد.", false);
+      const requestedIds = Array.from(new Set(requestedScenarioIds.filter(Boolean)));
+      if (requestedIds.length >= 2 && requestedIds.length <= 5
+          && requestedIds.length === requestedScenarioIds.length) {
+        const checkboxes = Array.from(listNode.querySelectorAll('input[type="checkbox"]'));
+        const availableIds = new Set(checkboxes.map((checkbox) => checkbox.value));
+        if (requestedIds.every((id) => availableIds.has(id))) {
+          checkboxes.forEach((checkbox) => { checkbox.checked = requestedIds.includes(checkbox.value); });
+          updateSelectionCount();
+          await compareScenarios();
+        }
+      }
     } catch (error) {
       setStatus(error.message || "دریافت سناریوها ناموفق بود.", true);
     } finally {
@@ -582,6 +611,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderEvidenceGaps(result.campaigns || []);
       renderScenarioSummaries(result.scenarios || []);
       renderCampaignRows(result.campaigns || []);
+      updateReportUrl(fields, ids);
       latestComparison = result;
       latestFields = fields;
       resultsPanel.hidden = false;
