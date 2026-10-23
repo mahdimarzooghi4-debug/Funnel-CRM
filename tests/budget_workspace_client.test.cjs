@@ -332,6 +332,7 @@ async function main() {
   assert.ok(csv.includes('"هزینهٔ واحد کمپین"'));
   assert.ok(csv.includes('"عملکرد هدف بازاریابی"'));
   assert.ok(csv.includes('"تطبیق بودجه بر اساس هدف"'));
+  assert.ok(csv.includes("سهم از بودجه سناریو"));
   assert.ok(csv.includes('"وضعیت هدف کمپین"'));
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
   assert.ok(csv.includes('"خلاصه هدف کانال"'));
@@ -361,6 +362,9 @@ async function main() {
       scenario_allocations: [{
         scenario_name: scenarios[1].name, planned_budget_currency: "EUR", planned_budget_amount: 500,
         actual_spend_in_allocation_currency: null, variance_amount: null,
+      }, {
+        scenario_name: scenarios[0].name, planned_budget_currency: "USD", planned_budget_amount: 500,
+        actual_spend_in_allocation_currency: null, variance_amount: null,
       }],
     },
   ];
@@ -374,8 +378,9 @@ async function main() {
   ]);
   assert.deepEqual(elements.get("objective-budget-reconciliation").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
-    ["acquisition", scenarios[0].name, "USD", "۱٬۰۰۰ USD", "۱٬۰۰۰ USD", "۶۵۰ USD", "۳۵۰ USD", "۱ / ۱"],
-    ["awareness", scenarios[1].name, "EUR", "۵۰۰ EUR", "۰ EUR", "نامشخص", "نامشخص", "۰ / ۱"],
+    ["awareness", scenarios[0].name, "USD", "۵۰۰ USD", "۰ USD", "نامشخص", "نامشخص", "۰ / ۱", "۳۳٫۳۳٪"],
+    ["awareness", scenarios[1].name, "EUR", "۵۰۰ EUR", "۰ EUR", "نامشخص", "نامشخص", "۰ / ۱", "۱۰۰٪"],
+    ["acquisition", scenarios[0].name, "USD", "۱٬۰۰۰ USD", "۱٬۰۰۰ USD", "۶۵۰ USD", "۳۵۰ USD", "۱ / ۱", "۶۶٫۶۷٪"],
   ]);
   assert.deepEqual(elements.get("lead-conversion-ratio").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
