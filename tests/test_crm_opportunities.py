@@ -174,6 +174,57 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         )
         assert unscheduled_opportunity.status_code == 201, unscheduled_opportunity.text
 
+        worklist = await client.get(
+            "/api/v1/crm/opportunities/worklist",
+            headers=headers,
+            params={
+                "organization_unit_id": str(root_id),
+                "pipeline_id": pipeline_id,
+                "as_of": "2026-12-10",
+                "days_ahead": 7,
+                "limit": 2,
+            },
+        )
+        assert worklist.status_code == 200, worklist.text
+        worklist_report = worklist.json()
+        assert worklist_report["as_of"] == "2026-12-10"
+        assert worklist_report["through_date"] == "2026-12-17"
+        assert worklist_report["total"] == 4
+        assert worklist_report["counts_by_state"] == {
+            "overdue": 1, "due_soon": 1, "later": 1, "unscheduled": 1,
+        }
+        assert [item["date_state"] for item in worklist_report["items"]] == [
+            "overdue", "due_soon",
+        ]
+        assert [item["days_until_expected_close"] for item in worklist_report["items"]] == [-9, 5]
+        next_page = await client.get(
+            "/api/v1/crm/opportunities/worklist",
+            headers=headers,
+            params={
+                "organization_unit_id": str(root_id),
+                "pipeline_id": pipeline_id,
+                "as_of": "2026-12-10",
+                "days_ahead": 7,
+                "limit": 2,
+                "offset": 2,
+            },
+        )
+        assert next_page.status_code == 200, next_page.text
+        assert [item["date_state"] for item in next_page.json()["items"]] == [
+            "later", "unscheduled",
+        ]
+        overdue_only = await client.get(
+            "/api/v1/crm/opportunities/worklist",
+            headers=headers,
+            params={
+                "as_of": "2026-12-10",
+                "date_state": "overdue",
+            },
+        )
+        assert overdue_only.status_code == 200, overdue_only.text
+        assert overdue_only.json()["total"] == 1
+        assert overdue_only.json()["counts_by_state"]["overdue"] == 1
+
         forecast = await client.get(
             "/api/v1/crm/sales-forecast/opportunities",
             headers=headers,
