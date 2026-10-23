@@ -64,6 +64,7 @@ const ids = [
   "scenario-panel", "results", "scenario-results", "campaign-results", "evidence-coverage", "channel-coverage", "evidence-gaps",
   "selection-count", "compare", "load-scenarios", "period-start", "period-end", "export-csv",
   "period-comparison-period", "period-comparison", "channel-period-comparison", "unit-cost-comparison",
+  "target-outcomes-note", "target-outcomes",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -89,6 +90,25 @@ const scenarios = [
   { id: "scenario-1", name: "<img src=x onerror=alert(1)>", allocation_count: 2 },
   { id: "scenario-2", name: '=HYPERLINK("https://evil.example","open")', allocation_count: 2 },
 ];
+const targetPortfolio = {
+  period_start: "2026-10-01",
+  period_end: "2026-10-14",
+  organization_unit_id: "root-1",
+  grouped_by: "channel",
+  campaign_count: 1,
+  campaign_list_truncated: false,
+  campaigns: [{
+    campaign_id: "campaign-1",
+    target_plan_id: "target-plan-1",
+    name: "Spring launch",
+    organization_unit_id: "root-1",
+    group_key: "email",
+    metrics: {
+      leads: { target: 10, actual: 12, status: "met", currency: null, observed_days: 1, period_days: 14, recorded_day_coverage_percent: "7.14" },
+      conversions: { target: 4, actual: null, status: "no_data", currency: null, observed_days: 0, period_days: 14, recorded_day_coverage_percent: "0" },
+    },
+  }],
+};
 let reportCampaigns = null;
 const fetch = async (path, options = {}) => {
   calls.push({ path, options });
@@ -99,6 +119,8 @@ const fetch = async (path, options = {}) => {
     payload = [{ id: "root-1", name: "مرکز اصلی", parent_id: null, unit_type: "root" }];
   } else if (path.startsWith("/api/v1/crm/budget-scenarios?")) {
     payload = scenarios;
+  } else if (path.startsWith("/api/v1/crm/analytics/campaign-target-performance/portfolio?")) {
+    payload = targetPortfolio;
   } else if (path.startsWith("/api/v1/crm/budget-scenarios/compare/performance-context?")) {
     const query = new URLSearchParams(path.split("?")[1]);
     if (query.get("period_start") === "2026-09-17") {
@@ -180,6 +202,10 @@ async function main() {
   assert.equal(elements.get("organization-id").value, "root-1");
   assert.equal(elements.get("organization-id").children[1].textContent, "مرکز اصلی");
   assert.equal(elements.get("results").hidden, false, "a valid report link should reload its report");
+  assert.deepEqual(elements.get("target-outcomes").children.map((row) => row.children.map((cell) => cell.textContent)), [
+    ["Spring launch", "تبدیل", "۴", "ثبت نشده", "دادهٔ کافی ثبت نشده", "۰٪"],
+    ["Spring launch", "سرنخ", "۱۰", "۱۲", "هدف محقق‌شده", "۷٫۱۴٪"],
+  ]);
   assert.match(elements.get("period-comparison-period").textContent, /2026-09-17 تا 2026-09-30/);
   const periodRows = elements.get("period-comparison").children;
   assert.deepEqual(periodRows.map((row) => row.children.map((cell) => cell.textContent)), [
@@ -266,6 +292,8 @@ async function main() {
   assert.ok(csv.includes('"مقایسه کانال"'));
   assert.ok(csv.includes('"هزینهٔ واحد ثبت‌شده"'));
   assert.ok(csv.includes('"هزینه به‌ازای هر سرنخ"'));
+  assert.ok(csv.includes('"وضعیت هدف کمپین"'));
+  assert.ok(csv.includes('"هدف محقق‌شده"'));
   assert.ok(csv.includes('"شکاف شواهد"'));
   assert.ok(csv.includes('"دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
@@ -288,6 +316,14 @@ async function main() {
   const listQuery = new URLSearchParams(listCall.path.split("?")[1]);
   assert.equal(listQuery.get("organization_unit_id"), "root-1");
   assert.equal(listQuery.get("status"), "draft");
+
+  const targetCall = calls.find((call) => call.path.startsWith("/api/v1/crm/analytics/campaign-target-performance/portfolio?"));
+  assert.ok(targetCall);
+  assert.equal(targetCall.options.headers["X-Workspace-ID"], workspace.id);
+  const targetQuery = new URLSearchParams(targetCall.path.split("?")[1]);
+  assert.equal(targetQuery.get("period_start"), "2026-10-01");
+  assert.equal(targetQuery.get("period_end"), "2026-10-14");
+  assert.equal(targetQuery.get("organization_unit_id"), "root-1");
 
   const compareCall = calls.find((call) => call.path.startsWith("/api/v1/crm/budget-scenarios/compare/"));
   assert.ok(compareCall);
