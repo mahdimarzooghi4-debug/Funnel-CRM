@@ -378,9 +378,9 @@ async function main() {
   ]);
   assert.deepEqual(elements.get("objective-budget-reconciliation").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
+    ["acquisition", scenarios[0].name, "USD", "۱٬۰۰۰ USD", "۱٬۰۰۰ USD", "۶۵۰ USD", "۳۵۰ USD", "۱ / ۱", "۶۶٫۶۷٪"],
     ["awareness", scenarios[0].name, "USD", "۵۰۰ USD", "۰ USD", "نامشخص", "نامشخص", "۰ / ۱", "۳۳٫۳۳٪"],
     ["awareness", scenarios[1].name, "EUR", "۵۰۰ EUR", "۰ EUR", "نامشخص", "نامشخص", "۰ / ۱", "۱۰۰٪"],
-    ["acquisition", scenarios[0].name, "USD", "۱٬۰۰۰ USD", "۱٬۰۰۰ USD", "۶۵۰ USD", "۳۵۰ USD", "۱ / ۱", "۶۶٫۶۷٪"],
   ]);
   assert.deepEqual(elements.get("lead-conversion-ratio").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
