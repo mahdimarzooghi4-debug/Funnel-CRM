@@ -6,4 +6,4 @@ Keep the budget report available if the target portfolio cannot be loaded. The C
 
 ## Validation
 
-Pending exact-head CI.
+Initial implementation commit `e56a4dcd0f35eace554b799bcc4aff9adcf4545f` exposed a CSV assertion mismatch. After correcting the assertion, commit `9fedafc178b6c8c3c5f14f2e61cf13cff9b30eeb` passed GitHub Actions run `39960521653`: 94 Python tests passed (3 existing warnings), and the budget comparison browser behavior test passed.
