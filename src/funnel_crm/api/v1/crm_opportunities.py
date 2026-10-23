@@ -1,13 +1,13 @@
 """Sales pipeline and opportunity operations for scoped CRM teams."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
@@ -145,6 +145,21 @@ class OpportunityPage(BaseModel):
     offset: int
 
 
+class OpportunityWorklistItem(OpportunityRead):
+    date_state: Literal["overdue", "due_soon", "later", "unscheduled"]
+    days_until_expected_close: int | None
+
+
+class OpportunityWorklistRead(BaseModel):
+    as_of: date
+    through_date: date
+    counts_by_state: dict[str, int]
+    items: list[OpportunityWorklistItem]
+    total: int
+    limit: int
+    offset: int
+
+
 async def _require(context: TenantSessionContext, permission_key: str, unit_id: UUID) -> None:
     if not await has_crm_permission(
         context, permission_key=permission_key, organization_unit_id=unit_id
@@ -274,6 +289,129 @@ async def create_opportunity_pipeline(
     ))
     await context.session.flush()
     return OpportunityPipelineRead.model_validate(pipeline)
+
+
+@router.get(
+    "/worklist",
+    response_model=OpportunityWorklistRead,
+    operation_id="listCRMOpportunityCloseDateWorklist",
+)
+async def list_opportunity_close_date_worklist(
+    context: TenantSessionContext = Depends(require_tenant_session),
+    as_of: date = Query(default_factory=lambda: datetime.now(timezone.utc).date()),
+    days_ahead: int = Query(default=7, ge=0, le=90),
+    organization_unit_id: UUID | None = None,
+    pipeline_id: UUID | None = None,
+    stage_key: str | None = Query(default=None, min_length=1, max_length=80),
+    date_state: Literal["overdue", "due_soon", "later", "unscheduled", "all"] = "all",
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> OpportunityWorklistRead:
+    scopes = crm_scope_ids(context, permission_key="crm.opportunity:view")
+    filters = [
+        CRMOpportunity.tenant_id == context.access.tenant_id,
+        CRMOpportunity.organization_unit_id.in_(scopes),
+    ]
+    if organization_unit_id is not None:
+        if not await has_crm_permission(
+            context, permission_key="crm.opportunity:view",
+            organization_unit_id=organization_unit_id,
+        ):
+            raise HTTPException(status_code=404, detail="CRM opportunity scope not found")
+        filters.append(CRMOpportunity.organization_unit_id == organization_unit_id)
+    if pipeline_id is not None:
+        filters.append(CRMOpportunity.pipeline_id == pipeline_id)
+    if stage_key is not None:
+        filters.append(CRMOpportunity.stage_key == stage_key)
+
+    through_date = as_of + timedelta(days=days_ahead)
+    state_expression = case(
+        (CRMOpportunity.expected_close_date.is_(None), "unscheduled"),
+        (CRMOpportunity.expected_close_date < as_of, "overdue"),
+        (CRMOpportunity.expected_close_date <= through_date, "due_soon"),
+        else_="later",
+    )
+    if date_state != "all":
+        filters.append(state_expression == date_state)
+
+    total = int(await context.session.scalar(
+        select(func.count()).select_from(CRMOpportunity).where(*filters)
+    ) or 0)
+    counts_rows = (await context.session.execute(
+        select(state_expression, func.count())
+        .select_from(CRMOpportunity)
+        .where(
+            CRMOpportunity.tenant_id == context.access.tenant_id,
+            CRMOpportunity.organization_unit_id.in_(scopes),
+            *([
+                CRMOpportunity.organization_unit_id == organization_unit_id
+            ] if organization_unit_id is not None else []),
+            *([CRMOpportunity.pipeline_id == pipeline_id] if pipeline_id is not None else []),
+            *([CRMOpportunity.stage_key == stage_key] if stage_key is not None else []),
+        )
+        .group_by(state_expression)
+    )).all()
+    counts = {key: 0 for key in ("overdue", "due_soon", "later", "unscheduled")}
+    counts.update({state: int(count) for state, count in counts_rows})
+
+    priority = case(
+        (state_expression == "overdue", 0),
+        (state_expression == "due_soon", 1),
+        (state_expression == "later", 2),
+        else_=3,
+    )
+    rows = (await context.session.scalars(
+        select(CRMOpportunity)
+        .where(*filters)
+        .order_by(priority, CRMOpportunity.expected_close_date.asc().nullslast(),
+                  CRMOpportunity.updated_at.asc(), CRMOpportunity.id)
+        .limit(limit).offset(offset)
+    )).all()
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_opportunity.close_date_worklist_viewed",
+        target_type="crm_opportunity_worklist",
+        target_key=str(organization_unit_id or "authorized-scope"),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "as_of": as_of.isoformat(),
+            "through_date": through_date.isoformat(),
+            "date_state": date_state,
+            "total": total,
+            "returned": len(rows),
+            "limit": limit,
+            "offset": offset,
+            "counts_by_state": counts,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    items = []
+    for row in rows:
+        payload = OpportunityRead.model_validate(row).model_dump()
+        payload["date_state"] = (
+            "unscheduled" if row.expected_close_date is None
+            else "overdue" if row.expected_close_date < as_of
+            else "due_soon" if row.expected_close_date <= through_date
+            else "later"
+        )
+        payload["days_until_expected_close"] = (
+            (row.expected_close_date - as_of).days if row.expected_close_date else None
+        )
+        items.append(OpportunityWorklistItem.model_validate(payload))
+    return OpportunityWorklistRead(
+        as_of=as_of,
+        through_date=through_date,
+        counts_by_state=counts,
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("", response_model=OpportunityPage, operation_id="listCRMOpportunities")
