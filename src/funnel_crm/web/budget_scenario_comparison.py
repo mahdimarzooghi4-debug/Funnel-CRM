@@ -152,6 +152,14 @@ _PAGE = """<!doctype html>
           <tbody id="unit-cost-comparison"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">مقایسهٔ عملکرد بر اساس هدف بازاریابی</h3>
+      <p class="muted">جمع سرنخ و تبدیل ثبت‌شده برای هر هدف و کانال را در دو بازه ببینید. پوشش کنار هر مقدار تعداد کمپین‌های دارای مشاهده را از کل کمپین‌های همان گروه جدا می‌کند؛ این تغییرها توصیفی‌اند.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">هدف بازاریابی</th><th scope="col">کانال</th><th scope="col">شاخص</th><th scope="col">جمع بازهٔ قبلی</th><th scope="col">جمع بازهٔ جاری</th><th scope="col">تغییر</th><th scope="col">پوشش قبلی</th><th scope="col">پوشش جاری</th></tr></thead>
+          <tbody id="objective-performance"></tbody>
+        </table>
+      </div>
       <h3 style="margin-top:22px">هزینهٔ واحد به تفکیک کمپین</h3>
       <p class="muted">برای هر کمپین، هزینهٔ ثبت‌شده بر سرنخ یا تبدیل ثبت‌شده محاسبه می‌شود. مقایسهٔ دو بازه فقط با دادهٔ کافی و ارز یکسان انجام می‌شود؛ این شاخص ROI نیست.</p>
       <div class="table-wrap">
@@ -243,6 +251,7 @@ _CLIENT_SCRIPT = r"""(() => {
     byId("target-period-comparison").replaceChildren();
     byId("lead-conversion-ratio").replaceChildren();
     byId("campaign-unit-cost").replaceChildren();
+    byId("objective-performance").replaceChildren();
     byId("target-outcomes-note").textContent = "";
     byId("target-outcomes").replaceChildren();
     byId("channel-target-summary-note").textContent = "";
@@ -680,6 +689,80 @@ _CLIENT_SCRIPT = r"""(() => {
         element("td", "", describe(item.previous)),
         element("td", "", describe(item.current)),
         element("td", "", item.delta === null ? "نامشخص" : formatNumber.format(item.delta) + " واحد درصد"));
+      body.appendChild(row);
+    });
+  }
+  function objectiveMetricGroups(report) {
+    const groups = new Map();
+    (report?.campaigns || []).forEach((campaign) => {
+      const objective = campaign.objective_key || "بدون هدف ثبت‌شده";
+      const channel = campaign.channel || "نامشخص";
+      const id = JSON.stringify([objective, channel]);
+      const group = groups.get(id) || {
+        objective, channel, campaigns: 0,
+        metrics: { leads: { total: 0, observed: 0 }, conversions: { total: 0, observed: 0 } },
+      };
+      group.campaigns += 1;
+      ["leads", "conversions"].forEach((key) => {
+        const actual = campaign.metrics?.[key]?.actual;
+        if (actual === null || actual === undefined || !Number.isFinite(Number(actual))) return;
+        group.metrics[key].total += Number(actual);
+        group.metrics[key].observed += 1;
+      });
+      groups.set(id, group);
+    });
+    return groups;
+  }
+  function compareObjectivePerformance(currentReport, previousReport) {
+    const current = objectiveMetricGroups(currentReport);
+    const previous = objectiveMetricGroups(previousReport);
+    const groups = new Map();
+    Array.from(new Set([...current.keys(), ...previous.keys()])).forEach((id) => {
+      const now = current.get(id) || null;
+      const before = previous.get(id) || null;
+      const group = now || before;
+      ["leads", "conversions"].forEach((key) => {
+        const currentMetric = now?.metrics[key] || null;
+        const previousMetric = before?.metrics[key] || null;
+        const currentObserved = currentMetric?.observed || 0;
+        const previousObserved = previousMetric?.observed || 0;
+        groups.set(JSON.stringify([id, key]), {
+          objective: group.objective, channel: group.channel, key,
+          previous: previousObserved ? previousMetric.total : null,
+          current: currentObserved ? currentMetric.total : null,
+          delta: previousObserved && currentObserved ? currentMetric.total - previousMetric.total : null,
+          previousCoverage: { observed: previousObserved, campaigns: before?.campaigns || 0 },
+          currentCoverage: { observed: currentObserved, campaigns: now?.campaigns || 0 },
+        });
+      });
+    });
+    return Array.from(groups.values()).sort((a, b) =>
+      a.objective.localeCompare(b.objective, "fa") || a.channel.localeCompare(b.channel, "fa")
+        || ["leads", "conversions"].indexOf(a.key) - ["leads", "conversions"].indexOf(b.key));
+  }
+  function renderObjectivePerformance(currentReport, previousReport) {
+    const body = byId("objective-performance");
+    body.replaceChildren();
+    const rows = compareObjectivePerformance(currentReport, previousReport);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای این گزارش دادهٔ کمپینی وجود ندارد.");
+      cell.colSpan = 8;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    const coverage = (item) => formatNumber.format(item.observed) + " / " + formatNumber.format(item.campaigns);
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.objective),
+        element("td", "", item.channel),
+        element("td", "", item.key === "leads" ? "سرنخ ثبت‌شده" : "تبدیل ثبت‌شده"),
+        element("td", "", item.previous === null ? "ثبت نشده" : formatNumber.format(item.previous)),
+        element("td", "", item.current === null ? "ثبت نشده" : formatNumber.format(item.current)),
+        element("td", "", item.delta === null ? "نامشخص" : formatNumber.format(item.delta)),
+        element("td", "", coverage(item.previousCoverage)),
+        element("td", "", coverage(item.currentCoverage)));
       body.appendChild(row);
     });
   }
@@ -1248,6 +1331,15 @@ _CLIENT_SCRIPT = r"""(() => {
           campaign.channel, currency, "واریانس", allocation.variance_amount, ""]);
       });
     });
+    compareObjectivePerformance(result, latestPreviousComparison).forEach((item) => rows.push([
+      "عملکرد هدف بازاریابی", fields.start, fields.end, "", "", item.channel, "",
+      item.objective + " · " + (item.key === "leads" ? "سرنخ ثبت‌شده" : "تبدیل ثبت‌شده"),
+      item.current ?? "",
+      "جمع بازهٔ قبلی: " + (item.previous ?? "ثبت نشده")
+        + "؛ تغییر: " + (item.delta === null ? "نامشخص" : item.delta)
+        + "؛ پوشش قبلی: " + item.previousCoverage.observed + " از " + item.previousCoverage.campaigns
+        + "؛ پوشش جاری: " + item.currentCoverage.observed + " از " + item.currentCoverage.campaigns,
+    ]));
     campaignUnitCostRows(result, latestPreviousComparison).forEach((item) => rows.push([
       "هزینهٔ واحد کمپین", fields.start, fields.end, "", item.campaign, item.channel, item.currency,
       item.key === "leads" ? "هزینه به‌ازای سرنخ" : "هزینه به‌ازای تبدیل",
@@ -1333,6 +1425,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderUnitCostComparison(result, previousResult);
       renderLeadConversionRatio(result, previousResult);
       renderCampaignUnitCosts(result, previousResult);
+      renderObjectivePerformance(result, previousResult);
       const targetQuery = new URLSearchParams({
         period_start: fields.start,
         period_end: fields.end,
