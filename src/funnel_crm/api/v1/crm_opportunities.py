@@ -30,6 +30,7 @@ class OpportunityStageInput(BaseModel):
     key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
     name: str = Field(min_length=1, max_length=120)
     position: int = Field(ge=1, le=100)
+    outcome_key: Literal["open", "won", "lost"] = "open"
 
     @field_validator("name")
     @classmethod
