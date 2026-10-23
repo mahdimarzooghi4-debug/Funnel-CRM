@@ -67,7 +67,7 @@ const ids = [
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
   "target-period-comparison-note", "target-period-comparison",
-  "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost",
+  "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -338,6 +338,7 @@ async function main() {
   assert.ok(csv.includes('"عملکرد هدف بازاریابی"'));
   assert.ok(csv.includes('"تطبیق بودجه بر اساس هدف"'));
   assert.ok(csv.includes('"هزینهٔ واحد هدف بازاریابی"'));
+  assert.ok(csv.includes('"سناریو و شواهد هدف"'));
   assert.ok(csv.includes("سهم از بودجه سناریو"));
   assert.ok(csv.includes('"وضعیت هدف کمپین"'));
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
@@ -387,6 +388,12 @@ async function main() {
     ["acquisition", scenarios[0].name, "USD", "۱٬۰۰۰ USD", "۱٬۰۰۰ USD", "۶۵۰ USD", "۳۵۰ USD", "۱ / ۱", "۶۶٫۶۷٪"],
     ["awareness", scenarios[0].name, "USD", "۵۰۰ USD", "۰ USD", "نامشخص", "نامشخص", "۰ / ۱", "۳۳٫۳۳٪"],
     ["awareness", scenarios[1].name, "EUR", "۵۰۰ EUR", "۰ EUR", "نامشخص", "نامشخص", "۰ / ۱", "۱۰۰٪"],
+  ]);
+  assert.deepEqual(elements.get("scenario-objective-evidence").children.map((row) =>
+    row.children.map((cell) => cell.textContent)), [
+    ["acquisition", scenarios[0].name, "USD", "۱٬۰۰۰ USD", "۶۶٫۶۷٪", "۷۵ USD", "۱ / ۱", "۳۰۰ USD", "۱ / ۱"],
+    ["awareness", scenarios[0].name, "USD", "۵۰۰ USD", "۳۳٫۳۳٪", "نامشخص", "بدون سابقهٔ قابل‌مقایسه", "نامشخص", "بدون سابقهٔ قابل‌مقایسه"],
+    ["awareness", scenarios[1].name, "EUR", "۵۰۰ EUR", "۱۰۰٪", "نامشخص", "بدون سابقهٔ قابل‌مقایسه", "نامشخص", "بدون سابقهٔ قابل‌مقایسه"],
   ]);
   assert.deepEqual(elements.get("lead-conversion-ratio").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
