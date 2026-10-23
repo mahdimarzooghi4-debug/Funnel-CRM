@@ -6,4 +6,4 @@ The comparison is descriptive only. It does not attribute observed changes to a 
 
 ## Validation
 
-Pending exact-head CI.
+Exact head `163dc76b79efa376dbfe1bd4c10d98a01758b1f2`: GitHub Actions run `39958120209` succeeded; Alembic passed, pytest reported 94 passed with 3 warnings, and the Node client behavior test passed.
