@@ -172,7 +172,9 @@ async function main() {
   assert.equal(anchor.download, "budget-comparison-2026-10-01-2026-10-14.csv");
   const blob = downloads.find((item) => item instanceof Blob);
   assert.ok(blob);
-  const csv = await blob.text();
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  assert.deepEqual(Array.from(bytes.slice(0, 3)), [0xef, 0xbb, 0xbf]);
+  const csv = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
   assert.ok(csv.startsWith("\uFEFF"));
   assert.ok(csv.includes('"هزینه ثبت‌شده"'));
   assert.ok(csv.includes('"Spring launch"'));
