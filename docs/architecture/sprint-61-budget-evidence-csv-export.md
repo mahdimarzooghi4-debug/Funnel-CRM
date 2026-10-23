@@ -6,4 +6,4 @@ CSV cells are quoted with RFC-style quote escaping. String values beginning with
 
 ## Validation
 
-Pending exact-head CI.
+Exact head `1c5173a642e572ec2f97daf4643e59932fb7edf0`: GitHub Actions run `39953525079` succeeded; Alembic passed, pytest reported 94 passed with 3 warnings, and the Node client behavior test passed.

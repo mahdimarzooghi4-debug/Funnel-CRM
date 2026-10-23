@@ -60,7 +60,7 @@ Object.defineProperty(Element.prototype, "innerHTML", {
 
 const ids = [
   "workspace-id", "organization-id", "status", "scenario-list",
-  "scenario-panel", "results", "scenario-results", "campaign-results",
+  "scenario-panel", "results", "scenario-results", "campaign-results", "evidence-coverage",
   "selection-count", "compare", "load-scenarios", "period-start", "period-end", "export-csv",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
@@ -163,6 +163,14 @@ async function main() {
   await elements.get("compare").dispatch("click");
   assert.equal(elements.get("results").hidden, false);
   assert.equal(elements.get("status").textContent, "گزارش برای 14 روز تقویمی آماده شد.");
+  const coverage = elements.get("evidence-coverage").children;
+  assert.equal(coverage.length, 5);
+  assert.equal(coverage[0].children[0].textContent, "۲");
+  assert.equal(coverage[1].children[0].textContent, "۱");
+  assert.equal(coverage[2].children[0].textContent, "۱");
+  assert.equal(coverage[3].children[0].textContent, "۱");
+  assert.equal(coverage[4].children[0].textContent, "۰");
+  assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · از 1 کمپین");
   assert.equal(elements.get("scenario-results").children[0].children[0].textContent,
     "<img src=x onerror=alert(1)>");
   await elements.get("export-csv").dispatch("click");
@@ -177,6 +185,7 @@ async function main() {
   const csv = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
   assert.ok(csv.startsWith("\uFEFF"));
   assert.ok(csv.includes('"هزینه ثبت‌شده"'));
+  assert.ok(csv.includes('"کمپین دارای دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
     "formula-like labels must be neutralized and CSV-escaped");

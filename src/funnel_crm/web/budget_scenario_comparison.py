@@ -109,6 +109,9 @@ _PAGE = """<!doctype html>
       <h2 id="results-title">خلاصهٔ بودجه و شواهد واقعی</h2>
       <div class="actions"><button id="export-csv" type="button">دریافت فایل CSV</button><span class="hint">فایل شامل خلاصهٔ سناریوها و شواهد کمپین همین بازه است.</span></div>
       <p class="notice">نتایج ثبت‌شده برای کمپین‌های مشترک نمایش داده می‌شوند و به یک سناریوی بودجه نسبت داده نمی‌شوند. جمع واریانس فقط شامل هزینه‌های ثبت‌شده با ارز همسان است؛ ارزها تبدیل نمی‌شوند و نبود رکورد به معنی عملکرد صفر نیست.</p>
+      <h2>پوشش شواهد این گزارش</h2>
+      <p class="muted">این شمارنده‌ها میزان ثبت داده را نشان می‌دهند، نه عملکرد بهتر یا بدتر را.</p>
+      <div id="evidence-coverage" class="cards" aria-live="polite"></div>
       <div id="scenario-results" class="cards"></div>
       <h2 style="margin-top:28px">عملکرد کمپین‌ها در همین بازه</h2>
       <div class="table-wrap">
@@ -150,6 +153,7 @@ _CLIENT_SCRIPT = r"""(() => {
     latestComparison = null;
     latestFields = null;
     resultsPanel.hidden = true;
+    byId("evidence-coverage").replaceChildren();
     byId("scenario-results").replaceChildren();
     byId("campaign-results").replaceChildren();
   }
@@ -284,6 +288,30 @@ _CLIENT_SCRIPT = r"""(() => {
   function addFact(list, label, value) {
     list.append(element("dt", "", label), element("dd", "", value));
   }
+  function renderEvidenceCoverage(result) {
+    const campaigns = result.campaigns || [];
+    const scenarios = result.scenarios || [];
+    const hasSpend = (campaign) => Object.keys(campaign.recorded_spend_by_currency || {}).length > 0;
+    const hasMetric = (campaign, key) => {
+      const metric = (campaign.metrics || {})[key] || {};
+      return metric.actual !== null && metric.actual !== undefined;
+    };
+    const values = [
+      ["سناریوی مقایسه‌شده", scenarios.length, ""],
+      ["کمپین هم‌پوشان", campaigns.length, ""],
+      ["کمپین دارای هزینهٔ ثبت‌شده", campaigns.filter(hasSpend).length, "از " + campaigns.length + " کمپین"],
+      ["کمپین دارای دادهٔ سرنخ", campaigns.filter((campaign) => hasMetric(campaign, "leads")).length, "از " + campaigns.length + " کمپین"],
+      ["کمپین دارای دادهٔ تبدیل", campaigns.filter((campaign) => hasMetric(campaign, "conversions")).length, "از " + campaigns.length + " کمپین"],
+    ];
+    const container = byId("evidence-coverage");
+    container.replaceChildren();
+    values.forEach(([label, count, denominator]) => {
+      const card = element("article", "scenario-card");
+      card.appendChild(element("strong", "", formatNumber.format(count)));
+      card.appendChild(element("p", "muted", label + (denominator ? " · " + denominator : "")));
+      container.appendChild(card);
+    });
+  }
   function renderScenarioSummaries(scenarios) {
     const container = byId("scenario-results");
     container.replaceChildren();
@@ -349,9 +377,21 @@ _CLIENT_SCRIPT = r"""(() => {
     return '"' + text.replace(/"/g, '""') + '"';
   }
   function exportComparisonCsv(result, fields) {
+    const campaigns = result.campaigns || [];
+    const scenarios = result.scenarios || [];
+    const hasSpend = (campaign) => Object.keys(campaign.recorded_spend_by_currency || {}).length > 0;
+    const hasMetric = (campaign, key) => {
+      const metric = (campaign.metrics || {})[key] || {};
+      return metric.actual !== null && metric.actual !== undefined;
+    };
     const rows = [
       ["نوع رکورد", "از تاریخ", "تا تاریخ", "سناریو", "کمپین", "کانال", "ارز", "شاخص", "مقدار", "یادداشت"],
       ["بازه گزارش", fields.start, fields.end, "", "", "", "", "روز تقویمی", result.period_calendar_days, ""],
+      ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "سناریوی مقایسه‌شده", scenarios.length, ""],
+      ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "کمپین هم‌پوشان", campaigns.length, ""],
+      ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "کمپین دارای هزینهٔ ثبت‌شده", campaigns.filter(hasSpend).length, "از " + campaigns.length + " کمپین"],
+      ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "کمپین دارای دادهٔ سرنخ", campaigns.filter((campaign) => hasMetric(campaign, "leads")).length, "از " + campaigns.length + " کمپین"],
+      ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "کمپین دارای دادهٔ تبدیل", campaigns.filter((campaign) => hasMetric(campaign, "conversions")).length, "از " + campaigns.length + " کمپین"],
     ];
     (result.scenarios || []).forEach((scenario) => {
       Object.keys(scenario.reconciliation_by_currency || {}).sort().forEach((currency) => {
@@ -438,6 +478,7 @@ _CLIENT_SCRIPT = r"""(() => {
       setStatus("در حال محاسبهٔ مقایسه…", false);
       byId("compare").disabled = true;
       const result = await getJson("/api/v1/crm/budget-scenarios/compare/performance-context?" + query.toString(), fields.workspace);
+      renderEvidenceCoverage(result);
       renderScenarioSummaries(result.scenarios || []);
       renderCampaignRows(result.campaigns || []);
       latestComparison = result;
