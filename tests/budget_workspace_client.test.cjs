@@ -349,13 +349,19 @@ async function main() {
       campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email", objective_key: "acquisition",
       recorded_spend_by_currency: { USD: 900 },
       metrics: { leads: { actual: 12 }, conversions: { actual: 3 } },
-      scenario_allocations: [],
+      scenario_allocations: [{
+        scenario_name: scenarios[0].name, planned_budget_currency: "USD", planned_budget_amount: 1000,
+        actual_spend_in_allocation_currency: 650, variance_amount: 350,
+      }],
     },
     {
       campaign_id: "campaign-2", campaign_name: "Brand awareness", channel: "email", objective_key: "awareness",
       recorded_spend_by_currency: {},
       metrics: { leads: { actual: 5 }, conversions: { actual: 3 } },
-      scenario_allocations: [],
+      scenario_allocations: [{
+        scenario_name: scenarios[1].name, planned_budget_currency: "EUR", planned_budget_amount: 500,
+        actual_spend_in_allocation_currency: null, variance_amount: null,
+      }],
     },
   ];
   await elements.get("compare").dispatch("click");
