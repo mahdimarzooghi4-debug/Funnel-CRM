@@ -6,4 +6,4 @@ Campaigns without a usable channel value appear under an explicit unassigned lab
 
 ## Validation
 
-Pending exact-head CI.
+Exact head `4e9f229613096aefabc9b63852cacad0297e8c6c`: GitHub Actions run `39955154443` succeeded; Alembic passed, pytest reported 94 passed with 3 warnings, and the Node client behavior test passed.

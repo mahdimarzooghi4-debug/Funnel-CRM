@@ -60,7 +60,7 @@ Object.defineProperty(Element.prototype, "innerHTML", {
 
 const ids = [
   "workspace-id", "organization-id", "status", "scenario-list",
-  "scenario-panel", "results", "scenario-results", "campaign-results", "evidence-coverage", "channel-coverage",
+  "scenario-panel", "results", "scenario-results", "campaign-results", "evidence-coverage", "channel-coverage", "evidence-gaps",
   "selection-count", "compare", "load-scenarios", "period-start", "period-end", "export-csv",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
@@ -180,7 +180,12 @@ async function main() {
   assert.equal(channelRows.length, 2);
   assert.deepEqual(channelRows[0].children.map((cell) => cell.textContent), ["email", "۱", "۱", "۱", "۰"]);
   assert.deepEqual(channelRows[1].children.map((cell) => cell.textContent), ["social", "۱", "۰", "۰", "۱"]);
-  assert.equal(elements.get("scenario-results").children[0].children[0].textContent,
+  const gaps = elements.get("evidence-gaps").children;
+  assert.equal(gaps.length, 2);
+  assert.deepEqual(gaps[0].children.map((cell) => cell.textContent),
+    ["Spring launch", "email", "دادهٔ تبدیل"]);
+  assert.deepEqual(gaps[1].children.map((cell) => cell.textContent),
+    ["Brand awareness", "social", "هزینهٔ ثبت‌شده، دادهٔ سرنخ"]);  assert.equal(elements.get("scenario-results").children[0].children[0].textContent,
     "<img src=x onerror=alert(1)>");
   await elements.get("export-csv").dispatch("click");
   assert.equal(elements.get("status").textContent, "فایل CSV گزارش آماده شد.");
@@ -197,6 +202,8 @@ async function main() {
   assert.ok(csv.includes('"کمپین دارای دادهٔ تبدیل"'));
   assert.ok(csv.includes('"پوشش کانال"'));
   assert.ok(csv.includes('"social"'));
+  assert.ok(csv.includes('"شکاف شواهد"'));
+  assert.ok(csv.includes('"دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
     "formula-like labels must be neutralized and CSV-escaped");

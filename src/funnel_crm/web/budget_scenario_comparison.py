@@ -119,6 +119,14 @@ _PAGE = """<!doctype html>
           <tbody id="channel-coverage"></tbody>
         </table>
       </div>
+      <h2 style="margin-top:24px">فهرست کمپین‌های نیازمند تکمیل داده</h2>
+      <p class="muted">این فهرست فقط مواردی را نشان می‌دهد که دادهٔ هزینه، سرنخ یا تبدیل در گزارش موجود نیست.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کمپین</th><th scope="col">کانال</th><th scope="col">دادهٔ ثبت‌نشده</th></tr></thead>
+          <tbody id="evidence-gaps"></tbody>
+        </table>
+      </div>
       <div id="scenario-results" class="cards"></div>
       <h2 style="margin-top:28px">عملکرد کمپین‌ها در همین بازه</h2>
       <div class="table-wrap">
@@ -162,6 +170,7 @@ _CLIENT_SCRIPT = r"""(() => {
     resultsPanel.hidden = true;
     byId("evidence-coverage").replaceChildren();
     byId("channel-coverage").replaceChildren();
+    byId("evidence-gaps").replaceChildren();
     byId("scenario-results").replaceChildren();
     byId("campaign-results").replaceChildren();
   }
@@ -320,13 +329,16 @@ _CLIENT_SCRIPT = r"""(() => {
       container.appendChild(card);
     });
   }
+  function campaignChannel(campaign) {
+    const rawChannel = campaign.channel;
+    return rawChannel === null || rawChannel === undefined || String(rawChannel).trim() === ""
+      ? "بدون کانال ثبت‌شده"
+      : String(rawChannel);
+  }
   function channelCoverage(campaigns) {
     const groups = new Map();
     campaigns.forEach((campaign) => {
-      const rawChannel = campaign.channel;
-      const channel = rawChannel === null || rawChannel === undefined || String(rawChannel).trim() === ""
-        ? "بدون کانال ثبت‌شده"
-        : String(rawChannel);
+      const channel = campaignChannel(campaign);
       const group = groups.get(channel) || { channel, campaigns: 0, spend: 0, leads: 0, conversions: 0 };
       group.campaigns += 1;
       if (Object.keys(campaign.recorded_spend_by_currency || {}).length > 0) group.spend += 1;
@@ -349,6 +361,36 @@ _CLIENT_SCRIPT = r"""(() => {
         element("td", "", formatNumber.format(group.spend)),
         element("td", "", formatNumber.format(group.leads)),
         element("td", "", formatNumber.format(group.conversions)),
+      );
+      body.appendChild(row);
+    });
+  }
+  function missingEvidence(campaign) {
+    const missing = [];
+    if (!Object.keys(campaign.recorded_spend_by_currency || {}).length) missing.push("هزینهٔ ثبت‌شده");
+    const metrics = campaign.metrics || {};
+    if (metrics.leads?.actual === null || metrics.leads?.actual === undefined) missing.push("دادهٔ سرنخ");
+    if (metrics.conversions?.actual === null || metrics.conversions?.actual === undefined) missing.push("دادهٔ تبدیل");
+    return missing;
+  }
+  function renderEvidenceGaps(campaigns) {
+    const body = byId("evidence-gaps");
+    body.replaceChildren();
+    const gaps = campaigns.filter((campaign) => missingEvidence(campaign).length > 0);
+    if (!gaps.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای کمپین‌های این گزارش شکاف شواهدی پیدا نشد.");
+      cell.colSpan = 3;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    gaps.forEach((campaign) => {
+      const row = document.createElement("tr");
+      row.append(
+        element("td", "", campaign.campaign_name),
+        element("td", "", campaignChannel(campaign)),
+        element("td", "", missingEvidence(campaign).join("، ")),
       );
       body.appendChild(row);
     });
@@ -434,6 +476,12 @@ _CLIENT_SCRIPT = r"""(() => {
       ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "کمپین دارای دادهٔ سرنخ", campaigns.filter((campaign) => hasMetric(campaign, "leads")).length, "از " + campaigns.length + " کمپین"],
       ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "کمپین دارای دادهٔ تبدیل", campaigns.filter((campaign) => hasMetric(campaign, "conversions")).length, "از " + campaigns.length + " کمپین"],
     ];
+    campaigns.forEach((campaign) => {
+      missingEvidence(campaign).forEach((missing) => rows.push([
+        "شکاف شواهد", fields.start, fields.end, "", campaign.campaign_name,
+        campaignChannel(campaign), "", missing, "", "",
+      ]));
+    });
     channelCoverage(campaigns).forEach((group) => {
       [
         ["کمپین", group.campaigns],
@@ -531,6 +579,7 @@ _CLIENT_SCRIPT = r"""(() => {
       const result = await getJson("/api/v1/crm/budget-scenarios/compare/performance-context?" + query.toString(), fields.workspace);
       renderEvidenceCoverage(result);
       renderChannelCoverage(result.campaigns || []);
+      renderEvidenceGaps(result.campaigns || []);
       renderScenarioSummaries(result.scenarios || []);
       renderCampaignRows(result.campaigns || []);
       latestComparison = result;
