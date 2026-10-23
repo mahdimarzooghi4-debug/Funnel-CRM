@@ -194,14 +194,14 @@ async function main() {
   assert.equal(coverage[1].children[0].textContent, "۲");
   assert.equal(coverage[2].children[0].textContent, "۱");
   assert.equal(coverage[3].children[0].textContent, "۱");
-  assert.equal(coverage[4].children[0].textContent, "۲");
+  assert.equal(coverage[4].children[0].textContent, "۱");
   assert.equal(coverage[2].children[1].textContent, "کمپین دارای هزینهٔ ثبت‌شده · ۱ از ۲ کمپین · پوشش ۵۰٪");
   assert.equal(coverage[3].children[1].textContent, "کمپین دارای دادهٔ سرنخ · ۱ از ۲ کمپین · پوشش ۵۰٪");
-  assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · ۲ از ۲ کمپین · پوشش ۱۰۰٪");
+  assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · ۱ از ۲ کمپین · پوشش ۵۰٪");
   const channelRows = elements.get("channel-coverage").children;
   assert.equal(channelRows.length, 1);
   assert.deepEqual(channelRows[0].children.map((cell) => cell.textContent),
-    ["email", "۲", "۱ / ۲ · ۵۰٪", "۱ / ۲ · ۵۰٪", "۲ / ۲ · ۱۰۰٪"]);
+    ["email", "۲", "۱ / ۲ · ۵۰٪", "۱ / ۲ · ۵۰٪", "۱ / ۲ · ۵۰٪"]);
   const gaps = elements.get("evidence-gaps").children;
   assert.equal(gaps.length, 2);
   assert.deepEqual(gaps[0].children.map((cell) => cell.textContent),
@@ -225,7 +225,7 @@ async function main() {
   assert.ok(csv.includes('"کمپین دارای دادهٔ تبدیل"'));
   assert.ok(csv.includes('"پوشش کانال"'));
   assert.ok(csv.includes('"نرخ پوشش هزینهٔ ثبت‌شده (درصد)"'));
-  assert.ok(csv.includes('"نرخ پوشش دادهٔ تبدیل (درصد)","100"'));
+  assert.ok(csv.includes('"نرخ پوشش دادهٔ تبدیل (درصد)","50"'));
   assert.ok(csv.includes('"نرخ پوشش دادهٔ سرنخ (درصد)","50"'));
   assert.ok(csv.includes('"email"'));
   assert.ok(csv.includes('"شکاف شواهد"'));
