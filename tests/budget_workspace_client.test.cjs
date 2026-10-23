@@ -88,6 +88,7 @@ const scenarios = [
   { id: "scenario-1", name: "<img src=x onerror=alert(1)>", allocation_count: 2 },
   { id: "scenario-2", name: '=HYPERLINK("https://evil.example","open")', allocation_count: 2 },
 ];
+let reportCampaigns = null;
 const fetch = async (path, options = {}) => {
   calls.push({ path, options });
   let payload;
@@ -107,7 +108,7 @@ const fetch = async (path, options = {}) => {
         } } },
         { name: scenarios[1].name, reconciliation_by_currency: {} },
       ],
-      campaigns: [{
+      campaigns: reportCampaigns || [{
         campaign_name: "Spring launch", channel: "email",
         recorded_spend_by_currency: { USD: 900 },
         metrics: { leads: { actual: 12, recorded_day_coverage_percent: 80 }, conversions: { actual: null, recorded_day_coverage_percent: 60 } },
@@ -193,7 +194,7 @@ async function main() {
   assert.equal(coverage[1].children[0].textContent, "۲");
   assert.equal(coverage[2].children[0].textContent, "۱");
   assert.equal(coverage[3].children[0].textContent, "۱");
-  assert.equal(coverage[4].children[0].textContent, "۱");
+  assert.equal(coverage[4].children[0].textContent, "۲");
   assert.equal(coverage[2].children[1].textContent, "کمپین دارای هزینهٔ ثبت‌شده · ۱ از ۲ کمپین · پوشش ۵۰٪");
   assert.equal(coverage[3].children[1].textContent, "کمپین دارای دادهٔ سرنخ · ۱ از ۲ کمپین · پوشش ۵۰٪");
   assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · ۲ از ۲ کمپین · پوشش ۱۰۰٪");
@@ -206,7 +207,8 @@ async function main() {
   assert.deepEqual(gaps[0].children.map((cell) => cell.textContent),
     ["Spring launch", "email", "دادهٔ تبدیل"]);
   assert.deepEqual(gaps[1].children.map((cell) => cell.textContent),
-    ["Brand awareness", "email", "هزینهٔ ثبت‌شده، دادهٔ سرنخ"]);  assert.equal(elements.get("scenario-results").children[0].children[0].textContent,
+    ["Brand awareness", "email", "هزینهٔ ثبت‌شده، دادهٔ سرنخ"]);
+  assert.equal(elements.get("scenario-results").children[0].children[0].textContent,
     "<img src=x onerror=alert(1)>");
   await elements.get("export-csv").dispatch("click");
   assert.equal(elements.get("status").textContent, "فایل CSV گزارش آماده شد.");
@@ -231,6 +233,15 @@ async function main() {
   assert.ok(csv.includes('"Spring launch"'));
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
     "formula-like labels must be neutralized and CSV-escaped");
+
+  reportCampaigns = [];
+  await elements.get("compare").dispatch("click");
+  assert.equal(elements.get("evidence-coverage").children[2].children[1].textContent,
+    "کمپین دارای هزینهٔ ثبت‌شده · ۰ از ۰ کمپین · پوشش نامشخص");
+  await elements.get("export-csv").dispatch("click");
+  const exportedBlobs = downloads.filter((item) => item instanceof Blob);
+  const emptyReportCsv = new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(await exportedBlobs[1].arrayBuffer()));
+  assert.ok(emptyReportCsv.includes('"نرخ پوشش هزینهٔ ثبت‌شده (درصد)","","مخرج صفر؛ نامشخص"'));
 
   const listCall = calls.find((call) => call.path.startsWith("/api/v1/crm/budget-scenarios?"));
   assert.ok(listCall);
