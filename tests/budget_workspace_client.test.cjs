@@ -99,6 +99,19 @@ const fetch = async (path, options = {}) => {
   } else if (path.startsWith("/api/v1/crm/budget-scenarios?")) {
     payload = scenarios;
   } else if (path.startsWith("/api/v1/crm/budget-scenarios/compare/performance-context?")) {
+    const query = new URLSearchParams(path.split("?")[1]);
+    if (query.get("period_start") === "2026-09-17") {
+      payload = {
+        period_calendar_days: 14,
+        scenarios: [],
+        campaigns: [{
+          campaign_name: "Previous period", channel: "email",
+          recorded_spend_by_currency: { USD: 600 },
+          metrics: { leads: { actual: 10 }, conversions: { actual: 2 } },
+          scenario_allocations: [],
+        }],
+      };
+    } else {
     payload = {
       period_calendar_days: 14,
       scenarios: [
@@ -123,6 +136,7 @@ const fetch = async (path, options = {}) => {
         scenario_allocations: [],
       }],
     };
+    }
   } else {
     throw new Error("Unexpected request: " + path);
   }
@@ -165,6 +179,13 @@ async function main() {
   assert.equal(elements.get("organization-id").value, "root-1");
   assert.equal(elements.get("organization-id").children[1].textContent, "مرکز اصلی");
   assert.equal(elements.get("results").hidden, false, "a valid report link should reload its report");
+  assert.match(elements.get("period-comparison-period").textContent, /2026-09-17 تا 2026-09-30/);
+  const periodRows = elements.get("period-comparison").children;
+  assert.deepEqual(periodRows.map((row) => row.children.map((cell) => cell.textContent)), [
+    ["سرنخ", "۱۰", "۱۲", "۲", "۲۰٪"],
+    ["تبدیل", "۲", "۳", "۱", "۵۰٪"],
+    ["هزینهٔ ثبت‌شده · USD", "۶۰۰ USD", "۹۰۰ USD", "۳۰۰ USD", "۵۰٪"],
+  ]);
   assert.equal(elements.get("scenario-list").children[0].children[0].checked, true);
   assert.equal(elements.get("scenario-list").children[1].children[0].checked, true);
   assert.ok(reportUrls[0].includes("workspace_id=workspace-1"));
@@ -228,6 +249,8 @@ async function main() {
   assert.ok(csv.includes('"نرخ پوشش دادهٔ تبدیل (درصد)","50"'));
   assert.ok(csv.includes('"نرخ پوشش دادهٔ سرنخ (درصد)","50"'));
   assert.ok(csv.includes('"email"'));
+  assert.ok(csv.includes('"مقایسه با بازه قبلی"'));
+  assert.ok(csv.includes('"سرنخ · تغییر"'));
   assert.ok(csv.includes('"شکاف شواهد"'));
   assert.ok(csv.includes('"دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
