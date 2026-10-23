@@ -168,6 +168,14 @@ _PAGE = """<!doctype html>
           <tbody id="target-outcomes"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">جمع‌بندی وضعیت هدف‌ها به تفکیک کانال</h3>
+      <p id="channel-target-summary-note" class="muted">شمارش وضعیت‌ها از ارزیابی ثبت‌شدهٔ کمپین‌های همین گزارش به دست می‌آید.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کانال</th><th scope="col">شاخص</th><th scope="col">کمپین دارای هدف</th><th scope="col">محقق‌شده</th><th scope="col">محقق‌نشده</th><th scope="col">دادهٔ ناکافی</th><th scope="col">وضعیت نامشخص</th></tr></thead>
+          <tbody id="channel-target-summary"></tbody>
+        </table>
+      </div>
     </section>
   </main>
 </body>
@@ -207,6 +215,8 @@ _CLIENT_SCRIPT = r"""(() => {
     latestFields = null;
     byId("target-outcomes-note").textContent = "";
     byId("target-outcomes").replaceChildren();
+    byId("channel-target-summary-note").textContent = "";
+    byId("channel-target-summary").replaceChildren();
     byId("period-comparison-period").textContent = "";
     byId("period-comparison").replaceChildren();
     byId("channel-period-comparison").replaceChildren();
@@ -672,6 +682,63 @@ _CLIENT_SCRIPT = r"""(() => {
     });
     return rows;
   }
+  function channelTargetSummaryRows(portfolio, includedCampaignIds) {
+    if (!portfolio || portfolio.campaign_list_truncated) return [];
+    const groups = new Map();
+    (portfolio.campaigns || []).filter((campaign) =>
+      includedCampaignIds.has(String(campaign.campaign_id))).forEach((campaign) => {
+      Object.entries(campaign.metrics || {}).forEach(([key, metric]) => {
+        const channel = campaign.group_key || "نامشخص";
+        const groupKey = JSON.stringify([channel, key]);
+        const group = groups.get(groupKey) || {
+          channel, key, campaigns: 0, met: 0, notMet: 0, noData: 0, unknown: 0,
+        };
+        group.campaigns += 1;
+        if (metric.status === "met") group.met += 1;
+        else if (metric.status === "not_met") group.notMet += 1;
+        else if (metric.status === "no_data") group.noData += 1;
+        else group.unknown += 1;
+        groups.set(groupKey, group);
+      });
+    });
+    return Array.from(groups.values()).sort((a, b) =>
+      a.channel.localeCompare(b.channel, "fa") || a.key.localeCompare(b.key));
+  }
+  function renderChannelTargetSummary(report, portfolio) {
+    const body = byId("channel-target-summary");
+    const note = byId("channel-target-summary-note");
+    body.replaceChildren();
+    if (!portfolio) {
+      note.textContent = "جمع‌بندی هدف‌های کانال در دسترس نیست.";
+      return;
+    }
+    if (portfolio.campaign_list_truncated) {
+      note.textContent = "به‌دلیل محدود بودن فهرست کمپین‌های ارزیابی‌شده، جمع‌بندی کانال نمایش داده نمی‌شود.";
+      return;
+    }
+    note.textContent = "شمارش‌ها از وضعیت ارزیابی‌شدهٔ هر شاخص در کمپین‌های مشترک گزارش است؛ وضعیت‌های نامشخص جدا نگه داشته شده‌اند.";
+    const includedIds = new Set((report.campaigns || []).map((campaign) => String(campaign.campaign_id)));
+    const rows = channelTargetSummaryRows(portfolio, includedIds);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای کمپین‌های مشترک هدفی برای جمع‌بندی ثبت نشده است.");
+      cell.colSpan = 7;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.channel),
+        element("td", "", targetMetricLabel(item.key)),
+        element("td", "", formatNumber.format(item.campaigns)),
+        element("td", "", formatNumber.format(item.met)),
+        element("td", "", formatNumber.format(item.notMet)),
+        element("td", "", formatNumber.format(item.noData)),
+        element("td", "", formatNumber.format(item.unknown)));
+      body.appendChild(row);
+    });
+  }
   function targetMetricLabel(key) {
     return ({ impressions: "نمایش", clicks: "کلیک", leads: "سرنخ", conversions: "تبدیل",
       spend: "هزینه", cost_per_lead: "هزینه به‌ازای سرنخ",
@@ -884,6 +951,13 @@ _CLIENT_SCRIPT = r"""(() => {
         "هدف: " + item.target + "؛ وضعیت: " + targetStatusLabel(item.status)
           + "؛ پوشش روزهای ثبت‌شده: " + item.recorded_day_coverage_percent + "٪",
       ]));
+      channelTargetSummaryRows(latestTargetPortfolio,
+        new Set(campaigns.map((campaign) => String(campaign.campaign_id)))).forEach((item) => rows.push([
+        "خلاصه هدف کانال", fields.start, fields.end, "", "", item.channel, "",
+        targetMetricLabel(item.key), item.campaigns,
+        "محقق‌شده: " + item.met + "؛ محقق‌نشده: " + item.notMet
+          + "؛ داده ناکافی: " + item.noData + "؛ نامشخص: " + item.unknown,
+      ]));
     }
     (result.scenarios || []).forEach((scenario) => {
       Object.keys(scenario.reconciliation_by_currency || {}).sort().forEach((currency) => {
@@ -1007,6 +1081,7 @@ _CLIENT_SCRIPT = r"""(() => {
         targetPortfolio = await getJson("/api/v1/crm/analytics/campaign-target-performance/portfolio?" + targetQuery.toString(), fields.workspace);
       } catch (_) {}
       renderCampaignTargetOutcomes(result, targetPortfolio);
+      renderChannelTargetSummary(result, targetPortfolio);
       updateReportUrl(fields, ids);
       latestComparison = result;
       latestPreviousComparison = previousResult;
