@@ -6,4 +6,4 @@ Exclude ambiguous multi-currency campaigns rather than allocating results across
 
 ## Validation
 
-Pending exact-head CI.
+Exact head `a28aa3f3244518f89b945f05e48b7452a777c740`: GitHub Actions run `39959427748` succeeded; Alembic passed, pytest reported 94 passed with 3 warnings, and the Node client behavior test passed.
