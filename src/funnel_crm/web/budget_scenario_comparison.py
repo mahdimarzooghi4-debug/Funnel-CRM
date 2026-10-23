@@ -176,6 +176,14 @@ _PAGE = """<!doctype html>
           <tbody id="channel-target-summary"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">نسبت تبدیل ثبت‌شده به سرنخ</h3>
+      <p class="muted">نسبت مجموع تبدیل‌های ثبت‌شده به سرنخ‌های ثبت‌شده است؛ فقط کمپین‌هایی با هر دو مقدار و سرنخ مثبت وارد می‌شوند. این شاخص، نرخ تبدیل یکتای افراد یا انتساب علّی را اثبات نمی‌کند.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کانال</th><th scope="col">بازهٔ قبلی: تبدیل / سرنخ</th><th scope="col">بازهٔ جاری: تبدیل / سرنخ</th><th scope="col">تغییر (واحد درصد)</th></tr></thead>
+          <tbody id="lead-conversion-ratio"></tbody>
+        </table>
+      </div>
       <h3 style="margin-top:22px">تغییر وضعیت هدف‌ها نسبت به بازهٔ قبلی</h3>
       <p id="target-period-comparison-note" class="muted">مقایسهٔ توصیفی وضعیت هدف‌ها برای کمپین‌های مشترک در دو بازهٔ هم‌طول است.</p>
       <div class="table-wrap">
@@ -225,6 +233,7 @@ _CLIENT_SCRIPT = r"""(() => {
     latestFields = null;
     byId("target-period-comparison-note").textContent = "";
     byId("target-period-comparison").replaceChildren();
+    byId("lead-conversion-ratio").replaceChildren();
     byId("target-outcomes-note").textContent = "";
     byId("target-outcomes").replaceChildren();
     byId("channel-target-summary-note").textContent = "";
@@ -606,6 +615,62 @@ _CLIENT_SCRIPT = r"""(() => {
         element("td", "", comparisonValue(item.now, item.currency)),
         element("td", "", item.delta === null ? "نامشخص" : comparisonValue(item.delta, item.currency)),
         element("td", "", item.percent === null ? "نامشخص" : formatNumber.format(item.percent) + "٪"));
+      body.appendChild(row);
+    });
+  }
+  function leadConversionRows(report) {
+    const groups = new Map();
+    (report?.campaigns || []).forEach((campaign) => {
+      const metrics = campaign.metrics || {};
+      const leads = metrics.leads?.actual;
+      const conversions = metrics.conversions?.actual;
+      if (leads === null || leads === undefined || conversions === null || conversions === undefined) return;
+      const leadCount = Number(leads);
+      const conversionCount = Number(conversions);
+      if (!Number.isFinite(leadCount) || !Number.isFinite(conversionCount) || leadCount <= 0 || conversionCount < 0) return;
+      const channel = campaign.channel || "نامشخص";
+      const group = groups.get(channel) || { channel, leads: 0, conversions: 0, campaigns: 0 };
+      group.leads += leadCount;
+      group.conversions += conversionCount;
+      group.campaigns += 1;
+      groups.set(channel, group);
+    });
+    return new Map(Array.from(groups, ([channel, group]) => [
+      channel, { ...group, rate: (group.conversions / group.leads) * 100 },
+    ]));
+  }
+  function compareLeadConversionRates(currentReport, previousReport) {
+    const current = leadConversionRows(currentReport);
+    const previous = leadConversionRows(previousReport);
+    return Array.from(new Set([...current.keys(), ...previous.keys()])).sort((a, b) => a.localeCompare(b, "fa"))
+      .map((channel) => ({
+        channel, current: current.get(channel) || null, previous: previous.get(channel) || null,
+        delta: current.has(channel) && previous.has(channel)
+          ? current.get(channel).rate - previous.get(channel).rate : null,
+      }));
+  }
+  function renderLeadConversionRatio(currentReport, previousReport) {
+    const body = byId("lead-conversion-ratio");
+    body.replaceChildren();
+    const rows = compareLeadConversionRates(currentReport, previousReport);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای این گزارش دادهٔ هم‌زمان سرنخ و تبدیل با سرنخ مثبت پیدا نشد.");
+      cell.colSpan = 4;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    const describe = (group) => group
+      ? formatNumber.format(group.rate) + "٪ · " + formatNumber.format(group.campaigns)
+        + " کمپین · " + formatNumber.format(group.conversions) + " / " + formatNumber.format(group.leads)
+      : "دادهٔ کافی نیست";
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.channel),
+        element("td", "", describe(item.previous)),
+        element("td", "", describe(item.current)),
+        element("td", "", item.delta === null ? "نامشخص" : formatNumber.format(item.delta) + " واحد درصد"));
       body.appendChild(row);
     });
   }
@@ -1039,6 +1104,16 @@ _CLIENT_SCRIPT = r"""(() => {
         "محقق‌شده: " + item.met + "؛ محقق‌نشده: " + item.notMet
           + "؛ داده ناکافی: " + item.noData + "؛ نامشخص: " + item.unknown,
       ]));
+      compareLeadConversionRates(result, latestPreviousComparison).forEach((item) => rows.push([
+        "نسبت تبدیل به سرنخ", fields.start, fields.end, "", "", item.channel, "",
+        "تبدیل ثبت‌شده به سرنخ ثبت‌شده (درصد)", item.current?.rate ?? "",
+        "بازه قبلی " + precedingPeriod(fields).start + " تا " + precedingPeriod(fields).end
+          + "؛ نرخ قبلی: " + (item.previous?.rate ?? "نامشخص")
+          + "؛ تغییر واحد درصد: " + (item.delta === null ? "نامشخص" : item.delta)
+          + "؛ کمپین‌های قبلی: " + (item.previous?.campaigns ?? 0)
+          + "؛ کمپین‌های جاری: " + (item.current?.campaigns ?? 0)
+          + "؛ فقط داده‌های هم‌زمان و سرنخ مثبت",
+      ]));
       const targetTransitions = targetPeriodTransitionRows(latestTargetPortfolio, latestPreviousTargetPortfolio,
         new Set(campaigns.map((campaign) => String(campaign.campaign_id))));
       (targetTransitions || []).forEach((item) => rows.push([
@@ -1158,6 +1233,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderPeriodComparison(result, previousResult, fields);
       renderChannelPeriodComparison(result, previousResult);
       renderUnitCostComparison(result, previousResult);
+      renderLeadConversionRatio(result, previousResult);
       const targetQuery = new URLSearchParams({
         period_start: fields.start,
         period_end: fields.end,
