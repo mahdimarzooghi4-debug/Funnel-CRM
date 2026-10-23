@@ -194,9 +194,9 @@ async function main() {
   assert.equal(coverage[2].children[0].textContent, "۱");
   assert.equal(coverage[3].children[0].textContent, "۱");
   assert.equal(coverage[4].children[0].textContent, "۱");
-  assert.equal(coverage[2].children[1].textContent, "کمپین دارای هزینهٔ ثبت‌شده · 1 از 2 کمپین · پوشش ۵۰٪");
-  assert.equal(coverage[3].children[1].textContent, "کمپین دارای دادهٔ سرنخ · 1 از 2 کمپین · پوشش ۵۰٪");
-  assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · 2 از 2 کمپین · پوشش ۱۰۰٪");
+  assert.equal(coverage[2].children[1].textContent, "کمپین دارای هزینهٔ ثبت‌شده · ۱ از ۲ کمپین · پوشش ۵۰٪");
+  assert.equal(coverage[3].children[1].textContent, "کمپین دارای دادهٔ سرنخ · ۱ از ۲ کمپین · پوشش ۵۰٪");
+  assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · ۲ از ۲ کمپین · پوشش ۱۰۰٪");
   const channelRows = elements.get("channel-coverage").children;
   assert.equal(channelRows.length, 1);
   assert.deepEqual(channelRows[0].children.map((cell) => cell.textContent),
@@ -225,7 +225,7 @@ async function main() {
   assert.ok(csv.includes('"نرخ پوشش هزینهٔ ثبت‌شده (درصد)"'));
   assert.ok(csv.includes('"نرخ پوشش دادهٔ تبدیل (درصد)","100"'));
   assert.ok(csv.includes('"نرخ پوشش دادهٔ سرنخ (درصد)","50"'));
-  assert.ok(csv.includes('"social"'));
+  assert.ok(csv.includes('"email"'));
   assert.ok(csv.includes('"شکاف شواهد"'));
   assert.ok(csv.includes('"دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
