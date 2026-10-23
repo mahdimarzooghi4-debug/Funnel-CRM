@@ -1,8 +1,8 @@
 """Descriptive sales forecast based on manager-configured stage probabilities."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -58,6 +58,30 @@ class SalesForecast(BaseModel):
     weighted_expected_amount_by_currency: dict[str, Decimal]
     amount_without_probability_by_currency: dict[str, Decimal]
     stages: list[ForecastStage]
+
+
+class SalesOutcomeBucket(BaseModel):
+    pipeline_id: UUID
+    outcome_key: Literal["won", "lost"]
+    stage_key: str
+    stage_name: str
+    outcome_count: int
+    priced_outcome_count: int
+    unpriced_outcome_count: int
+    amount_by_currency: dict[str, Decimal]
+
+
+class SalesOutcomeReport(BaseModel):
+    period_start: date
+    period_end: date
+    pipeline_id: UUID | None
+    organization_unit_id: UUID | None
+    basis: str = "recorded_terminal_stage_transition"
+    won_count: int
+    lost_count: int
+    won_amount_by_currency: dict[str, Decimal]
+    lost_amount_by_currency: dict[str, Decimal]
+    buckets: list[SalesOutcomeBucket]
 
 
 async def _require(
@@ -264,4 +288,137 @@ async def get_sales_forecast(
         weighted_expected_amount_by_currency=total_weighted,
         amount_without_probability_by_currency=total_unknown,
         stages=results,
+    )
+
+
+@router.get("/outcomes", response_model=SalesOutcomeReport,
+            operation_id="getCRMRecordedSalesOutcomes")
+async def get_sales_outcomes(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    pipeline_id: UUID | None = None,
+    organization_unit_id: UUID | None = None,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> SalesOutcomeReport:
+    if period_start > period_end or (period_end - period_start).days > 365:
+        raise HTTPException(status_code=422, detail="Outcome period must be ordered and no longer than 366 days")
+    scopes = crm_scope_ids(context, permission_key="crm.opportunity:view")
+    if organization_unit_id is not None:
+        await _require(context, "crm.opportunity:view", organization_unit_id)
+        scopes = select(OrganizationUnit.id).where(
+            OrganizationUnit.tenant_id == context.access.tenant_id,
+            OrganizationUnit.id == organization_unit_id,
+            OrganizationUnit.id.in_(scopes),
+        )
+    pipeline_filters = [
+        CRMPipeline.tenant_id == context.access.tenant_id,
+        CRMPipeline.entity_kind == "opportunity",
+    ]
+    if pipeline_id is not None:
+        pipeline_filters.append(CRMPipeline.id == pipeline_id)
+    pipelines = (await context.session.scalars(
+        select(CRMPipeline).where(*pipeline_filters)
+    )).all()
+    stage_outcomes: dict[tuple[UUID, str], tuple[str, str]] = {}
+    for pipeline in pipelines:
+        for stage in pipeline.stages:
+            if not isinstance(stage, dict) or not isinstance(stage.get("key"), str):
+                continue
+            outcome = stage.get("outcome_key", "open")
+            if outcome in ("won", "lost"):
+                stage_outcomes[(pipeline.id, stage["key"])] = (
+                    outcome, str(stage.get("name", stage["key"]))
+                )
+
+    start_at = datetime.combine(period_start, datetime.min.time(), tzinfo=timezone.utc)
+    end_at = datetime.combine(period_end + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+    event_filters = [
+        AuditEvent.tenant_id == context.access.tenant_id,
+        AuditEvent.target_type == "crm_opportunity",
+        AuditEvent.action_key.in_(("crm_opportunity.created", "crm_opportunity.updated")),
+        AuditEvent.organization_unit_id.in_(scopes),
+        AuditEvent.occurred_at >= start_at,
+        AuditEvent.occurred_at < end_at,
+    ]
+    if pipeline_id is not None:
+        event_filters.append(AuditEvent.after_state["pipeline_id"].astext == str(pipeline_id))
+    events = (await context.session.scalars(
+        select(AuditEvent).where(*event_filters)
+        .order_by(AuditEvent.occurred_at, AuditEvent.event_id)
+    )).all()
+    aggregates: dict[tuple[UUID, str, str], dict[str, Any]] = {}
+    for event in events:
+        before = event.before_state or {}
+        after = event.after_state or {}
+        try:
+            event_pipeline_id = UUID(str(after.get("pipeline_id")))
+        except (ValueError, TypeError):
+            continue
+        after_stage = after.get("stage_key")
+        terminal = stage_outcomes.get((event_pipeline_id, after_stage))
+        if terminal is None:
+            continue
+        before_terminal = stage_outcomes.get((event_pipeline_id, before.get("stage_key")))
+        if before_terminal == terminal:
+            continue
+        outcome, stage_name = terminal
+        key = (event_pipeline_id, outcome, after_stage)
+        row = aggregates.setdefault(key, {
+            "stage_name": stage_name, "count": 0, "priced": 0, "unpriced": 0, "amounts": {},
+        })
+        row["count"] += 1
+        amount = after.get("amount")
+        currency = after.get("currency")
+        if amount is None or currency is None:
+            row["unpriced"] += 1
+            continue
+        try:
+            value = Decimal(str(amount))
+        except Exception:
+            row["unpriced"] += 1
+            continue
+        row["priced"] += 1
+        row["amounts"][currency] = row["amounts"].get(currency, Decimal("0")) + value
+
+    won_amounts: dict[str, Decimal] = {}
+    lost_amounts: dict[str, Decimal] = {}
+    won_count = lost_count = 0
+    buckets = []
+    for (bucket_pipeline_id, outcome, key), row in sorted(
+        aggregates.items(), key=lambda item: (str(item[0][0]), item[0][1], item[0][2])
+    ):
+        count_name = "won" if outcome == "won" else "lost"
+        if outcome == "won":
+            won_count += row["count"]
+            totals = won_amounts
+        else:
+            lost_count += row["count"]
+            totals = lost_amounts
+        for currency, amount in row["amounts"].items():
+            totals[currency] = totals.get(currency, Decimal("0")) + amount
+        buckets.append(SalesOutcomeBucket(
+            pipeline_id=bucket_pipeline_id, outcome_key=outcome, stage_key=key,
+            stage_name=row["stage_name"], outcome_count=row["count"],
+            priced_outcome_count=row["priced"], unpriced_outcome_count=row["unpriced"],
+            amount_by_currency=row["amounts"],
+        ))
+
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id, actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_opportunity_outcomes.viewed",
+        target_type="crm_opportunity_outcome_report",
+        target_key=str(pipeline_id or "authorized-scope"),
+        organization_unit_id=organization_unit_id, before_state=None,
+        after_state={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+            "won_count": won_count, "lost_count": lost_count, "bucket_count": len(buckets)},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return SalesOutcomeReport(
+        period_start=period_start, period_end=period_end, pipeline_id=pipeline_id,
+        organization_unit_id=organization_unit_id, won_count=won_count, lost_count=lost_count,
+        won_amount_by_currency=won_amounts, lost_amount_by_currency=lost_amounts,
+        buckets=buckets,
     )
