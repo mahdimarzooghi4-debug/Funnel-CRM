@@ -6,4 +6,4 @@ Describe the measure as recorded conversions per recorded lead; it does not esta
 
 ## Validation
 
-Pending exact-head CI.
+Initial implementation commit `ba36b348fd5f9db44f62464d480328eff7e2cde2` passed GitHub Actions run `39969064986`: 94 Python tests passed (3 existing warnings), and the budget comparison browser behavior test passed.
