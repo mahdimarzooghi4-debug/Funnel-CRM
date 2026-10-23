@@ -121,9 +121,6 @@ async def set_stage_probability(
     pipeline.stages = stages
     pipeline.updated_at = datetime.now(timezone.utc)
     await context.session.flush()
-    active_rows = [row for row in rows if stage_config.get(row.stage_key, {}).get("outcome_key", "open") == "open"]
-    terminal_keys = {key for key, config in stage_config.items() if config.get("outcome_key") in ("won", "lost")}
-    unscheduled_count = sum(row.stage_key not in terminal_keys for row in unscheduled_rows)
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id,
         actor_kind="user", actor_identity_id=context.access.identity_id,
@@ -234,6 +231,9 @@ async def get_sales_forecast(
             "weighted_expected_amount_by_currency": weighted,
         })
 
+    active_rows = [row for row in rows if stage_config.get(row.stage_key, {}).get("outcome_key", "open") == "open"]
+    terminal_keys = {key for key, config in stage_config.items() if config.get("outcome_key") in ("won", "lost")}
+    unscheduled_count = sum(row.stage_key not in terminal_keys for row in unscheduled_rows)
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id,
         actor_kind="user", actor_identity_id=context.access.identity_id,
