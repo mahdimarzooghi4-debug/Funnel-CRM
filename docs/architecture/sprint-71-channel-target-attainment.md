@@ -6,4 +6,4 @@ Suppress aggregate rows when the authorized portfolio response is truncated; a p
 
 ## Validation
 
-Pending exact-head CI.
+Exact initial feature commit `1fc521d334469c1733dea8c69aba8f9c493900c2` passed GitHub Actions run `39961294935`: 94 Python tests passed (3 existing warnings), and the budget comparison browser behavior test passed.
