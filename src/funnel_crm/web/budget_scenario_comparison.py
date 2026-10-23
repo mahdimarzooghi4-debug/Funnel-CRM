@@ -168,6 +168,14 @@ _PAGE = """<!doctype html>
           <tbody id="objective-budget-reconciliation"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">بودجهٔ سناریو در کنار شواهد تاریخی هدف</h3>
+      <p class="muted">برای هر هدف و ارز، بودجهٔ هر سناریو را کنار هزینهٔ واحد محاسبه‌شده از داده‌های ثبت‌شدهٔ همین بازه ببینید. این کنارهم‌گذاری نتیجهٔ آینده را پیش‌بینی نمی‌کند و هزینه را به سناریو نسبت نمی‌دهد.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">هدف بازاریابی</th><th scope="col">سناریو</th><th scope="col">ارز</th><th scope="col">بودجهٔ برنامه‌ریزی‌شده</th><th scope="col">سهم از بودجه</th><th scope="col">هزینهٔ هر سرنخ ثبت‌شده</th><th scope="col">پوشش سرنخ</th><th scope="col">هزینهٔ هر تبدیل ثبت‌شده</th><th scope="col">پوشش تبدیل</th></tr></thead>
+          <tbody id="scenario-objective-evidence"></tbody>
+        </table>
+      </div>
       <h3 style="margin-top:22px">هزینهٔ واحد به تفکیک هدف بازاریابی</h3>
       <p class="muted">هزینهٔ تک‌ارزی کمپین‌های هر هدف بر مجموع سرنخ یا تبدیل ثبت‌شدهٔ همان کمپین‌ها تقسیم می‌شود. دادهٔ شاخص ثبت‌نشده در محاسبه وارد نمی‌شود و هزینه‌های چندارزی به ارز خاصی نسبت داده نمی‌شوند؛ این شاخص ROI یا انتساب علّی نیست.</p>
       <div class="table-wrap">
@@ -268,6 +276,7 @@ _CLIENT_SCRIPT = r"""(() => {
     byId("lead-conversion-ratio").replaceChildren();
     byId("campaign-unit-cost").replaceChildren();
     byId("objective-unit-cost").replaceChildren();
+    byId("scenario-objective-evidence").replaceChildren();
     byId("objective-performance").replaceChildren();
     byId("objective-budget-reconciliation").replaceChildren();
     byId("target-outcomes-note").textContent = "";
@@ -918,6 +927,42 @@ _CLIENT_SCRIPT = r"""(() => {
       a.objective.localeCompare(b.objective, "fa") || a.currency.localeCompare(b.currency)
         || ["leads", "conversions"].indexOf(a.key) - ["leads", "conversions"].indexOf(b.key));
   }
+  function scenarioObjectiveEvidenceRows(report) {
+    const costs = new Map(objectiveUnitCostRows(report).map((item) =>
+      [JSON.stringify([item.objective, item.currency, item.key]), item]));
+    return objectiveBudgetRows(report).map((budget) => {
+      const leads = costs.get(JSON.stringify([budget.objective, budget.currency, "leads"])) || null;
+      const conversions = costs.get(JSON.stringify([budget.objective, budget.currency, "conversions"])) || null;
+      return { ...budget, leads, conversions };
+    });
+  }
+  function renderScenarioObjectiveEvidence(report) {
+    const body = byId("scenario-objective-evidence");
+    body.replaceChildren();
+    const rows = scenarioObjectiveEvidenceRows(report);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای این سناریو تخصیص بودجه‌ای ثبت نشده است.");
+      cell.colSpan = 9;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    const costText = (item) => !item || item.unitCost === null
+      ? "نامشخص" : displayAmount(item.unitCost, item.currency);
+    const coverage = (item) => item
+      ? formatNumber.format(item.observed) + " / " + formatNumber.format(item.campaigns)
+      : "بدون سابقهٔ قابل‌مقایسه";
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.objective), element("td", "", item.scenario),
+        element("td", "", item.currency), element("td", "", displayAmount(item.planned, item.currency)),
+        element("td", "", item.mixSharePercent === null ? "نامشخص" : formatNumber.format(item.mixSharePercent) + "٪"),
+        element("td", "", costText(item.leads)), element("td", "", coverage(item.leads)),
+        element("td", "", costText(item.conversions)), element("td", "", coverage(item.conversions)));
+      body.appendChild(row);
+    });
+  }
   function renderObjectiveUnitCosts(report) {
     const body = byId("objective-unit-cost");
     body.replaceChildren();
@@ -1499,6 +1544,15 @@ _CLIENT_SCRIPT = r"""(() => {
         + "؛ پوشش قبلی: " + item.previousCoverage.observed + " از " + item.previousCoverage.campaigns
         + "؛ پوشش جاری: " + item.currentCoverage.observed + " از " + item.currentCoverage.campaigns,
     ]));
+    scenarioObjectiveEvidenceRows(result).forEach((item) => rows.push([
+      "سناریو و شواهد هدف", fields.start, fields.end, item.scenario, "",
+      item.objective, item.currency, "بودجهٔ برنامه‌ریزی‌شده", item.planned,
+      "سهم از بودجه: " + (item.mixSharePercent === null ? "نامشخص" : item.mixSharePercent + "٪")
+        + "؛ هزینهٔ هر سرنخ: " + (item.leads ? item.leads.unitCost ?? "نامشخص" : "بدون سابقه")
+        + "؛ پوشش سرنخ: " + (item.leads ? item.leads.observed + " از " + item.leads.campaigns : "بدون سابقه")
+        + "؛ هزینهٔ هر تبدیل: " + (item.conversions ? item.conversions.unitCost ?? "نامشخص" : "بدون سابقه")
+        + "؛ پوشش تبدیل: " + (item.conversions ? item.conversions.observed + " از " + item.conversions.campaigns : "بدون سابقه"),
+    ]));
     objectiveUnitCostRows(result).forEach((item) => rows.push([
       "هزینهٔ واحد هدف بازاریابی", fields.start, fields.end, "", "",
       item.objective + " · " + (item.key === "leads" ? "سرنخ ثبت‌شده" : "تبدیل ثبت‌شده"),
@@ -1594,6 +1648,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderLeadConversionRatio(result, previousResult);
       renderCampaignUnitCosts(result, previousResult);
       renderObjectiveUnitCosts(result);
+      renderScenarioObjectiveEvidence(result);
       renderObjectivePerformance(result, previousResult);
       renderObjectiveBudgetReconciliation(result);
       const targetQuery = new URLSearchParams({
