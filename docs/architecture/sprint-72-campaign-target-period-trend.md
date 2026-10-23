@@ -6,4 +6,4 @@ Show transitions as descriptive counts, including missing target plans and insuf
 
 ## Validation
 
-Pending exact-head CI.
+Initial feature commit `29a245c9df9a0616322bd73b8b55e6c7b9751f35` passed GitHub Actions run `39968292913`: 94 Python tests passed (3 existing warnings), and the budget comparison browser behavior test passed.
