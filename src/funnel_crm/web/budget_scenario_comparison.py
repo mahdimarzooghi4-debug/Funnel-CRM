@@ -116,7 +116,7 @@ _PAGE = """<!doctype html>
       <h2 style="margin-top:24px">پوشش شواهد به تفکیک کانال</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th scope="col">کانال</th><th scope="col">کمپین</th><th scope="col">دارای هزینهٔ ثبت‌شده</th><th scope="col">دارای دادهٔ سرنخ</th><th scope="col">دارای دادهٔ تبدیل</th></tr></thead>
+          <thead><tr><th scope="col">کانال</th><th scope="col">کمپین</th><th scope="col">هزینهٔ ثبت‌شده / پوشش</th><th scope="col">دادهٔ سرنخ / پوشش</th><th scope="col">دادهٔ تبدیل / پوشش</th></tr></thead>
           <tbody id="channel-coverage"></tbody>
         </table>
       </div>
@@ -323,6 +323,13 @@ _CLIENT_SCRIPT = r"""(() => {
   function addFact(list, label, value) {
     list.append(element("dt", "", label), element("dd", "", value));
   }
+  function coverageRate(count, denominator) {
+    return denominator > 0 ? count * 100 / denominator : null;
+  }
+  function displayCoverageRate(count, denominator) {
+    const rate = coverageRate(count, denominator);
+    return rate === null ? "نامشخص" : formatNumber.format(rate) + "٪";
+  }
   function renderEvidenceCoverage(result) {
     const campaigns = result.campaigns || [];
     const scenarios = result.scenarios || [];
@@ -332,18 +339,22 @@ _CLIENT_SCRIPT = r"""(() => {
       return metric.actual !== null && metric.actual !== undefined;
     };
     const values = [
-      ["سناریوی مقایسه‌شده", scenarios.length, ""],
-      ["کمپین هم‌پوشان", campaigns.length, ""],
-      ["کمپین دارای هزینهٔ ثبت‌شده", campaigns.filter(hasSpend).length, "از " + campaigns.length + " کمپین"],
-      ["کمپین دارای دادهٔ سرنخ", campaigns.filter((campaign) => hasMetric(campaign, "leads")).length, "از " + campaigns.length + " کمپین"],
-      ["کمپین دارای دادهٔ تبدیل", campaigns.filter((campaign) => hasMetric(campaign, "conversions")).length, "از " + campaigns.length + " کمپین"],
+      ["سناریوی مقایسه‌شده", scenarios.length, null],
+      ["کمپین هم‌پوشان", campaigns.length, null],
+      ["کمپین دارای هزینهٔ ثبت‌شده", campaigns.filter(hasSpend).length, campaigns.length],
+      ["کمپین دارای دادهٔ سرنخ", campaigns.filter((campaign) => hasMetric(campaign, "leads")).length, campaigns.length],
+      ["کمپین دارای دادهٔ تبدیل", campaigns.filter((campaign) => hasMetric(campaign, "conversions")).length, campaigns.length],
     ];
     const container = byId("evidence-coverage");
     container.replaceChildren();
     values.forEach(([label, count, denominator]) => {
       const card = element("article", "scenario-card");
       card.appendChild(element("strong", "", formatNumber.format(count)));
-      card.appendChild(element("p", "muted", label + (denominator ? " · " + denominator : "")));
+      const detail = denominator === null
+        ? label
+        : label + " · " + formatNumber.format(count) + " از " + formatNumber.format(denominator)
+          + " کمپین · پوشش " + displayCoverageRate(count, denominator);
+      card.appendChild(element("p", "muted", detail));
       container.appendChild(card);
     });
   }
@@ -376,9 +387,9 @@ _CLIENT_SCRIPT = r"""(() => {
       row.append(
         element("td", "", group.channel),
         element("td", "", formatNumber.format(group.campaigns)),
-        element("td", "", formatNumber.format(group.spend)),
-        element("td", "", formatNumber.format(group.leads)),
-        element("td", "", formatNumber.format(group.conversions)),
+        element("td", "", formatNumber.format(group.spend) + " / " + formatNumber.format(group.campaigns) + " · " + displayCoverageRate(group.spend, group.campaigns)),
+        element("td", "", formatNumber.format(group.leads) + " / " + formatNumber.format(group.campaigns) + " · " + displayCoverageRate(group.leads, group.campaigns)),
+        element("td", "", formatNumber.format(group.conversions) + " / " + formatNumber.format(group.campaigns) + " · " + displayCoverageRate(group.conversions, group.campaigns)),
       );
       body.appendChild(row);
     });
@@ -493,6 +504,9 @@ _CLIENT_SCRIPT = r"""(() => {
       ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "کمپین دارای هزینهٔ ثبت‌شده", campaigns.filter(hasSpend).length, "از " + campaigns.length + " کمپین"],
       ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "کمپین دارای دادهٔ سرنخ", campaigns.filter((campaign) => hasMetric(campaign, "leads")).length, "از " + campaigns.length + " کمپین"],
       ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "کمپین دارای دادهٔ تبدیل", campaigns.filter((campaign) => hasMetric(campaign, "conversions")).length, "از " + campaigns.length + " کمپین"],
+      ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "نرخ پوشش هزینهٔ ثبت‌شده (درصد)", coverageRate(campaigns.filter(hasSpend).length, campaigns.length), campaigns.length ? "درصد از کمپین‌های هم‌پوشان" : "مخرج صفر؛ نامشخص"],
+      ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "نرخ پوشش دادهٔ سرنخ (درصد)", coverageRate(campaigns.filter((campaign) => hasMetric(campaign, "leads")).length, campaigns.length), campaigns.length ? "درصد از کمپین‌های هم‌پوشان" : "مخرج صفر؛ نامشخص"],
+      ["پوشش شواهد", fields.start, fields.end, "", "", "", "", "نرخ پوشش دادهٔ تبدیل (درصد)", coverageRate(campaigns.filter((campaign) => hasMetric(campaign, "conversions")).length, campaigns.length), campaigns.length ? "درصد از کمپین‌های هم‌پوشان" : "مخرج صفر؛ نامشخص"],
     ];
     campaigns.forEach((campaign) => {
       missingEvidence(campaign).forEach((missing) => rows.push([
@@ -508,6 +522,14 @@ _CLIENT_SCRIPT = r"""(() => {
         ["کمپین دارای دادهٔ تبدیل", group.conversions],
       ].forEach(([metric, count]) => rows.push([
         "پوشش کانال", fields.start, fields.end, "", "", group.channel, "", metric, count, "",
+      ]));
+      [
+        ["نرخ پوشش هزینهٔ ثبت‌شده (درصد)", coverageRate(group.spend, group.campaigns)],
+        ["نرخ پوشش دادهٔ سرنخ (درصد)", coverageRate(group.leads, group.campaigns)],
+        ["نرخ پوشش دادهٔ تبدیل (درصد)", coverageRate(group.conversions, group.campaigns)],
+      ].forEach(([metric, rate]) => rows.push([
+        "پوشش کانال", fields.start, fields.end, "", "", group.channel, "", metric, rate,
+        "درصد از " + group.campaigns + " کمپین کانال",
       ]));
     });
     (result.scenarios || []).forEach((scenario) => {
