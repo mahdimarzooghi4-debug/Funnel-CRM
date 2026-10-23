@@ -107,6 +107,7 @@ _PAGE = """<!doctype html>
     </section>
     <section class="panel" id="results" hidden aria-labelledby="results-title">
       <h2 id="results-title">خلاصهٔ بودجه و شواهد واقعی</h2>
+      <div class="actions"><button id="export-csv" type="button">دریافت فایل CSV</button><span class="hint">فایل شامل خلاصهٔ سناریوها و شواهد کمپین همین بازه است.</span></div>
       <p class="notice">نتایج ثبت‌شده برای کمپین‌های مشترک نمایش داده می‌شوند و به یک سناریوی بودجه نسبت داده نمی‌شوند. جمع واریانس فقط شامل هزینه‌های ثبت‌شده با ارز همسان است؛ ارزها تبدیل نمی‌شوند و نبود رکورد به معنی عملکرد صفر نیست.</p>
       <div id="scenario-results" class="cards"></div>
       <h2 style="margin-top:28px">عملکرد کمپین‌ها در همین بازه</h2>
@@ -132,6 +133,8 @@ _CLIENT_SCRIPT = r"""(() => {
   const scenarioPanel = byId("scenario-panel");
   const resultsPanel = byId("results");
   const formatNumber = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 2 });
+  let latestComparison = null;
+  let latestFields = null;
 
   const params = new URLSearchParams(window.location.search);
   const requestedWorkspaceId = params.get("workspace_id") || "";
@@ -144,6 +147,8 @@ _CLIENT_SCRIPT = r"""(() => {
     statusNode.style.color = isError ? "#8b3b22" : "#17613b";
   }
   function clearResults() {
+    latestComparison = null;
+    latestFields = null;
     resultsPanel.hidden = true;
     byId("scenario-results").replaceChildren();
     byId("campaign-results").replaceChildren();
@@ -338,6 +343,73 @@ _CLIENT_SCRIPT = r"""(() => {
       body.appendChild(row);
     });
   }
+  function csvCell(value) {
+    let text = value === null || value === undefined ? "" : String(value);
+    if (typeof value === "string" && /^[\t\r\n ]*[=+@-]/.test(text)) text = "'" + text;
+    return '"' + text.replace(/"/g, '""') + '"';
+  }
+  function exportComparisonCsv(result, fields) {
+    const rows = [
+      ["نوع رکورد", "از تاریخ", "تا تاریخ", "سناریو", "کمپین", "کانال", "ارز", "شاخص", "مقدار", "یادداشت"],
+      ["بازه گزارش", fields.start, fields.end, "", "", "", "", "روز تقویمی", result.period_calendar_days, ""],
+    ];
+    (result.scenarios || []).forEach((scenario) => {
+      Object.keys(scenario.reconciliation_by_currency || {}).sort().forEach((currency) => {
+        const values = scenario.reconciliation_by_currency[currency];
+        [
+          ["بودجه برنامه‌ریزی‌شده", values.planned_amount],
+          ["بودجه دارای هزینه هم‌ارز", values.comparable_planned_amount],
+          ["هزینه ثبت‌شده", values.observed_spend_amount],
+          ["فاصله بودجه و هزینه", values.variance_amount],
+          ["پوشش تخصیص‌های دارای هزینه (درصد)", values.allocation_coverage_percent],
+          ["تخصیص با ارز متفاوت (تعداد)", values.currency_mismatch_allocation_count],
+        ].forEach(([metric, value]) => rows.push([
+          "سناریو", fields.start, fields.end, scenario.name, "", "", currency, metric, value, "",
+        ]));
+      });
+    });
+    (result.campaigns || []).forEach((campaign) => {
+      Object.keys(campaign.recorded_spend_by_currency || {}).sort().forEach((currency) => {
+        rows.push(["کمپین", fields.start, fields.end, "", campaign.campaign_name, campaign.channel,
+          currency, "هزینه ثبت‌شده", campaign.recorded_spend_by_currency[currency], ""]);
+      });
+      ["leads", "conversions"].forEach((key) => {
+        const metric = (campaign.metrics || {})[key] || {};
+        rows.push(["کمپین", fields.start, fields.end, "", campaign.campaign_name, campaign.channel,
+          "", key === "leads" ? "سرنخ" : "تبدیل", metric.actual,
+          (metric.actual === null || metric.actual === undefined ? "مقدار ثبت نشده؛ " : "") + "پوشش روزهای ثبت‌شده: " + (metric.recorded_day_coverage_percent ?? "نامشخص") + "٪"]);
+      });
+      (campaign.scenario_allocations || []).forEach((allocation) => {
+        const currency = allocation.planned_budget_currency || "";
+        rows.push(["تخصیص", fields.start, fields.end, allocation.scenario_name, campaign.campaign_name,
+          campaign.channel, currency, "بودجه برنامه‌ریزی‌شده", allocation.planned_budget_amount, ""]);
+        rows.push(["تخصیص", fields.start, fields.end, allocation.scenario_name, campaign.campaign_name,
+          campaign.channel, currency, "هزینه هم‌ارز", allocation.actual_spend_in_allocation_currency,
+          allocation.actual_spend_in_allocation_currency === null ? "هزینه هم‌ارز ثبت نشده" : ""]);
+        rows.push(["تخصیص", fields.start, fields.end, allocation.scenario_name, campaign.campaign_name,
+          campaign.channel, currency, "واریانس", allocation.variance_amount, ""]);
+      });
+    });
+    const csv = "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "budget-comparison-" + fields.start + "-" + fields.end + ".csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  byId("export-csv").addEventListener("click", () => {
+    if (!latestComparison || !latestFields) return;
+    try {
+      exportComparisonCsv(latestComparison, latestFields);
+      setStatus("فایل CSV گزارش آماده شد.", false);
+    } catch (_) {
+      setStatus("ساخت فایل CSV ناموفق بود؛ دوباره تلاش کنید.", true);
+    }
+  });
   async function loadScenarios() {
     clearResults();
     scenarioPanel.hidden = true;
@@ -368,6 +440,8 @@ _CLIENT_SCRIPT = r"""(() => {
       const result = await getJson("/api/v1/crm/budget-scenarios/compare/performance-context?" + query.toString(), fields.workspace);
       renderScenarioSummaries(result.scenarios || []);
       renderCampaignRows(result.campaigns || []);
+      latestComparison = result;
+      latestFields = fields;
       resultsPanel.hidden = false;
       setStatus("گزارش برای " + result.period_calendar_days + " روز تقویمی آماده شد.", false);
     } catch (error) {

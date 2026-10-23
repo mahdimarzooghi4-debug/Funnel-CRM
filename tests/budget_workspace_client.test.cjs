@@ -13,11 +13,17 @@ class Element {
     this.disabled = false;
     this.hidden = false;
     this.checked = false;
+    this.type = "";
+    this.download = "";
+    this.href = "";
+    this.clicked = false;
   }
   appendChild(node) {
     this.children.push(node);
     return node;
   }
+  remove() { this.removed = true; }
+  click() { this.clicked = true; }
   append(...nodes) {
     nodes.forEach((node) => this.appendChild(node));
   }
@@ -55,7 +61,7 @@ Object.defineProperty(Element.prototype, "innerHTML", {
 const ids = [
   "workspace-id", "organization-id", "status", "scenario-list",
   "scenario-panel", "results", "scenario-results", "campaign-results",
-  "selection-count", "compare", "load-scenarios", "period-start", "period-end",
+  "selection-count", "compare", "load-scenarios", "period-start", "period-end", "export-csv",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -64,10 +70,13 @@ elements.get("period-start").value = "2026-10-01";
 elements.get("period-end").value = "2026-10-14";
 
 const calls = [];
+const downloads = [];
+const body = { appendChild: (node) => downloads.push(node) };
+const urlApi = { createObjectURL: (blob) => { downloads.push(blob); return "blob:report"; }, revokeObjectURL: (url) => downloads.push("revoked:" + url) };
 const workspace = { id: "workspace-1", name: "Demo workspace", root_organization_id: "root-1" };
 const scenarios = [
   { id: "scenario-1", name: "<img src=x onerror=alert(1)>", allocation_count: 2 },
-  { id: "scenario-2", name: "Growth", allocation_count: 2 },
+  { id: "scenario-2", name: '=HYPERLINK("https://evil.example","open")', allocation_count: 2 },
 ];
 const fetch = async (path, options = {}) => {
   calls.push({ path, options });
@@ -82,10 +91,21 @@ const fetch = async (path, options = {}) => {
     payload = {
       period_calendar_days: 14,
       scenarios: [
-        { name: scenarios[0].name, reconciliation_by_currency: {} },
+        { name: scenarios[0].name, reconciliation_by_currency: { USD: {
+          planned_amount: 1200, comparable_planned_amount: 1000, observed_spend_amount: 900,
+          variance_amount: 100, allocation_coverage_percent: 80, currency_mismatch_allocation_count: 1,
+        } } },
         { name: scenarios[1].name, reconciliation_by_currency: {} },
       ],
-      campaigns: [],
+      campaigns: [{
+        campaign_name: "Spring launch", channel: "email",
+        recorded_spend_by_currency: { USD: 900 },
+        metrics: { leads: { actual: 12, recorded_day_coverage_percent: 80 }, conversions: { actual: null, recorded_day_coverage_percent: 60 } },
+        scenario_allocations: [{
+          scenario_name: scenarios[1].name, planned_budget_currency: "USD", planned_budget_amount: 1000,
+          actual_spend_in_allocation_currency: null, variance_amount: null,
+        }],
+      }],
     };
   } else {
     throw new Error("Unexpected request: " + path);
@@ -107,11 +127,15 @@ vm.runInNewContext(script[1], {
       return elements.get(id);
     },
     createElement: (tagName) => new Element(tagName),
+    body,
   },
   window: { location: { search: "?period_start=2026-10-01&period_end=2026-10-14" } },
   URLSearchParams,
   Intl,
   fetch,
+  URL: urlApi,
+  Blob,
+  setTimeout,
 });
 
 async function settle() {
@@ -141,6 +165,19 @@ async function main() {
   assert.equal(elements.get("status").textContent, "گزارش برای 14 روز تقویمی آماده شد.");
   assert.equal(elements.get("scenario-results").children[0].children[0].textContent,
     "<img src=x onerror=alert(1)>");
+  await elements.get("export-csv").dispatch("click");
+  assert.equal(elements.get("status").textContent, "فایل CSV گزارش آماده شد.");
+  const anchor = downloads.find((item) => item instanceof Element);
+  assert.ok(anchor && anchor.clicked && anchor.removed);
+  assert.equal(anchor.download, "budget-comparison-2026-10-01-2026-10-14.csv");
+  const blob = downloads.find((item) => item instanceof Blob);
+  assert.ok(blob);
+  const csv = await blob.text();
+  assert.ok(csv.startsWith("\uFEFF"));
+  assert.ok(csv.includes('"هزینه ثبت‌شده"'));
+  assert.ok(csv.includes('"Spring launch"'));
+  assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
+    "formula-like labels must be neutralized and CSV-escaped");
 
   const listCall = calls.find((call) => call.path.startsWith("/api/v1/crm/budget-scenarios?"));
   assert.ok(listCall);
