@@ -67,6 +67,7 @@ const ids = [
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
   "target-period-comparison-note", "target-period-comparison",
+  "lead-conversion-ratio",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -332,13 +333,38 @@ async function main() {
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
     "formula-like labels must be neutralized and CSV-escaped");
 
+  reportCampaigns = [
+    {
+      campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email",
+      recorded_spend_by_currency: { USD: 900 },
+      metrics: { leads: { actual: 12 }, conversions: { actual: 3 } },
+      scenario_allocations: [],
+    },
+    {
+      campaign_id: "campaign-2", campaign_name: "Brand awareness", channel: "email",
+      recorded_spend_by_currency: {},
+      metrics: { leads: { actual: 5 }, conversions: { actual: 3 } },
+      scenario_allocations: [],
+    },
+  ];
+  await elements.get("compare").dispatch("click");
+  assert.deepEqual(elements.get("lead-conversion-ratio").children.map((row) =>
+    row.children.map((cell) => cell.textContent)), [
+    ["email", "۲۰٪ · ۱ کمپین · ۲ / ۱۰", "۳۵٫۲۹٪ · ۲ کمپین · ۶ / ۱۷", "۱۵٫۲۹ واحد درصد"],
+  ]);
+  await elements.get("export-csv").dispatch("click");
+  const ratioCsv = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+    new Uint8Array(await downloads.filter((item) => item instanceof Blob).at(-1).arrayBuffer()));
+  assert.ok(ratioCsv.includes('"نسبت تبدیل به سرنخ"'));
+  assert.ok(ratioCsv.includes('"تبدیل ثبت‌شده به سرنخ ثبت‌شده (درصد)","35.294117647058826"'));
+
   reportCampaigns = [];
   await elements.get("compare").dispatch("click");
   assert.equal(elements.get("evidence-coverage").children[2].children[1].textContent,
     "کمپین دارای هزینهٔ ثبت‌شده · ۰ از ۰ کمپین · پوشش نامشخص");
   await elements.get("export-csv").dispatch("click");
   const exportedBlobs = downloads.filter((item) => item instanceof Blob);
-  const emptyReportCsv = new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(await exportedBlobs[1].arrayBuffer()));
+  const emptyReportCsv = new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(await exportedBlobs.at(-1).arrayBuffer()));
   assert.ok(emptyReportCsv.includes('"نرخ پوشش هزینهٔ ثبت‌شده (درصد)","","مخرج صفر؛ نامشخص"'));
 
   const listCall = calls.find((call) => call.path.startsWith("/api/v1/crm/budget-scenarios?"));
