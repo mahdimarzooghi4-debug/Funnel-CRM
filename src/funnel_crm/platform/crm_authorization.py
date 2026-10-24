@@ -46,6 +46,7 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.work_item:view",
         "crm.work_item:create",
         "crm.work_item:update",
+        "crm.commerce_event:view",
     }
 )
 
