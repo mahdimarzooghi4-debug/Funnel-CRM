@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from funnel_crm.platform.models import OrganizationUnit, Workspace
+from funnel_crm.platform.models import OrganizationUnit, Workspace, WorkspaceCRMSettings
 
 
 async def create_workspace(
@@ -46,5 +46,6 @@ async def create_workspace(
     session.add(workspace)
     await session.flush()
     session.add(root)
+    session.add(WorkspaceCRMSettings(tenant_id=tenant_id))
     await session.flush()
     return workspace
