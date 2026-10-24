@@ -5,6 +5,9 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import hashlib
+import hmac
+import unicodedata
 import os
 import re
 from dataclasses import dataclass
@@ -13,6 +16,8 @@ from uuid import UUID
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
 
 
 KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -109,3 +114,37 @@ class ContactPointKeyring:
             return plaintext.decode("utf-8")
         except (InvalidTag, UnicodeDecodeError) as exc:
             raise ContactPointCryptoError("contact-point data integrity check failed") from exc
+
+    @staticmethod
+    def _normalized_match_value(value: str) -> bytes:
+        normalized = unicodedata.normalize("NFC", value).strip()
+        if not normalized:
+            raise ContactPointCryptoError("contact-point value must not be empty")
+        return normalized.encode("utf-8")
+
+    def blind_indexes(
+        self,
+        *,
+        tenant_id: UUID,
+        channel: str,
+        value: str,
+    ) -> dict[str, bytes]:
+        """Return tenant/channel-bound HMACs for retained encryption key versions.
+
+        Derived keys separate matching from AES-GCM encryption. Retaining prior
+        key versions lets duplicate checks find values indexed before rotation.
+        """
+        normalized = self._normalized_match_value(value)
+        indexes: dict[str, bytes] = {}
+        for key_id, key in self.keys.items():
+            context = f"funnel-crm:contact-match:v1:{tenant_id}:{channel}:{key_id}".encode()
+            derived_key = HKDF(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=None,
+                info=context,
+            ).derive(key)
+            indexes[key_id] = hmac.new(
+                derived_key, normalized, hashlib.sha256
+            ).digest()
+        return indexes

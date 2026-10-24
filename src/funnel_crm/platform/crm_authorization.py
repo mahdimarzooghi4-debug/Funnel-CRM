@@ -30,6 +30,7 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.contact_point:update",
         "crm.communication_consent:view",
         "crm.communication_consent:record",
+        "crm.profile:review_duplicates",
     }
 )
 
