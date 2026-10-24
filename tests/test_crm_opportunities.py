@@ -5,6 +5,7 @@ import pytest
 from fastapi import FastAPI, Request
 
 from funnel_crm.api.v1.crm_opportunities import router
+from funnel_crm.api.v1.crm_sales_forecasting import router as forecast_router
 from funnel_crm.platform.models import Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -19,6 +20,7 @@ def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(forecast_router, prefix="/api/v1")
     return app
 
 
@@ -83,6 +85,21 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert pipeline.status_code == 201, pipeline.text
         pipeline_id = pipeline.json()["id"]
 
+        probability = await client.patch(
+            f"/api/v1/crm/sales-forecast/pipelines/{pipeline_id}/stages/qualified/probability",
+            headers=headers,
+            json={"probability_percent": 60},
+        )
+        assert probability.status_code == 200, probability.text
+        assert probability.json()["probability_percent"] == 60
+
+        invalid_probability = await client.patch(
+            f"/api/v1/crm/sales-forecast/pipelines/{pipeline_id}/stages/qualified/probability",
+            headers=headers,
+            json={"probability_percent": 101},
+        )
+        assert invalid_probability.status_code == 422
+
         created = await client.post(
             "/api/v1/crm/opportunities",
             headers=headers,
@@ -116,6 +133,76 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert moved.status_code == 200, moved.text
         assert moved.json()["stage_key"] == "proposal"
         assert moved.json()["amount"] == "13250.00"
+
+        euro_opportunity = await client.post(
+            "/api/v1/crm/opportunities",
+            headers=headers,
+            json={
+                "organization_unit_id": str(root_id),
+                "pipeline_id": pipeline_id,
+                "name": "West region retail order",
+                "stage_key": "qualified",
+                "amount": "2000",
+                "currency": "EUR",
+                "expected_close_date": "2026-12-15",
+            },
+        )
+        assert euro_opportunity.status_code == 201, euro_opportunity.text
+        unpriced_opportunity = await client.post(
+            "/api/v1/crm/opportunities",
+            headers=headers,
+            json={
+                "organization_unit_id": str(root_id),
+                "pipeline_id": pipeline_id,
+                "name": "Retail consultation",
+                "stage_key": "qualified",
+                "expected_close_date": "2026-12-20",
+            },
+        )
+        assert unpriced_opportunity.status_code == 201, unpriced_opportunity.text
+        unscheduled_opportunity = await client.post(
+            "/api/v1/crm/opportunities",
+            headers=headers,
+            json={
+                "organization_unit_id": str(root_id),
+                "pipeline_id": pipeline_id,
+                "name": "Unscheduled sales lead",
+                "stage_key": "qualified",
+                "amount": "100",
+                "currency": "EUR",
+            },
+        )
+        assert unscheduled_opportunity.status_code == 201, unscheduled_opportunity.text
+
+        forecast = await client.get(
+            "/api/v1/crm/sales-forecast/opportunities",
+            headers=headers,
+            params={
+                "pipeline_id": pipeline_id,
+                "period_start": "2026-12-01",
+                "period_end": "2026-12-31",
+                "organization_unit_id": str(root_id),
+            },
+        )
+        assert forecast.status_code == 200, forecast.text
+        report = forecast.json()
+        assert report["forecast_basis"] == "manager_configured_stage_probability"
+        assert report["opportunity_count"] == 3
+        assert report["priced_opportunity_count"] == 2
+        assert report["unpriced_opportunity_count"] == 1
+        assert report["unknown_probability_opportunity_count"] == 1
+        assert report["unscheduled_opportunity_count"] == 1
+        assert report["weighted_expected_amount_by_currency"] == {"EUR": "1200.000000"}
+        assert report["amount_without_probability_by_currency"] == {"USD": "13250.000000"}
+        assert report["gross_amount_by_currency"] == {
+            "EUR": "2000.000000", "USD": "13250.000000",
+        }
+        qualified = next(stage for stage in report["stages"] if stage["stage_key"] == "qualified")
+        assert qualified["unpriced_opportunity_count"] == 1
+        assert qualified["probability_percent"] == 60
+        proposal = next(stage for stage in report["stages"] if stage["stage_key"] == "proposal")
+        assert proposal["probability_percent"] is None
+        assert proposal["weighted_expected_amount_by_currency"] == {}
 
         invalid_stage = await client.patch(
             f"/api/v1/crm/opportunities/{opportunity_id}",
