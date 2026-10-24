@@ -71,8 +71,8 @@ async def test_target_forecast_alignment_uses_probability_and_separates_currenci
 
     app = make_app(runtime_session_factory, identity)
     headers = {"X-Workspace-ID": str(tenant_id)}
-    period_start = date.today()
-    period_end = period_start + timedelta(days=30)
+    period_start = date.today() - timedelta(days=10)
+    period_end = date.today() + timedelta(days=20)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -178,3 +178,24 @@ async def test_target_forecast_alignment_uses_probability_and_separates_currenci
     assert rows["USD"]["outlook"] == "forecast_below_target"
     assert Decimal(str(rows["EUR"]["weighted_open_pipeline_amount"])) == Decimal("500")
     assert Decimal(str(rows["EUR"]["expected_period_amount"])) == Decimal("500")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        review = await client.get(
+            "/api/v1/crm/sales-targets/decision-review",
+            headers=headers,
+            params={
+                "organization_unit_id": str(root_id),
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+                "as_of_date": date.today().isoformat(),
+            },
+        )
+    assert review.status_code == 200, review.text
+    review_rows = {row["currency"]: row for row in review.json()["items"]}
+    usd_stage = review_rows["USD"]["stage_health"][0]
+    assert usd_stage["stage_key"] == "proposal"
+    assert usd_stage["opportunity_count"] == 1
+    usd_review_item = review_rows["USD"]["review_items"][0]
+    assert "past_expected_close_date" in usd_review_item["issue_codes"]
