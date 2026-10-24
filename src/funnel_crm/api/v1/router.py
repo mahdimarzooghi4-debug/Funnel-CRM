@@ -33,6 +33,7 @@ from funnel_crm.api.v1.crm_communication_consent import router as crm_communicat
 from funnel_crm.api.v1.integrations import router as integrations_router
 from funnel_crm.api.v1.product_connections import router as product_connections_router
 from funnel_crm.api.v1.system import router as system_router
+from funnel_crm.api.v1.crm_metric_catalog import router as crm_metric_catalog_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(system_router)
@@ -64,3 +65,7 @@ router.include_router(crm_duplicates_router)
 router.include_router(crm_custom_field_definitions_router)
 router.include_router(crm_custom_field_values_router)
 router.include_router(crm_communication_consent_router)
+router.include_router(crm_metric_catalog_router)
+
+from funnel_crm.api.v1.crm_metric_catalog import router as crm_metric_catalog_router
+router.include_router(crm_metric_catalog_router)
