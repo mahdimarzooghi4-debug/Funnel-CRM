@@ -184,6 +184,14 @@ _PAGE = """<!doctype html>
           <tbody id="objective-unit-cost"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">پراکندگی هزینهٔ واحد کمپین‌ها</h3>
+      <p class="muted">میانه و دامنهٔ هزینهٔ هر کمپین تک‌ارزی را جداگانه نشان می‌دهد تا تفاوت کمپین‌ها پشت نسبت تجمیعی پنهان نماند. این آمار توصیفی است؛ تعداد نمونه را کنار آن ببینید.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">هدف بازاریابی</th><th scope="col">ارز</th><th scope="col">شاخص</th><th scope="col">تعداد کمپین</th><th scope="col">میانهٔ هزینه</th><th scope="col">کمترین هزینه</th><th scope="col">بیشترین هزینه</th></tr></thead>
+          <tbody id="objective-unit-cost-distribution"></tbody>
+        </table>
+      </div>
       <h3 style="margin-top:22px">هزینهٔ واحد به تفکیک کمپین</h3>
       <p class="muted">برای هر کمپین، هزینهٔ ثبت‌شده بر سرنخ یا تبدیل ثبت‌شده محاسبه می‌شود. مقایسهٔ دو بازه فقط با دادهٔ کافی و ارز یکسان انجام می‌شود؛ این شاخص ROI نیست.</p>
       <div class="table-wrap">
@@ -276,6 +284,7 @@ _CLIENT_SCRIPT = r"""(() => {
     byId("lead-conversion-ratio").replaceChildren();
     byId("campaign-unit-cost").replaceChildren();
     byId("objective-unit-cost").replaceChildren();
+    byId("objective-unit-cost-distribution").replaceChildren();
     byId("scenario-objective-evidence").replaceChildren();
     byId("objective-performance").replaceChildren();
     byId("objective-budget-reconciliation").replaceChildren();
@@ -963,6 +972,55 @@ _CLIENT_SCRIPT = r"""(() => {
       body.appendChild(row);
     });
   }
+  function objectiveUnitCostDistributionRows(report) {
+    const groups = new Map();
+    (report?.campaigns || []).forEach((campaign) => {
+      const objective = campaign.objective_key || "بدون هدف ثبت‌شده";
+      ["leads", "conversions"].forEach((key) => {
+        const result = campaignUnitCostValue(campaign, key);
+        if (result.value === null || result.currency === null) return;
+        const id = JSON.stringify([objective, result.currency, key]);
+        const group = groups.get(id) || { objective, currency: result.currency, key, values: [] };
+        group.values.push(result.value);
+        groups.set(id, group);
+      });
+    });
+    const median = (values) => {
+      const sorted = [...values].sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+    };
+    return Array.from(groups.values()).map((item) => ({
+      objective: item.objective, currency: item.currency, key: item.key,
+      count: item.values.length, median: median(item.values),
+      minimum: Math.min(...item.values), maximum: Math.max(...item.values),
+    })).sort((a, b) =>
+      a.objective.localeCompare(b.objective, "fa") || a.currency.localeCompare(b.currency)
+        || ["leads", "conversions"].indexOf(a.key) - ["leads", "conversions"].indexOf(b.key));
+  }
+  function renderObjectiveUnitCostDistribution(report) {
+    const body = byId("objective-unit-cost-distribution");
+    body.replaceChildren();
+    const rows = objectiveUnitCostDistributionRows(report);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای محاسبهٔ دامنه، دادهٔ هزینه و شاخص کافی موجود نیست.");
+      cell.colSpan = 7;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.objective), element("td", "", item.currency),
+        element("td", "", item.key === "leads" ? "هزینه به‌ازای سرنخ" : "هزینه به‌ازای تبدیل"),
+        element("td", "", formatNumber.format(item.count)),
+        element("td", "", displayAmount(item.median, item.currency)),
+        element("td", "", displayAmount(item.minimum, item.currency)),
+        element("td", "", displayAmount(item.maximum, item.currency)));
+      body.appendChild(row);
+    });
+  }
   function renderObjectiveUnitCosts(report) {
     const body = byId("objective-unit-cost");
     body.replaceChildren();
@@ -1562,6 +1620,12 @@ _CLIENT_SCRIPT = r"""(() => {
         + "؛ پوشش: " + item.observed + " از " + item.campaigns
         + "؛ کمپین چندارزی به ارز خاصی نسبت داده نمی‌شود",
     ]));
+    objectiveUnitCostDistributionRows(result).forEach((item) => rows.push([
+      "پراکندگی هزینهٔ واحد هدف", fields.start, fields.end, "", "",
+      item.objective + " · " + (item.key === "leads" ? "هزینه به‌ازای سرنخ" : "هزینه به‌ازای تبدیل"),
+      item.currency, "میانه و دامنهٔ کمپین", item.median,
+      "تعداد کمپین: " + item.count + "؛ کمترین: " + item.minimum + "؛ بیشترین: " + item.maximum,
+    ]));
     campaignUnitCostRows(result, latestPreviousComparison).forEach((item) => rows.push([
       "هزینهٔ واحد کمپین", fields.start, fields.end, "", item.campaign, item.channel, item.currency,
       item.key === "leads" ? "هزینه به‌ازای سرنخ" : "هزینه به‌ازای تبدیل",
@@ -1648,6 +1712,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderLeadConversionRatio(result, previousResult);
       renderCampaignUnitCosts(result, previousResult);
       renderObjectiveUnitCosts(result);
+      renderObjectiveUnitCostDistribution(result);
       renderScenarioObjectiveEvidence(result);
       renderObjectivePerformance(result, previousResult);
       renderObjectiveBudgetReconciliation(result);

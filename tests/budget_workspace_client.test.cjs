@@ -67,7 +67,7 @@ const ids = [
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
   "target-period-comparison-note", "target-period-comparison",
-  "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence",
+  "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -404,6 +404,31 @@ async function main() {
     new Uint8Array(await downloads.filter((item) => item instanceof Blob).at(-1).arrayBuffer()));
   assert.ok(ratioCsv.includes('"نسبت تبدیل به سرنخ"'));
   assert.ok(ratioCsv.includes('"تبدیل ثبت‌شده به سرنخ ثبت‌شده (درصد)","35.294117647058826"'));
+
+  reportCampaigns = [
+    {
+      campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email", objective_key: "acquisition",
+      recorded_spend_by_currency: { USD: 900 },
+      metrics: { leads: { actual: 12 }, conversions: { actual: 3 } },
+      scenario_allocations: [],
+    },
+    {
+      campaign_id: "campaign-2", campaign_name: "Follow up", channel: "email", objective_key: "acquisition",
+      recorded_spend_by_currency: { USD: 100 },
+      metrics: { leads: { actual: 2 }, conversions: { actual: 2 } },
+      scenario_allocations: [],
+    },
+  ];
+  await elements.get("compare").dispatch("click");
+  assert.deepEqual(elements.get("objective-unit-cost-distribution").children.map((row) =>
+    row.children.map((cell) => cell.textContent)), [
+    ["acquisition", "USD", "هزینه به‌ازای سرنخ", "۲", "۶۲٫۵ USD", "۵۰ USD", "۷۵ USD"],
+    ["acquisition", "USD", "هزینه به‌ازای تبدیل", "۲", "۱۷۵ USD", "۵۰ USD", "۳۰۰ USD"],
+  ]);
+  await elements.get("export-csv").dispatch("click");
+  const distributionCsv = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+    new Uint8Array(await downloads.filter((item) => item instanceof Blob).at(-1).arrayBuffer()));
+  assert.ok(distributionCsv.includes('"پراکندگی هزینهٔ واحد هدف"'));
 
   reportCampaigns = [];
   await elements.get("compare").dispatch("click");
