@@ -8,4 +8,4 @@ GitHub Actions runs this behavior test alongside the PostgreSQL-backed Python su
 
 ## Validation
 
-Pending exact-head CI.
+Exact head `fa80b42131e9640170fdf33bf0d8427dcbfb8995`: GitHub Actions run `39952774105` succeeded; Alembic passed, pytest reported 94 passed with 3 warnings, and the Node browser-client behavior test passed.
