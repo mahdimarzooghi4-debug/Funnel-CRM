@@ -218,6 +218,7 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
                 AuditEvent.target_type.in_([
                     "crm_marketing_learning_review",
                     "crm_marketing_learning_portfolio",
+                        "crm_work_item",
                 ]),
             )
         )).all()
