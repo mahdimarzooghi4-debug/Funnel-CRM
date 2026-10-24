@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, timedelta
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
@@ -11,6 +12,9 @@ from funnel_crm.api.v1.crm_work_items import router
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingCampaign,
+    CRMOpportunity,
+    CRMPipeline,
+    CRMSalesTarget,
     CRMProfileSegment,
     Role,
     RoleAssignment,
@@ -177,3 +181,126 @@ async def test_work_queue_rejects_naive_due_timestamps(
             "due_at": "2026-10-20T12:00:00",
         })
     assert naive_due_date.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_selected_sales_review_items_create_scoped_audited_followups(
+    runtime_session_factory: async_sessionmaker[AsyncSession],
+    tenant_case: dict[str, object],
+) -> None:
+    tenant_id, root_id = tenant_case["workspace_a"], tenant_case["root_a"]
+    identity = tenant_case["identity"]
+    assert isinstance(tenant_id, UUID)
+    assert isinstance(root_id, UUID)
+    assert isinstance(identity, AuthenticatedIdentity)
+    pipeline_id = uuid4()
+    target_id = uuid4()
+    opportunity_id = uuid4()
+    period_start = date.today() - timedelta(days=5)
+    period_end = date.today() + timedelta(days=25)
+
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        context.session.add(CRMPipeline(
+            id=pipeline_id,
+            tenant_id=tenant_id,
+            pipeline_key=f"review-{uuid4().hex[:8]}",
+            entity_kind="opportunity",
+            display_name="Review pipeline",
+            stages=[
+                {"key": "proposal", "name": "Proposal", "position": 1, "outcome_key": "open"},
+                {"key": "won", "name": "Won", "position": 2, "outcome_key": "won"},
+            ],
+            is_default=False,
+        ))
+        context.session.add(CRMSalesTarget(
+            id=target_id,
+            tenant_id=tenant_id,
+            organization_unit_id=root_id,
+            pipeline_id=pipeline_id,
+            period_start=period_start,
+            period_end=period_end,
+            currency="USD",
+            target_amount=Decimal("1000"),
+            created_by_membership_id=context.access.membership_id,
+        ))
+        context.session.add(CRMOpportunity(
+            id=opportunity_id,
+            tenant_id=tenant_id,
+            organization_unit_id=root_id,
+            profile_id=None,
+            pipeline_id=pipeline_id,
+            name="Unpriced proposal",
+            stage_key="proposal",
+            amount=None,
+            currency=None,
+            expected_close_date=None,
+        ))
+        role = Role(tenant_id=tenant_id, name=f"Sales review executor {uuid4().hex[:8]}")
+        context.session.add(role)
+        await context.session.flush()
+        context.session.add_all([
+            RoleAssignment(
+                tenant_id=tenant_id,
+                membership_id=context.access.membership_id,
+                role_id=role.id,
+                organization_unit_id=root_id,
+            ),
+            *[
+                RolePermission(
+                    tenant_id=tenant_id,
+                    role_id=role.id,
+                    permission_key=permission,
+                )
+                for permission in (
+                    "crm.sales_target:view",
+                    "crm.opportunity:view",
+                    "crm.work_item:create",
+                    "crm.work_item:view",
+                )
+            ],
+        ])
+        await context.session.flush()
+
+    app = make_app(runtime_session_factory, identity)
+    headers = {"X-Workspace-ID": str(tenant_id)}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/crm/work-items/from-sales-review",
+            headers=headers,
+            json={
+                "target_id": str(target_id),
+                "opportunity_ids": [str(opportunity_id)],
+                "title_prefix": "Review exception",
+                "priority": "high",
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["created_count"] == 1
+        item = created.json()["items"][0]
+        assert item["opportunity_id"] == str(opportunity_id)
+        assert item["priority"] == "high"
+        assert item["title"] == "Review exception: Unpriced proposal"
+
+        listed = await client.get(
+            "/api/v1/crm/work-items",
+            headers=headers,
+            params={"organization_unit_id": str(root_id), "status": "open"},
+        )
+        assert listed.status_code == 200, listed.text
+        assert [row["id"] for row in listed.json()] == [item["id"]]
+
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        audit = await context.session.scalar(select(AuditEvent).where(
+            AuditEvent.tenant_id == tenant_id,
+            AuditEvent.target_type == "crm_work_item",
+            AuditEvent.target_key == item["id"],
+            AuditEvent.action_key == "crm_work_item.created_from_sales_review",
+        ))
+        assert audit is not None
+        assert audit.after_state["source_sales_target_id"] == str(target_id)
