@@ -1764,3 +1764,86 @@ class CRMMarketingLearningReview(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
     )
+
+
+class CRMWorkItem(Base):
+    """A tenant-scoped future action for a customer, opportunity, or campaign."""
+
+    __tablename__ = "crm_work_items"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_work_items_tenant_id"),
+        CheckConstraint("length(trim(title)) BETWEEN 1 AND 200",
+                        name="ck_crm_work_items_title"),
+        CheckConstraint("priority IN ('low', 'normal', 'high', 'urgent')",
+                        name="ck_crm_work_items_priority"),
+        CheckConstraint(
+            "status IN ('open', 'in_progress', 'completed', 'cancelled')",
+            name="ck_crm_work_items_status",
+        ),
+        CheckConstraint(
+            "profile_id IS NOT NULL OR opportunity_id IS NOT NULL OR campaign_id IS NOT NULL",
+            name="ck_crm_work_items_has_context",
+        ),
+        CheckConstraint(
+            "(status = 'completed' AND completed_at IS NOT NULL) OR "
+            "(status <> 'completed' AND completed_at IS NULL)",
+            name="ck_crm_work_items_completion_timestamp",
+        ),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_work_items_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_work_items_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_work_items_profile_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "opportunity_id"],
+            ["crm_opportunities.tenant_id", "crm_opportunities.id"],
+            name="fk_crm_work_items_opportunity_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_work_items_campaign_same_org", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "assigned_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_work_items_assignee_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_work_items_creator_same_tenant", ondelete="RESTRICT"),
+        Index(
+            "ix_crm_work_items_tenant_org_status_due",
+            "tenant_id", "organization_unit_id", "status", "due_at",
+        ),
+        Index(
+            "ix_crm_work_items_tenant_assignee_status_due",
+            "tenant_id", "assigned_membership_id", "status", "due_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    opportunity_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    campaign_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    assigned_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    priority: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="normal", server_default="normal"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open", server_default="open"
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )

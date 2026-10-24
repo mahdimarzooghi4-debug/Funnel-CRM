@@ -147,6 +147,9 @@ async def test_crm_permission_requires_matching_action_and_inherited_org_scope(
                 "crm.opportunity:view",
                 "crm.opportunity:create",
                 "crm.opportunity:update",
+                "crm.work_item:view",
+                "crm.work_item:create",
+                "crm.work_item:update",
             }
         )
 
