@@ -117,6 +117,56 @@ async def test_support_case_queue_tracks_assignment_deadline_and_status(
         assert page["overdue_count"] == 1
         assert page["items"][0]["id"] == case_id
 
+        note = await client.post(
+            f"/api/v1/crm/support-cases/{case_id}/entries",
+            headers=headers,
+            json={"entry_kind": "internal_note", "body": "Checked the order source"},
+        )
+        assert note.status_code == 201, note.text
+        response_record = await client.post(
+            f"/api/v1/crm/support-cases/{case_id}/entries",
+            headers=headers,
+            json={"entry_kind": "response_record", "body": "Sent an update to the customer"},
+        )
+        assert response_record.status_code == 201, response_record.text
+        assert response_record.json()["entry_kind"] == "response_record"
+
+        entries = await client.get(
+            f"/api/v1/crm/support-cases/{case_id}/entries",
+            headers=headers,
+        )
+        assert entries.status_code == 200, entries.text
+        assert [item["entry_kind"] for item in entries.json()["items"]] == [
+            "internal_note", "response_record",
+        ]
+        assert entries.json()["total"] == 2
+
+        sla = await client.get(
+            "/api/v1/crm/support-cases/reports/sla",
+            headers=headers,
+            params={
+                "organization_unit_id": str(root_id),
+                "period_start": now.date().isoformat(),
+                "period_end": now.date().isoformat(),
+                "as_of": now.isoformat(),
+            },
+        )
+        assert sla.status_code == 200, sla.text
+        sla_report = sla.json()
+        assert sla_report["case_count"] == 1
+        assert sla_report["overdue_open_count"] == 1
+        assert sla_report["first_response_recorded_count"] == 1
+        assert sla_report["late_first_response_count"] == 1
+        assert sla_report["on_time_first_response_count"] == 0
+        assert sla_report["first_response_sla_rate_percent"] == 0.0
+
+        current = await client.get(
+            f"/api/v1/crm/support-cases?organization_unit_id={root_id}",
+            headers=headers,
+        )
+        assert current.status_code == 200, current.text
+        assert current.json()["items"][0]["first_response_at"] is not None
+
         progressed = await client.patch(
             f"/api/v1/crm/support-cases/{case_id}",
             headers=headers,
