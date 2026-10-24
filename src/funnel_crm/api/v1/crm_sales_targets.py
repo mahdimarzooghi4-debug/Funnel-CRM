@@ -11,7 +11,7 @@ from sqlalchemy import false, func, or_, select
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
-    CRMCustomerActivity, CRMMarketingCampaign, CRMOpportunity, CRMPipeline,
+    AuditEvent, CRMCustomerActivity, CRMMarketingCampaign, CRMOpportunity, CRMPipeline,
     CRMSalesTarget, CRMWorkItem, OrganizationUnit,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
