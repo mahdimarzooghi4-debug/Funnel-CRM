@@ -145,7 +145,7 @@ async def sales_target_performance(
         pipeline = await context.session.get(CRMPipeline, target.pipeline_id)
         won_stage_keys = [
             stage.get("key") for stage in pipeline.stages
-            if isinstance(stage, dict) and stage.get("outcome") == "won"
+            if isinstance(stage, dict) and stage.get("outcome_key") == "won"
         ] if pipeline else []
         actual = Decimal("0")
         count = 0
@@ -154,7 +154,7 @@ async def sales_target_performance(
                 CRMOpportunity.tenant_id == target.tenant_id,
                 CRMOpportunity.organization_unit_id == target.organization_unit_id,
                 CRMOpportunity.pipeline_id == target.pipeline_id,
-                CRMOpportunity.current_stage_key.in_(won_stage_keys),
+                CRMOpportunity.stage_key.in_(won_stage_keys),
                 CRMOpportunity.currency == target.currency,
                 CRMOpportunity.expected_close_date >= target.period_start,
                 CRMOpportunity.expected_close_date <= target.period_end,
