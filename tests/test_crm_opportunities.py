@@ -79,6 +79,8 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
                 "stages": [
                     {"key": "qualified", "name": "Qualified", "position": 1},
                     {"key": "proposal", "name": "Proposal", "position": 2},
+                    {"key": "won", "name": "Won", "position": 3, "outcome_key": "won"},
+                    {"key": "lost", "name": "Lost", "position": 4, "outcome_key": "lost"},
                 ],
             },
         )
@@ -251,6 +253,35 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert overdue_only.json()["total"] == 1
         assert overdue_only.json()["counts_by_state"]["overdue"] == 1
 
+        closed_won = await client.post(
+            "/api/v1/crm/opportunities",
+            headers=headers,
+            json={
+                "organization_unit_id": str(root_id),
+                "pipeline_id": pipeline_id,
+                "name": "Retail expansion won",
+                "stage_key": "won",
+                "amount": "7000",
+                "currency": "USD",
+                "expected_close_date": "2026-12-20",
+            },
+        )
+        assert closed_won.status_code == 201, closed_won.text
+        closed_lost = await client.post(
+            "/api/v1/crm/opportunities",
+            headers=headers,
+            json={
+                "organization_unit_id": str(root_id),
+                "pipeline_id": pipeline_id,
+                "name": "Retail expansion lost",
+                "stage_key": "lost",
+                "amount": "3000",
+                "currency": "USD",
+                "expected_close_date": "2026-12-21",
+            },
+        )
+        assert closed_lost.status_code == 201, closed_lost.text
+
         forecast = await client.get(
             "/api/v1/crm/sales-forecast/opportunities",
             headers=headers,
@@ -265,6 +296,8 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         report = forecast.json()
         assert report["forecast_basis"] == "manager_configured_stage_probability"
         assert report["opportunity_count"] == 3
+        assert report["closed_won_count"] == 1
+        assert report["closed_lost_count"] == 1
         assert report["priced_opportunity_count"] == 2
         assert report["unpriced_opportunity_count"] == 1
         assert report["unknown_probability_opportunity_count"] == 1

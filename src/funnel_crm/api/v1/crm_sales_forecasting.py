@@ -32,6 +32,7 @@ class StageProbabilityUpdate(BaseModel):
 class ForecastStage(BaseModel):
     stage_key: str
     stage_name: str
+    outcome_key: str
     probability_percent: int | None
     opportunity_count: int
     unpriced_opportunity_count: int
@@ -47,6 +48,8 @@ class SalesForecast(BaseModel):
     period_end: date
     forecast_basis: str = "manager_configured_stage_probability"
     opportunity_count: int
+    closed_won_count: int
+    closed_lost_count: int
     priced_opportunity_count: int
     unpriced_opportunity_count: int
     unknown_probability_opportunity_count: int
@@ -168,11 +171,9 @@ async def get_sales_forecast(
         CRMOpportunity.expected_close_date >= period_start,
         CRMOpportunity.expected_close_date <= period_end,
     ).order_by(CRMOpportunity.expected_close_date, CRMOpportunity.id))).all()
-    unscheduled_count = int(await context.session.scalar(
-        select(func.count()).select_from(CRMOpportunity).where(
-            *base_filters, CRMOpportunity.expected_close_date.is_(None)
-        )
-    ) or 0)
+    unscheduled_rows = (await context.session.scalars(select(CRMOpportunity).where(
+        *base_filters, CRMOpportunity.expected_close_date.is_(None)
+    ))).all()
 
     stage_config = {
         stage["key"]: stage
@@ -184,17 +185,26 @@ async def get_sales_forecast(
     total_weighted: dict[str, Decimal] = {}
     total_unknown: dict[str, Decimal] = {}
     priced_count = unpriced_count = unknown_probability_count = 0
+    closed_won_count = closed_lost_count = 0
     for key, config in stage_config.items():
         stage_rows = [row for row in rows if row.stage_key == key]
+        outcome_key = config.get("outcome_key", "open")
+        if outcome_key not in ("open", "won", "lost"):
+            outcome_key = "open"
+        if outcome_key == "won":
+            closed_won_count += len(stage_rows)
+        elif outcome_key == "lost":
+            closed_lost_count += len(stage_rows)
         probability = config.get("probability_percent")
         if not isinstance(probability, int) or isinstance(probability, bool) or not 0 <= probability <= 100:
             probability = None
         gross: dict[str, Decimal] = {}
         weighted: dict[str, Decimal] = {}
         stage_unpriced = 0
-        stage_unknown = len(stage_rows) if probability is None else 0
-        unknown_probability_count += stage_unknown
-        for row in stage_rows:
+        stage_unknown = len(stage_rows) if probability is None and outcome_key == "open" else 0
+        if outcome_key == "open":
+            unknown_probability_count += stage_unknown
+        for row in stage_rows if outcome_key == "open" else []:
             if row.amount is None or row.currency is None:
                 stage_unpriced += 1
                 unpriced_count += 1
@@ -212,7 +222,8 @@ async def get_sales_forecast(
         results.append({
             "stage_key": key,
             "stage_name": str(config.get("name", key)),
-            "probability_percent": probability,
+            "outcome_key": outcome_key,
+            "probability_percent": probability if outcome_key == "open" else None,
             "opportunity_count": len(stage_rows),
             "unpriced_opportunity_count": stage_unpriced,
             "unknown_probability_opportunity_count": stage_unknown,
@@ -220,6 +231,9 @@ async def get_sales_forecast(
             "weighted_expected_amount_by_currency": weighted,
         })
 
+    active_rows = [row for row in rows if stage_config.get(row.stage_key, {}).get("outcome_key", "open") == "open"]
+    terminal_keys = {key for key, config in stage_config.items() if config.get("outcome_key") in ("won", "lost")}
+    unscheduled_count = sum(row.stage_key not in terminal_keys for row in unscheduled_rows)
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id,
         actor_kind="user", actor_identity_id=context.access.identity_id,
@@ -231,7 +245,8 @@ async def get_sales_forecast(
         before_state=None,
         after_state={
             "period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
-            "opportunity_count": len(rows), "unscheduled_opportunity_count": unscheduled_count,
+            "opportunity_count": len(active_rows), "closed_won_count": closed_won_count,
+            "closed_lost_count": closed_lost_count, "unscheduled_opportunity_count": unscheduled_count,
             "organization_unit_id": str(organization_unit_id) if organization_unit_id else None,
         },
         correlation_id=None,
@@ -240,7 +255,8 @@ async def get_sales_forecast(
     return SalesForecast(
         pipeline_id=pipeline.id, organization_unit_id=organization_unit_id,
         period_start=period_start, period_end=period_end,
-        opportunity_count=len(rows), priced_opportunity_count=priced_count,
+        opportunity_count=len(active_rows), closed_won_count=closed_won_count,
+        closed_lost_count=closed_lost_count, priced_opportunity_count=priced_count,
         unpriced_opportunity_count=unpriced_count,
         unknown_probability_opportunity_count=unknown_probability_count,
         unscheduled_opportunity_count=unscheduled_count,

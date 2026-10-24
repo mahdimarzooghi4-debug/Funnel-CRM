@@ -30,6 +30,7 @@ class OpportunityStageInput(BaseModel):
     key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
     name: str = Field(min_length=1, max_length=120)
     position: int = Field(ge=1, le=100)
+    outcome_key: Literal["open", "won", "lost"] = "open"
 
     @field_validator("name")
     @classmethod
@@ -592,10 +593,26 @@ async def list_opportunity_stage_aging(
     if stage_key is not None:
         filters.append(CRMOpportunity.stage_key == stage_key)
 
+    pipeline_filters = [
+        CRMPipeline.tenant_id == context.access.tenant_id,
+        CRMPipeline.entity_kind == "opportunity",
+    ]
+    if pipeline_id is not None:
+        pipeline_filters.append(CRMPipeline.id == pipeline_id)
+    pipelines = (await context.session.scalars(
+        select(CRMPipeline).where(*pipeline_filters)
+    )).all()
+    terminal_stages = {
+        (pipeline.id, stage.get("key"))
+        for pipeline in pipelines
+        for stage in pipeline.stages
+        if isinstance(stage, dict) and stage.get("outcome_key") in ("won", "lost")
+    }
     opportunities = (await context.session.scalars(
         select(CRMOpportunity).where(*filters)
         .order_by(CRMOpportunity.stage_key, CRMOpportunity.updated_at, CRMOpportunity.id)
     )).all()
+    opportunities = [row for row in opportunities if (row.pipeline_id, row.stage_key) not in terminal_stages]
     opportunity_ids = [row.id for row in opportunities]
     events = []
     if opportunity_ids:
