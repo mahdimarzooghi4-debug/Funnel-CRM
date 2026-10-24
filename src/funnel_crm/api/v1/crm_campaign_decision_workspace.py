@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select, tuple_
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
+from funnel_crm.api.v1.crm_metric_catalog import MetricDefinition, get_metric_definition
 from funnel_crm.api.v1.crm_campaign_targets import (
     CampaignTargetRead,
     evaluate_plan_metrics,
@@ -78,6 +79,8 @@ class CampaignDecisionWorkspace(BaseModel):
     period_calendar_days: int
     coverage_basis: str
     metrics: dict[str, DecisionMetric]
+    metric_definitions: dict[str, MetricDefinition]
+    coverage_definition: MetricDefinition
     commerce_outcomes_by_currency: list[DecisionCommerceCurrency]
     interpretation: str
     causal_attribution_applied: bool
@@ -317,6 +320,15 @@ async def get_campaign_decision_workspace(
     ))
     await context.session.flush()
 
+    metric_definitions: dict[str, MetricDefinition] = {}
+    for metric_key in metrics:
+        definition_key = "actual_spend" if metric_key == "spend" else metric_key
+        definition = get_metric_definition(definition_key)
+        if definition is not None:
+            metric_definitions[metric_key] = definition
+    coverage_definition = get_metric_definition("recorded_day_coverage")
+    assert coverage_definition is not None
+
     return CampaignDecisionWorkspace(
         campaign_id=campaign.id,
         campaign_name=campaign.name,
@@ -331,6 +343,8 @@ async def get_campaign_decision_workspace(
             "in the target period. It shows data presence, not channel reporting completeness."
         ),
         metrics=metrics,
+        metric_definitions=metric_definitions,
+        coverage_definition=coverage_definition,
         commerce_outcomes_by_currency=currency_metrics,
         interpretation=(
             "Metrics support manager review and do not issue an automatic pause, continue, "
