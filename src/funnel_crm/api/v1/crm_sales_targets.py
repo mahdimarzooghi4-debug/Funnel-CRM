@@ -128,6 +128,8 @@ async def update_sales_target(
 ) -> dict:
     if not payload.model_fields_set:
         raise HTTPException(status_code=422, detail="Provide at least one target field")
+    if any(getattr(payload, field) is None for field in payload.model_fields_set):
+        raise HTTPException(status_code=422, detail="Sales target fields cannot be null")
     target = await context.session.scalar(select(CRMSalesTarget).where(
         CRMSalesTarget.tenant_id == context.access.tenant_id,
         CRMSalesTarget.id == target_id,
