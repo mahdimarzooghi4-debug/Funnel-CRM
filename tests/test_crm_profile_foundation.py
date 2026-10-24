@@ -142,9 +142,16 @@ async def test_workspace_settings_and_customer_profile_are_tenant_scoped_and_aud
                 )
             )
         ).all()
-        by_target = {event.target_key: event for event in events}
-        assert by_target[str(tenant_id)].action_key == "workspace_crm_settings.updated"
-        assert by_target[str(tenant_id)].actor_identity_id == context.access.identity_id
+        by_target = {event.target_key: event for event in events if event.target_key != str(tenant_id)}
+        settings_events = [event for event in events if event.target_key == str(tenant_id)]
+        assert {event.action_key for event in settings_events} >= {
+            "workspace_crm_settings.created",
+            "workspace_crm_settings.updated",
+        }
+        updated_settings = next(
+            event for event in settings_events if event.action_key == "workspace_crm_settings.updated"
+        )
+        assert updated_settings.actor_identity_id == context.access.identity_id
         assert by_target[str(pipeline_id)].action_key == "crm_pipeline.created"
         profile_event = by_target[str(profile_id)]
         assert profile_event.action_key == "crm_profile.created"
