@@ -1766,6 +1766,64 @@ class CRMMarketingLearningReview(Base):
     )
 
 
+
+class CRMCustomerSupportCase(Base):
+    """Organization-scoped customer service case with an auditable response deadline."""
+
+    __tablename__ = "crm_support_cases"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_support_cases_tenant_id"),
+        CheckConstraint("length(trim(subject)) BETWEEN 1 AND 200",
+                        name="ck_crm_support_cases_subject"),
+        CheckConstraint(
+            "priority IN ('low', 'normal', 'high', 'urgent')",
+            name="ck_crm_support_cases_priority",
+        ),
+        CheckConstraint(
+            "status IN ('open', 'in_progress', 'waiting_customer', 'resolved', 'closed')",
+            name="ck_crm_support_cases_status",
+        ),
+        CheckConstraint(
+            "(status IN ('resolved', 'closed') AND resolved_at IS NOT NULL) OR "
+            "(status NOT IN ('resolved', 'closed') AND resolved_at IS NULL)",
+            name="ck_crm_support_cases_resolution_timestamp",
+        ),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_support_cases_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_support_cases_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_support_cases_profile_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "assigned_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_support_cases_assignee_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_support_cases_creator_same_tenant", ondelete="RESTRICT"),
+        Index("ix_crm_support_cases_tenant_org_status_due",
+              "tenant_id", "organization_unit_id", "status", "response_due_at"),
+        Index("ix_crm_support_cases_tenant_assignee_status_due",
+              "tenant_id", "assigned_membership_id", "status", "response_due_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    assigned_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, server_default="open")
+    priority: Mapped[str] = mapped_column(String(16), nullable=False, server_default="normal")
+    response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
 class CRMWorkItem(Base):
     """A tenant-scoped future action for a customer, opportunity, or campaign."""
 
