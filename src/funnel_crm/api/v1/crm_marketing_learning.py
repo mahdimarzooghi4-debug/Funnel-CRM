@@ -6,11 +6,12 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_campaign_targets import evaluate_plan_metrics
-from funnel_crm.platform.crm_authorization import has_crm_permission
+from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingCampaign,
@@ -88,6 +89,29 @@ class LearningReviewDetail(BaseModel):
     review: LearningReviewRead
     baseline: TargetEvaluationSnapshot
     follow_up: TargetEvaluationSnapshot | None
+
+
+class LearningPortfolioItem(BaseModel):
+    review: LearningReviewRead
+    campaign_name: str
+    baseline_period_start: date
+    baseline_period_end: date
+    follow_up_period_start: date | None
+    follow_up_period_end: date | None
+    learning_state: Literal["awaiting_follow_up", "follow_up_evaluated"]
+
+
+class LearningPortfolioReport(BaseModel):
+    generated_at: datetime
+    period_start: date | None
+    period_end: date | None
+    status_filter: Literal["planned", "evaluated"] | None
+    total_count: int
+    planned_count: int
+    evaluated_count: int
+    has_more: bool
+    items: list[LearningPortfolioItem]
+    basis: str
 
 
 async def _campaign(
@@ -256,6 +280,117 @@ async def list_learning_reviews(
         ):
             visible.append(LearningReviewRead.model_validate(review))
     return visible
+
+
+@router.get("/portfolio", response_model=LearningPortfolioReport,
+            operation_id="getCRMMarketingLearningPortfolio")
+async def get_learning_portfolio(
+    period_start: date | None = None,
+    period_end: date | None = None,
+    status: Literal["planned", "evaluated"] | None = Query(default=None),
+    organization_unit_id: UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> LearningPortfolioReport:
+    if period_start is not None and period_end is not None and period_start > period_end:
+        raise HTTPException(status_code=422, detail="period_start must not be after period_end")
+    if period_start is not None and period_end is not None and (period_end - period_start).days > 365:
+        raise HTTPException(status_code=422, detail="Reports are limited to 366 calendar days")
+    scopes = crm_scope_ids(context, permission_key="crm.campaign:view")
+
+    follow_up_plan = aliased(CRMMarketingCampaignTargetPlan)
+    review_filters = [
+        CRMMarketingLearningReview.tenant_id == context.access.tenant_id,
+        CRMMarketingLearningReview.organization_unit_id.in_(scopes),
+    ]
+    if organization_unit_id is not None:
+        review_filters.append(CRMMarketingLearningReview.organization_unit_id == organization_unit_id)
+    if period_start is not None:
+        review_filters.append(CRMMarketingCampaignTargetPlan.period_end >= period_start)
+    if period_end is not None:
+        review_filters.append(CRMMarketingCampaignTargetPlan.period_start <= period_end)
+    filters = list(review_filters)
+    if status is not None:
+        filters.append(CRMMarketingLearningReview.status == status)
+    base = (
+        select(CRMMarketingLearningReview, CRMMarketingCampaign.name,
+               CRMMarketingCampaignTargetPlan.period_start,
+               CRMMarketingCampaignTargetPlan.period_end,
+               follow_up_plan.period_start, follow_up_plan.period_end)
+        .join(CRMMarketingCampaign,
+              (CRMMarketingCampaign.tenant_id == CRMMarketingLearningReview.tenant_id)
+              & (CRMMarketingCampaign.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+              & (CRMMarketingCampaign.id == CRMMarketingLearningReview.campaign_id))
+        .join(CRMMarketingCampaignTargetPlan,
+              (CRMMarketingCampaignTargetPlan.tenant_id == CRMMarketingLearningReview.tenant_id)
+              & (CRMMarketingCampaignTargetPlan.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+              & (CRMMarketingCampaignTargetPlan.campaign_id == CRMMarketingLearningReview.campaign_id)
+              & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
+        .outerjoin(follow_up_plan,
+              (follow_up_plan.tenant_id == CRMMarketingLearningReview.tenant_id)
+              & (follow_up_plan.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+              & (follow_up_plan.campaign_id == CRMMarketingLearningReview.campaign_id)
+              & (follow_up_plan.id == CRMMarketingLearningReview.follow_up_target_plan_id))
+        .where(*filters)
+    )
+    count_stmt = select(func.count(CRMMarketingLearningReview.id)).join(
+        CRMMarketingCampaignTargetPlan,
+        (CRMMarketingCampaignTargetPlan.tenant_id == CRMMarketingLearningReview.tenant_id)
+        & (CRMMarketingCampaignTargetPlan.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+        & (CRMMarketingCampaignTargetPlan.campaign_id == CRMMarketingLearningReview.campaign_id)
+        & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id),
+    ).where(*filters)
+    total = int(await context.session.scalar(count_stmt) or 0)
+    status_counts = (await context.session.execute(
+        select(CRMMarketingLearningReview.status, func.count(CRMMarketingLearningReview.id))
+        .join(CRMMarketingCampaignTargetPlan,
+              (CRMMarketingCampaignTargetPlan.tenant_id == CRMMarketingLearningReview.tenant_id)
+              & (CRMMarketingCampaignTargetPlan.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+              & (CRMMarketingCampaignTargetPlan.campaign_id == CRMMarketingLearningReview.campaign_id)
+              & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
+        .where(*review_filters).group_by(CRMMarketingLearningReview.status)
+    )).all()
+    rows = (await context.session.execute(
+        base.order_by(CRMMarketingLearningReview.status, CRMMarketingLearningReview.updated_at.desc(),
+                      CRMMarketingLearningReview.id)
+        .limit(limit).offset(offset)
+    )).all()
+    items = [LearningPortfolioItem(
+        review=LearningReviewRead.model_validate(row[0]),
+        campaign_name=row[1],
+        baseline_period_start=row[2],
+        baseline_period_end=row[3],
+        follow_up_period_start=row[4],
+        follow_up_period_end=row[5],
+        learning_state="follow_up_evaluated" if row[0].status == "evaluated" else "awaiting_follow_up",
+    ) for row in rows]
+    counts = {key: int(value) for key, value in status_counts}
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_learning.portfolio_viewed",
+        target_type="crm_marketing_learning_portfolio",
+        target_key=str(organization_unit_id or context.access.tenant_id),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={"period_start": period_start.isoformat() if period_start else None,
+                     "period_end": period_end.isoformat() if period_end else None,
+                     "status": status, "total_count": total, "returned_count": len(items),
+                     "offset": offset, "limit": limit},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return LearningPortfolioReport(
+        generated_at=datetime.now(timezone.utc), period_start=period_start,
+        period_end=period_end, status_filter=status, total_count=total,
+        planned_count=counts.get("planned", 0), evaluated_count=counts.get("evaluated", 0),
+        has_more=offset + len(items) < total, items=items,
+        basis=("Manager-authored assessments, corrective actions, and follow-up records linked to "
+               "their baseline and follow-up campaign target periods; observed changes do not establish causality."),
+    )
 
 
 @router.get("/{review_id}", response_model=LearningReviewDetail,
