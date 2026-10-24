@@ -205,7 +205,6 @@ async def test_customer_lifecycle_analytics_connects_current_stage_to_period_fac
         assert len(audits) == 1
         await context.session.execute(delete(CRMOpportunity).where(
             CRMOpportunity.tenant_id == tenant_id,
-            CRMOpportunity.profile_id.in_([customer_one, customer_two, lead]),
         ))
         await context.session.execute(delete(CRMProductCommerceEvent).where(
             CRMProductCommerceEvent.tenant_id == tenant_id,
