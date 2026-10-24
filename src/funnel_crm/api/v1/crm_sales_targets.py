@@ -263,3 +263,111 @@ async def sales_target_performance(
         "pacing_method": "linear_proration_by_calendar_day",
         "currency_basis": "Each target is reported in its own currency; currencies are never combined.",
     }
+
+
+@router.get("/forecast-alignment", operation_id="getCRMSalesTargetForecastAlignment")
+async def sales_target_forecast_alignment(
+    organization_unit_id: UUID | None = None,
+    period_start: date | None = None,
+    period_end: date | None = None,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    """Compare each authorized target with current won amount and weighted open pipeline."""
+    if (period_start is None) != (period_end is None):
+        raise HTTPException(status_code=422, detail="Provide both period boundaries")
+    if period_start and (period_start > period_end or (period_end - period_start).days > 365):
+        raise HTTPException(status_code=422, detail="Target period must be ordered and no longer than 366 days")
+    scopes = crm_scope_ids(context, permission_key="crm.sales_target:view")
+    filters = [
+        CRMSalesTarget.tenant_id == context.access.tenant_id,
+        CRMSalesTarget.organization_unit_id.in_(scopes),
+    ]
+    if organization_unit_id is not None:
+        await _authorized(context, "crm.sales_target:view", organization_unit_id)
+        filters.append(CRMSalesTarget.organization_unit_id == organization_unit_id)
+    if period_start is not None:
+        filters.extend([
+            CRMSalesTarget.period_start >= period_start,
+            CRMSalesTarget.period_end <= period_end,
+        ])
+    targets = list(await context.session.scalars(select(CRMSalesTarget).where(*filters).order_by(
+        CRMSalesTarget.period_start, CRMSalesTarget.organization_unit_id,
+        CRMSalesTarget.pipeline_id, CRMSalesTarget.currency,
+    ).limit(500)))
+    items = []
+    for target in targets:
+        pipeline = await context.session.scalar(select(CRMPipeline).where(
+            CRMPipeline.tenant_id == target.tenant_id,
+            CRMPipeline.id == target.pipeline_id,
+        ))
+        stage_config = {
+            stage["key"]: stage
+            for stage in (pipeline.stages if pipeline else [])
+            if isinstance(stage, dict) and isinstance(stage.get("key"), str)
+        }
+        opportunity_rows = list(await context.session.scalars(select(CRMOpportunity).where(
+            CRMOpportunity.tenant_id == target.tenant_id,
+            CRMOpportunity.organization_unit_id == target.organization_unit_id,
+            CRMOpportunity.pipeline_id == target.pipeline_id,
+            CRMOpportunity.expected_close_date >= target.period_start,
+            CRMOpportunity.expected_close_date <= target.period_end,
+        )))
+        won_amount = Decimal("0")
+        open_gross = Decimal("0")
+        weighted_open = Decimal("0")
+        won_count = 0
+        open_count = 0
+        unpriced_open_count = 0
+        unknown_probability_count = 0
+        for opportunity in opportunity_rows:
+            config = stage_config.get(opportunity.stage_key, {})
+            outcome = config.get("outcome_key", "open")
+            if outcome == "won":
+                if opportunity.currency == target.currency:
+                    won_count += 1
+                    won_amount += opportunity.amount or Decimal("0")
+                continue
+            if outcome != "open":
+                continue
+            if opportunity.amount is None or opportunity.currency is None:
+                unpriced_open_count += 1
+                continue
+            if opportunity.currency != target.currency:
+                continue
+            open_count += 1
+            open_gross += opportunity.amount
+            probability = config.get("probability_percent")
+            if not isinstance(probability, int) or not 0 <= probability <= 100:
+                unknown_probability_count += 1
+                continue
+            weighted_open += opportunity.amount * Decimal(probability) / Decimal("100")
+        forecast = won_amount + weighted_open
+        gap = max(target.target_amount - forecast, Decimal("0"))
+        if won_amount >= target.target_amount:
+            outlook = "target_achieved"
+        elif forecast >= target.target_amount:
+            outlook = "forecast_covers_target"
+        elif unknown_probability_count or unpriced_open_count:
+            outlook = "forecast_incomplete"
+        else:
+            outlook = "forecast_below_target"
+        items.append({
+            **_serialize(target),
+            "won_amount": won_amount,
+            "won_opportunity_count": won_count,
+            "open_pipeline_gross_amount": open_gross,
+            "open_opportunity_count": open_count,
+            "weighted_open_pipeline_amount": weighted_open.quantize(Decimal("0.01")),
+            "expected_period_amount": forecast.quantize(Decimal("0.01")),
+            "target_gap_amount": gap.quantize(Decimal("0.01")),
+            "target_attainment_percent": (won_amount / target.target_amount * Decimal("100")).quantize(Decimal("0.01")),
+            "forecast_attainment_percent": (forecast / target.target_amount * Decimal("100")).quantize(Decimal("0.01")),
+            "unpriced_open_opportunity_count": unpriced_open_count,
+            "unknown_probability_opportunity_count": unknown_probability_count,
+            "outlook": outlook,
+            "forecast_basis": "current_won_amount_plus_manager_probability_weighted_open_pipeline",
+        })
+    return {
+        "items": items,
+        "currency_basis": "Targets and forecasts are compared only within the same currency.",
+    }
