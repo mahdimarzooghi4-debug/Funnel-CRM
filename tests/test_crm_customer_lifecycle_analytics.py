@@ -211,10 +211,6 @@ async def test_customer_lifecycle_analytics_connects_current_stage_to_period_fac
             CRMProductCommerceEvent.tenant_id == tenant_id,
             CRMProductCommerceEvent.profile_id.in_([customer_one, customer_two, lead]),
         ))
-        await context.session.execute(delete(CRMCustomerActivity).where(
-            CRMCustomerActivity.tenant_id == tenant_id,
-            CRMCustomerActivity.profile_id.in_([customer_one, customer_two, lead]),
-        ))
         await context.session.execute(delete(CRMMarketingCampaign).where(
             CRMMarketingCampaign.tenant_id == tenant_id,
             CRMMarketingCampaign.id == campaign_id,
