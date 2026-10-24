@@ -8,6 +8,7 @@ from funnel_crm.api.v1.crm_campaign_influence import router as crm_campaign_infl
 from funnel_crm.api.v1.crm_commerce_outcomes import router as crm_commerce_outcomes_router
 from funnel_crm.api.v1.crm_campaign_commerce_efficiency import router as crm_campaign_commerce_efficiency_router
 from funnel_crm.api.v1.crm_sales_forecasting import router as crm_sales_forecasting_router
+from funnel_crm.api.v1.crm_sales_targets import router as crm_sales_targets_router
 from funnel_crm.api.v1.crm_work_items import router as crm_work_items_router
 from funnel_crm.api.v1.crm_support_cases import router as crm_support_cases_router
 from funnel_crm.api.v1.crm_marketing_learning import router as crm_marketing_learning_router
@@ -49,6 +50,7 @@ router.include_router(crm_campaign_influence_router)
 router.include_router(crm_commerce_outcomes_router)
 router.include_router(crm_campaign_commerce_efficiency_router)
 router.include_router(crm_sales_forecasting_router)
+router.include_router(crm_sales_targets_router)
 router.include_router(crm_work_items_router)
 router.include_router(crm_support_cases_router)
 router.include_router(crm_marketing_learning_router)

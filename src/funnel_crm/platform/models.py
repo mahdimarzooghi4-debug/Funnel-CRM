@@ -2012,3 +2012,50 @@ class CRMProductCommerceEvent(Base):
         default=lambda: datetime.now(timezone.utc), server_default=text("now()"),
     )
 
+
+
+
+class CRMSalesTarget(Base):
+    """Organization and pipeline sales amount target for a date period and currency."""
+
+    __tablename__ = "crm_sales_targets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_sales_targets_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "organization_unit_id", "pipeline_id",
+            "period_start", "period_end", "currency",
+            name="uq_crm_sales_targets_period_currency",
+        ),
+        CheckConstraint("target_amount > 0", name="ck_crm_sales_targets_positive_amount"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_sales_targets_currency"),
+        CheckConstraint("period_start <= period_end", name="ck_crm_sales_targets_period"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_sales_targets_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_sales_targets_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "pipeline_id"],
+            ["crm_pipelines.tenant_id", "crm_pipelines.id"],
+            name="fk_crm_sales_targets_pipeline_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_sales_targets_creator_same_tenant", ondelete="RESTRICT"),
+        Index("ix_crm_sales_targets_tenant_org_period",
+              "tenant_id", "organization_unit_id", "period_start", "period_end"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    pipeline_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    target_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )

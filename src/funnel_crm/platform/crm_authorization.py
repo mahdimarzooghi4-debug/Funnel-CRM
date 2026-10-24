@@ -50,6 +50,8 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.support_case:create",
         "crm.support_case:update",
         "crm.commerce_event:view",
+        "crm.sales_target:view",
+        "crm.sales_target:manage",
     }
 )
 
