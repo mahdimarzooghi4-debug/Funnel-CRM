@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_work_items import router
+from funnel_crm.api.v1.crm_sales_targets import router as sales_targets_router
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingCampaign,
@@ -33,6 +34,7 @@ def make_app(session_factory: async_sessionmaker[AsyncSession], identity: Authen
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(sales_targets_router, prefix="/api/v1")
     return app
 
 
@@ -293,6 +295,19 @@ async def test_selected_sales_review_items_create_scoped_audited_followups(
         )
         assert listed.status_code == 200, listed.text
         assert [row["id"] for row in listed.json()] == [item["id"]]
+
+        execution = await client.get(
+            "/api/v1/crm/sales-targets/execution-review",
+            headers=headers,
+            params={"organization_unit_id": str(root_id), "as_of_date": date.today().isoformat()},
+        )
+        assert execution.status_code == 200, execution.text
+        summary = execution.json()["items"][0]
+        assert summary["opportunity_count"] == 1
+        assert summary["opportunities_without_work_item_count"] == 0
+        assert Decimal(str(summary["follow_up_coverage_percent"])) == Decimal("100.00")
+        assert summary["work_item_count_by_status"]["open"] == 1
+        assert summary["unassigned_active_work_item_count"] == 1
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
