@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_customer_lifecycle_analytics import router
@@ -203,3 +203,35 @@ async def test_customer_lifecycle_analytics_connects_current_stage_to_period_fac
             AuditEvent.action_key == "crm_customer_lifecycle.analytics_viewed",
         ))).all()
         assert len(audits) == 1
+        await context.session.execute(delete(CRMOpportunity).where(
+            CRMOpportunity.tenant_id == tenant_id,
+            CRMOpportunity.profile_id.in_([customer_one, customer_two, lead]),
+        ))
+        await context.session.execute(delete(CRMProductCommerceEvent).where(
+            CRMProductCommerceEvent.tenant_id == tenant_id,
+            CRMProductCommerceEvent.profile_id.in_([customer_one, customer_two, lead]),
+        ))
+        await context.session.execute(delete(CRMCustomerActivity).where(
+            CRMCustomerActivity.tenant_id == tenant_id,
+            CRMCustomerActivity.profile_id.in_([customer_one, customer_two, lead]),
+        ))
+        await context.session.execute(delete(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == tenant_id,
+            CRMMarketingCampaign.id == campaign_id,
+        ))
+        await context.session.execute(delete(CRMProfile).where(
+            CRMProfile.tenant_id == tenant_id,
+            CRMProfile.id.in_([customer_one, customer_two, lead]),
+        ))
+        await context.session.execute(delete(TenantRecord).where(
+            TenantRecord.tenant_id == tenant_id,
+            TenantRecord.id.in_([customer_one, customer_two, lead]),
+        ))
+        await context.session.execute(delete(CRMProfileSegment).where(
+            CRMProfileSegment.tenant_id == tenant_id,
+            CRMProfileSegment.id == segment_id,
+        ))
+        await context.session.execute(delete(CRMPipeline).where(
+            CRMPipeline.tenant_id == tenant_id,
+            CRMPipeline.id == pipeline_id,
+        ))
