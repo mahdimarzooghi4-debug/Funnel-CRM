@@ -102,6 +102,7 @@ class LearningPortfolioItem(BaseModel):
     follow_up_period_start: date | None
     follow_up_period_end: date | None
     learning_state: Literal["awaiting_follow_up", "follow_up_evaluated"]
+    work_item: WorkItemRead | None = None
 
 
 class LearningPortfolioReport(BaseModel):
@@ -112,6 +113,7 @@ class LearningPortfolioReport(BaseModel):
     total_count: int
     planned_count: int
     evaluated_count: int
+    work_item_counts: dict[str, int] | None
     has_more: bool
     items: list[LearningPortfolioItem]
     basis: str
@@ -312,6 +314,7 @@ async def get_learning_portfolio(
     period_end: date | None = None,
     status: Literal["planned", "evaluated"] | None = Query(default=None),
     organization_unit_id: UUID | None = None,
+    include_work_items: bool = False,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantSessionContext = Depends(require_tenant_session),
@@ -320,7 +323,22 @@ async def get_learning_portfolio(
         raise HTTPException(status_code=422, detail="period_start must not be after period_end")
     if period_start is not None and period_end is not None and (period_end - period_start).days > 365:
         raise HTTPException(status_code=422, detail="Reports are limited to 366 calendar days")
-    scopes = crm_scope_ids(context, permission_key="crm.campaign:view")
+    scopes = crm_scope_ids(
+        context, permission_key="crm.campaign:view", cte_name="crm_learning_campaign_scope"
+    )
+    work_item_scopes = None
+    if organization_unit_id is not None and not await has_crm_permission(
+        context, permission_key="crm.campaign:view", organization_unit_id=organization_unit_id
+    ):
+        raise HTTPException(status_code=403, detail="Marketing learning portfolio is not authorized")
+    if include_work_items:
+        if organization_unit_id is not None and not await has_crm_permission(
+            context, permission_key="crm.work_item:view", organization_unit_id=organization_unit_id
+        ):
+            raise HTTPException(status_code=403, detail="CRM work item portfolio is not authorized")
+        work_item_scopes = crm_scope_ids(
+            context, permission_key="crm.work_item:view", cte_name="crm_learning_work_item_scope"
+        )
 
     follow_up_plan = aliased(CRMMarketingCampaignTargetPlan)
     review_filters = [
@@ -329,6 +347,8 @@ async def get_learning_portfolio(
     ]
     if organization_unit_id is not None:
         review_filters.append(CRMMarketingLearningReview.organization_unit_id == organization_unit_id)
+    if work_item_scopes is not None:
+        review_filters.append(CRMMarketingLearningReview.organization_unit_id.in_(work_item_scopes))
     if period_start is not None:
         review_filters.append(CRMMarketingCampaignTargetPlan.period_end >= period_start)
     if period_end is not None:
@@ -357,6 +377,14 @@ async def get_learning_portfolio(
               & (follow_up_plan.id == CRMMarketingLearningReview.follow_up_target_plan_id))
         .where(*filters)
     )
+    if include_work_items:
+        base = base.add_columns(CRMWorkItem).outerjoin(
+            CRMWorkItem,
+            (CRMWorkItem.tenant_id == CRMMarketingLearningReview.tenant_id)
+            & (CRMWorkItem.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+            & (CRMWorkItem.campaign_id == CRMMarketingLearningReview.campaign_id)
+            & (CRMWorkItem.source_learning_review_id == CRMMarketingLearningReview.id),
+        )
     count_stmt = select(func.count(CRMMarketingLearningReview.id)).join(
         CRMMarketingCampaignTargetPlan,
         (CRMMarketingCampaignTargetPlan.tenant_id == CRMMarketingLearningReview.tenant_id)
@@ -374,6 +402,32 @@ async def get_learning_portfolio(
               & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
         .where(*review_filters).group_by(CRMMarketingLearningReview.status)
     )).all()
+    work_item_counts: dict[str, int] | None = None
+    if include_work_items:
+        task_status_rows = (await context.session.execute(
+            select(CRMWorkItem.status, func.count(CRMWorkItem.id))
+            .join(CRMMarketingLearningReview,
+                  (CRMMarketingLearningReview.tenant_id == CRMWorkItem.tenant_id)
+                  & (CRMMarketingLearningReview.organization_unit_id == CRMWorkItem.organization_unit_id)
+                  & (CRMMarketingLearningReview.campaign_id == CRMWorkItem.campaign_id)
+                  & (CRMMarketingLearningReview.id == CRMWorkItem.source_learning_review_id))
+            .join(CRMMarketingCampaignTargetPlan,
+                  (CRMMarketingCampaignTargetPlan.tenant_id == CRMMarketingLearningReview.tenant_id)
+                  & (CRMMarketingCampaignTargetPlan.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+                  & (CRMMarketingCampaignTargetPlan.campaign_id == CRMMarketingLearningReview.campaign_id)
+                  & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
+            .where(*filters).group_by(CRMWorkItem.status)
+        )).all()
+        task_counts = {key: int(value) for key, value in task_status_rows}
+        linked_count = sum(task_counts.values())
+        work_item_counts = {
+            "linked": linked_count,
+            "without_work_item": max(total - linked_count, 0),
+            "open": task_counts.get("open", 0),
+            "in_progress": task_counts.get("in_progress", 0),
+            "completed": task_counts.get("completed", 0),
+            "cancelled": task_counts.get("cancelled", 0),
+        }
     rows = (await context.session.execute(
         base.order_by(CRMMarketingLearningReview.status, CRMMarketingLearningReview.updated_at.desc(),
                       CRMMarketingLearningReview.id)
@@ -387,6 +441,7 @@ async def get_learning_portfolio(
         follow_up_period_start=row[4],
         follow_up_period_end=row[5],
         learning_state="follow_up_evaluated" if row[0].status == "evaluated" else "awaiting_follow_up",
+        work_item=WorkItemRead.model_validate(row[6]) if include_work_items and row[6] is not None else None,
     ) for row in rows]
     counts = {key: int(value) for key, value in status_counts}
     context.session.add(AuditEvent(
@@ -401,7 +456,8 @@ async def get_learning_portfolio(
         before_state=None,
         after_state={"period_start": period_start.isoformat() if period_start else None,
                      "period_end": period_end.isoformat() if period_end else None,
-                     "status": status, "total_count": total, "returned_count": len(items),
+                     "status": status, "include_work_items": include_work_items,
+                     "total_count": total, "returned_count": len(items),
                      "offset": offset, "limit": limit},
         correlation_id=None,
     ))
@@ -410,6 +466,7 @@ async def get_learning_portfolio(
         generated_at=datetime.now(timezone.utc), period_start=period_start,
         period_end=period_end, status_filter=status, total_count=total,
         planned_count=counts.get("planned", 0), evaluated_count=counts.get("evaluated", 0),
+        work_item_counts=work_item_counts,
         has_more=offset + len(items) < total, items=items,
         basis=("Manager-authored assessments, corrective actions, and follow-up records linked to "
                "their baseline and follow-up campaign target periods; observed changes do not establish causality."),
