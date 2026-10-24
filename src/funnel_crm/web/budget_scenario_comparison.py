@@ -160,6 +160,14 @@ _PAGE = """<!doctype html>
           <tbody id="campaign-results"></tbody>
         </table>
       </div>
+      <h2 style="margin-top:28px">وضعیت هدف‌های ثبت‌شدهٔ کمپین</h2>
+      <p id="target-outcomes-note" class="muted">هدف‌ها فقط برای همین بازهٔ گزارش و کمپین‌های مشترک نمایش داده می‌شوند.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کمپین</th><th scope="col">شاخص</th><th scope="col">هدف</th><th scope="col">عملکرد ثبت‌شده</th><th scope="col">وضعیت</th><th scope="col">پوشش روزهای ثبت‌شده</th></tr></thead>
+          <tbody id="target-outcomes"></tbody>
+        </table>
+      </div>
     </section>
   </main>
 </body>
@@ -178,6 +186,7 @@ _CLIENT_SCRIPT = r"""(() => {
   const formatNumber = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 2 });
   let latestComparison = null;
   let latestPreviousComparison = null;
+  let latestTargetPortfolio = null;
   let latestFields = null;
 
   const params = new URLSearchParams(window.location.search);
@@ -194,7 +203,10 @@ _CLIENT_SCRIPT = r"""(() => {
   function clearResults() {
     latestComparison = null;
     latestPreviousComparison = null;
+    latestTargetPortfolio = null;
     latestFields = null;
+    byId("target-outcomes-note").textContent = "";
+    byId("target-outcomes").replaceChildren();
     byId("period-comparison-period").textContent = "";
     byId("period-comparison").replaceChildren();
     byId("channel-period-comparison").replaceChildren();
@@ -649,6 +661,65 @@ _CLIENT_SCRIPT = r"""(() => {
       body.appendChild(row);
     });
   }
+  function campaignTargetRows(report, portfolio) {
+    if (!portfolio) return [];
+    const includedIds = new Set((report.campaigns || []).map((campaign) => String(campaign.campaign_id)));
+    const rows = [];
+    (portfolio.campaigns || []).filter((item) => includedIds.has(String(item.campaign_id))).forEach((item) => {
+      Object.entries(item.metrics || {}).sort(([a], [b]) => a.localeCompare(b)).forEach(([key, metric]) => {
+        rows.push({ campaign: item.name, channel: item.group_key, key, ...metric });
+      });
+    });
+    return rows;
+  }
+  function targetMetricLabel(key) {
+    return ({ impressions: "نمایش", clicks: "کلیک", leads: "سرنخ", conversions: "تبدیل",
+      spend: "هزینه", cost_per_lead: "هزینه به‌ازای سرنخ",
+      cost_per_conversion: "هزینه به‌ازای تبدیل", roas: "بازده هزینهٔ تبلیغ" })[key] || key;
+  }
+  function targetValue(value, currency) {
+    if (value === null || value === undefined) return "ثبت نشده";
+    return currency ? displayAmount(value, currency) : formatNumber.format(Number(value));
+  }
+  function targetStatusLabel(status) {
+    return ({ met: "هدف محقق‌شده", not_met: "هدف محقق‌نشده", no_data: "دادهٔ کافی ثبت نشده" })[status] || "نامشخص";
+  }
+  function renderCampaignTargetOutcomes(report, portfolio) {
+    const body = byId("target-outcomes");
+    const note = byId("target-outcomes-note");
+    body.replaceChildren();
+    if (!portfolio) {
+      note.textContent = "دریافت ارزیابی هدف‌ها ممکن نشد؛ سایر بخش‌های گزارش در دسترس هستند.";
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "ارزیابی هدف‌ها در این گزارش در دسترس نیست.");
+      cell.colSpan = 6;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    note.textContent = portfolio.campaign_list_truncated
+      ? "فقط هدف‌های منطبق با بازه و کمپین‌های مشترک نمایش داده می‌شوند؛ فهرست هدف‌ها در API محدود شده است."
+      : "هدف‌ها فقط برای همین بازهٔ گزارش و کمپین‌های مشترک نمایش داده می‌شوند.";
+    const rows = campaignTargetRows(report, portfolio);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای کمپین‌های مشترک، هدفی با همین بازهٔ زمانی ثبت نشده است.");
+      cell.colSpan = 6;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.campaign),
+        element("td", "", targetMetricLabel(item.key)),
+        element("td", "", targetValue(item.target, item.currency)),
+        element("td", "", targetValue(item.actual, item.currency)),
+        element("td", "", targetStatusLabel(item.status)),
+        element("td", "", formatNumber.format(Number(item.recorded_day_coverage_percent)) + "٪"));
+      body.appendChild(row);
+    });
+  }
   function renderPeriodComparison(currentReport, previousReport, fields) {
     const body = byId("period-comparison");
     body.replaceChildren();
@@ -807,6 +878,12 @@ _CLIENT_SCRIPT = r"""(() => {
           + "؛ درصد تغییر: " + (item.percent === null ? "نامشخص" : item.percent + "٪")
           + "؛ کمپین‌های چندارزی از محاسبه حذف شده‌اند",
       ]));
+      campaignTargetRows(result, latestTargetPortfolio).forEach((item) => rows.push([
+        "وضعیت هدف کمپین", fields.start, fields.end, "", item.campaign, item.channel, item.currency || "",
+        targetMetricLabel(item.key) + " · هدف", item.actual,
+        "هدف: " + item.target + "؛ وضعیت: " + targetStatusLabel(item.status)
+          + "؛ پوشش روزهای ثبت‌شده: " + item.recorded_day_coverage_percent + "٪",
+      ]));
     }
     (result.scenarios || []).forEach((scenario) => {
       Object.keys(scenario.reconciliation_by_currency || {}).sort().forEach((currency) => {
@@ -919,9 +996,21 @@ _CLIENT_SCRIPT = r"""(() => {
       renderPeriodComparison(result, previousResult, fields);
       renderChannelPeriodComparison(result, previousResult);
       renderUnitCostComparison(result, previousResult);
+      const targetQuery = new URLSearchParams({
+        period_start: fields.start,
+        period_end: fields.end,
+        organization_unit_id: fields.organization,
+        grouped_by: "channel",
+      });
+      let targetPortfolio = null;
+      try {
+        targetPortfolio = await getJson("/api/v1/crm/analytics/campaign-target-performance/portfolio?" + targetQuery.toString(), fields.workspace);
+      } catch (_) {}
+      renderCampaignTargetOutcomes(result, targetPortfolio);
       updateReportUrl(fields, ids);
       latestComparison = result;
       latestPreviousComparison = previousResult;
+      latestTargetPortfolio = targetPortfolio;
       latestFields = fields;
       resultsPanel.hidden = false;
       setStatus("گزارش برای " + result.period_calendar_days + " روز تقویمی آماده شد.", false);
