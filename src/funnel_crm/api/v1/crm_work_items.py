@@ -1,17 +1,18 @@
 """Assignable, scoped work queue for customer and marketing follow-up."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import has_crm_permission
 from funnel_crm.platform.models import (
     AuditEvent,
+    CRMCustomerActivity,
     CRMMarketingCampaign,
     CRMOpportunity,
     CRMPipeline,
@@ -502,6 +503,159 @@ async def create_work_items_from_sales_review(
             "crm_work_item.created_from_sales_review",
             None,
             {**_snapshot(item), "source_sales_target_id": str(target.id)},
+        )
+        created.append(WorkItemRead.model_validate(item))
+    await context.session.flush()
+    return {"created_count": len(created), "items": created}
+
+
+class LifecycleReviewWorkItemBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_unit_id: UUID
+    profile_ids: list[UUID] = Field(min_length=1, max_length=50)
+    inactive_for_days: int = Field(ge=1, le=365)
+    lifecycle_stage: str | None = Field(default=None, min_length=1, max_length=80)
+    profile_kind: str | None = Field(default=None, min_length=1, max_length=40)
+    assigned_membership_id: UUID | None = None
+    title_prefix: str = Field(default="Lifecycle follow-up", min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=1500)
+    due_at: datetime | None = None
+    priority: WorkItemPriority = "normal"
+
+    @field_validator("due_at")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("due_at must include a timezone")
+        return value
+
+    @field_validator("title_prefix")
+    @classmethod
+    def normalize_lifecycle_prefix(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title_prefix must not be blank")
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def normalize_lifecycle_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+@router.post(
+    "/from-lifecycle-review",
+    response_model=dict,
+    status_code=201,
+    operation_id="createCRMWorkItemsFromLifecycleReview",
+)
+async def create_work_items_from_lifecycle_review(
+    payload: LifecycleReviewWorkItemBatch,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    if len(set(payload.profile_ids)) != len(payload.profile_ids):
+        raise HTTPException(status_code=422, detail="Profile IDs must be unique")
+    await _require_permission(context, "crm.profile:view", payload.organization_unit_id)
+    await _require_permission(context, "crm.work_item:create", payload.organization_unit_id)
+    await _validate_assignee(context, payload.assigned_membership_id)
+
+    profiles = list(await context.session.scalars(
+        select(CRMProfile).where(
+            CRMProfile.tenant_id == context.access.tenant_id,
+            CRMProfile.organization_unit_id == payload.organization_unit_id,
+            CRMProfile.id.in_(payload.profile_ids),
+            CRMProfile.archived_at.is_(None),
+            CRMProfile.merged_into_profile_id.is_(None),
+        ).with_for_update()
+    ))
+    profile_by_id = {profile.id: profile for profile in profiles}
+    if len(profile_by_id) != len(payload.profile_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="Every selected profile must be active and in the authorized organization",
+        )
+    for profile in profiles:
+        if payload.lifecycle_stage is not None and profile.lifecycle_stage != payload.lifecycle_stage.strip():
+            raise HTTPException(status_code=409, detail="A selected profile changed lifecycle stage; refresh the review queue")
+        if payload.profile_kind is not None and profile.profile_kind != payload.profile_kind.strip():
+            raise HTTPException(status_code=409, detail="A selected profile changed profile kind; refresh the review queue")
+
+    now = datetime.now(timezone.utc)
+    inactivity_boundary = now - timedelta(days=payload.inactive_for_days)
+    activity_rows = (await context.session.execute(
+        select(
+            CRMCustomerActivity.profile_id,
+            func.max(CRMCustomerActivity.occurred_at).label("latest_activity_at"),
+            func.count(CRMCustomerActivity.id).label("activity_count"),
+        ).where(
+            CRMCustomerActivity.tenant_id == context.access.tenant_id,
+            CRMCustomerActivity.profile_id.in_(payload.profile_ids),
+            CRMCustomerActivity.occurred_at <= now,
+        ).group_by(CRMCustomerActivity.profile_id)
+    )).all()
+    activity_by_profile = {row.profile_id: row for row in activity_rows}
+    stale_profiles = [
+        profile_id
+        for profile_id, row in activity_by_profile.items()
+        if row.latest_activity_at is not None and row.latest_activity_at >= inactivity_boundary
+    ]
+    if stale_profiles:
+        raise HTTPException(
+            status_code=409,
+            detail="At least one selected profile no longer matches the inactivity rule; refresh the review queue",
+        )
+
+    created = []
+    for profile_id in payload.profile_ids:
+        profile = profile_by_id[profile_id]
+        activity = activity_by_profile.get(profile_id)
+        latest_activity = activity.latest_activity_at if activity is not None else None
+        evidence = (
+            f"Selected inactivity rule: {payload.inactive_for_days} days. "
+            + (
+                f"Latest linked CRM activity: {latest_activity.isoformat()}; "
+                f"recorded activity count: {int(activity.activity_count)}."
+                if latest_activity is not None
+                else "No linked CRM activity is recorded. This does not prove no interaction occurred."
+            )
+        )
+        description = "\n\n".join(
+            part for part in (payload.description, evidence) if part
+        )[:2000]
+        item = CRMWorkItem(
+            id=uuid4(),
+            tenant_id=context.access.tenant_id,
+            organization_unit_id=payload.organization_unit_id,
+            profile_id=profile.id,
+            opportunity_id=None,
+            campaign_id=None,
+            assigned_membership_id=payload.assigned_membership_id,
+            created_by_membership_id=context.access.membership_id,
+            title=f"{payload.title_prefix}: {profile.display_name}"[:200],
+            description=description,
+            due_at=payload.due_at,
+            priority=payload.priority,
+            status="open",
+            completed_at=None,
+        )
+        context.session.add(item)
+        await context.session.flush()
+        _audit(
+            context,
+            item,
+            "crm_work_item.created_from_lifecycle_review",
+            None,
+            {
+                **_snapshot(item),
+                "source": "customer_lifecycle_follow_up_review",
+                "inactive_for_days": payload.inactive_for_days,
+                "latest_recorded_activity_at": latest_activity.isoformat() if latest_activity else None,
+                "recorded_activity_count": int(activity.activity_count) if activity else 0,
+            },
         )
         created.append(WorkItemRead.model_validate(item))
     await context.session.flush()
