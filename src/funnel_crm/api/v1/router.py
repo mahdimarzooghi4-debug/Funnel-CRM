@@ -24,6 +24,7 @@ from funnel_crm.api.v1.crm_campaign_measurement_imports import router as crm_cam
 from funnel_crm.api.v1.crm_campaign_portfolio_analytics import router as crm_campaign_portfolio_analytics_router
 from funnel_crm.api.v1.crm_budget_scenarios import router as crm_budget_scenarios_router
 from funnel_crm.api.v1.crm_customer_activity_analytics import router as crm_customer_activity_analytics_router
+from funnel_crm.api.v1.crm_customer_lifecycle_analytics import router as crm_customer_lifecycle_analytics_router
 from funnel_crm.api.v1.crm_customer_activities import router as crm_customer_activities_router
 
 from funnel_crm.api.v1.crm_contact_points import router as crm_contact_points_router
@@ -56,6 +57,7 @@ router.include_router(crm_support_cases_router)
 router.include_router(crm_marketing_learning_router)
 router.include_router(crm_customer_activities_router)
 router.include_router(crm_customer_activity_analytics_router)
+router.include_router(crm_customer_lifecycle_analytics_router)
 router.include_router(crm_segments_router)
 router.include_router(crm_campaigns_router)
 router.include_router(crm_campaign_targets_router)
