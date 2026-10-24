@@ -108,7 +108,9 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
                     role_id=role.id,
                     permission_key=permission,
                 )
-                for permission in ("crm.profile:view", "crm.work_item:create")
+                for permission in (
+                    "crm.profile:view", "crm.work_item:create", "crm.work_item:view"
+                )
             ],
         ])
         await context.session.flush()
@@ -146,6 +148,30 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         assert "Latest linked CRM activity" in stale_item["description"]
         untracked_item = by_profile[str(untracked_id)]
         assert "does not prove no interaction occurred" in untracked_item["description"]
+
+        async with tenant_session(
+            runtime_session_factory,
+            requested_tenant_id=tenant_id,
+            identity=identity,
+        ) as context:
+            context.session.add(CRMCustomerActivity(
+                id=uuid4(), tenant_id=tenant_id, profile_id=stale_id,
+                source_product="funnel.store", source_event_id=uuid4(), campaign_id=None,
+                activity_type="order.completed", channel="store",
+                occurred_at=datetime.now(timezone.utc),
+            ))
+        readout = await client.get(
+            "/api/v1/crm/work-items/lifecycle-review-readout",
+            headers=headers,
+            params={"organization_unit_id": str(root_id)},
+        )
+        assert readout.status_code == 200, readout.text
+        readout_data = readout.json()
+        assert readout_data["review_item_count"] == 2
+        assert readout_data["work_item_count_by_status"]["open"] == 2
+        assert readout_data["recorded_activities_after_task_count"] == 1
+        assert readout_data["profiles_with_recorded_activity_after_task_count"] == 1
+        assert "does not establish" in readout_data["interpretation"]
 
         duplicate_ids = await client.post(
             endpoint,
