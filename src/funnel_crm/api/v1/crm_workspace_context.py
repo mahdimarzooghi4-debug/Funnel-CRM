@@ -75,8 +75,16 @@ async def list_authorized_organization_units(
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> list[OrganizationUnitChoice]:
     """Return units covered by both campaign and budget-scenario view grants."""
-    campaign_scopes = crm_scope_ids(context, permission_key="crm.campaign:view")
-    scenario_scopes = crm_scope_ids(context, permission_key="crm.budget_scenario:view")
+    campaign_scopes = crm_scope_ids(
+        context,
+        permission_key="crm.campaign:view",
+        cte_name="crm_campaign_selector_scope",
+    )
+    scenario_scopes = crm_scope_ids(
+        context,
+        permission_key="crm.budget_scenario:view",
+        cte_name="crm_budget_scenario_selector_scope",
+    )
     rows = (
         await context.session.scalars(
             select(OrganizationUnit)

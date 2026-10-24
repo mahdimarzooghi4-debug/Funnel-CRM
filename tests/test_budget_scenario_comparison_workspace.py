@@ -34,5 +34,9 @@ def test_budget_comparison_workspace_client_uses_existing_authorized_read_apis()
     assert '"X-Workspace-ID": workspaceId' in response.text
     assert "/api/v1/crm/budget-scenarios" in response.text
     assert "/api/v1/crm/budget-scenarios/compare/performance-context?" in response.text
+    assert "/api/v1/system/workspaces" in response.text
+    assert "/api/v1/system/organization-units" in response.text
+    assert "loadOrganizationChoices" in response.text
+    assert "loadScenarios" in response.text
     assert "textContent" in response.text
     assert "innerHTML" not in response.text
