@@ -14,6 +14,8 @@ from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingCampaign,
     CRMOpportunity,
+    CRMPipeline,
+    CRMSalesTarget,
     CRMProfile,
     CRMWorkItem,
     WorkspaceMembership,
@@ -378,3 +380,127 @@ async def update_work_item(
     _audit(context, item, "crm_work_item.updated", before, _snapshot(item))
     await context.session.flush()
     return WorkItemRead.model_validate(item)
+
+
+class SalesReviewWorkItemBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_id: UUID
+    opportunity_ids: list[UUID] = Field(min_length=1, max_length=50)
+    assigned_membership_id: UUID | None = None
+    title_prefix: str = Field(default="Sales follow-up", min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=2000)
+    due_at: datetime | None = None
+    priority: WorkItemPriority = "normal"
+
+    @field_validator("due_at")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("due_at must include a timezone")
+        return value
+
+    @field_validator("title_prefix")
+    @classmethod
+    def normalize_prefix(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title_prefix must not be blank")
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def normalize_batch_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+@router.post(
+    "/from-sales-review",
+    response_model=dict,
+    status_code=201,
+    operation_id="createCRMWorkItemsFromSalesReview",
+)
+async def create_work_items_from_sales_review(
+    payload: SalesReviewWorkItemBatch,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    if len(set(payload.opportunity_ids)) != len(payload.opportunity_ids):
+        raise HTTPException(status_code=422, detail="Opportunity IDs must be unique")
+    target = await context.session.scalar(select(CRMSalesTarget).where(
+        CRMSalesTarget.tenant_id == context.access.tenant_id,
+        CRMSalesTarget.id == payload.target_id,
+    ))
+    if target is None:
+        raise HTTPException(status_code=404, detail="Sales target not found")
+    await _require_permission(context, "crm.sales_target:view", target.organization_unit_id)
+    await _require_permission(context, "crm.opportunity:view", target.organization_unit_id)
+    await _require_permission(context, "crm.work_item:create", target.organization_unit_id)
+    await _validate_assignee(context, payload.assigned_membership_id)
+    pipeline = await context.session.scalar(select(CRMPipeline).where(
+        CRMPipeline.tenant_id == target.tenant_id,
+        CRMPipeline.id == target.pipeline_id,
+        CRMPipeline.entity_kind == "opportunity",
+    ))
+    if pipeline is None:
+        raise HTTPException(status_code=409, detail="Sales target pipeline is unavailable")
+    stage_outcomes = {
+        stage.get("key"): stage.get("outcome_key", "open")
+        for stage in pipeline.stages
+        if isinstance(stage, dict) and isinstance(stage.get("key"), str)
+    }
+    opportunities = list(await context.session.scalars(select(CRMOpportunity).where(
+        CRMOpportunity.tenant_id == target.tenant_id,
+        CRMOpportunity.organization_unit_id == target.organization_unit_id,
+        CRMOpportunity.pipeline_id == target.pipeline_id,
+        CRMOpportunity.id.in_(payload.opportunity_ids),
+    ).with_for_update()))
+    opportunity_by_id = {item.id: item for item in opportunities}
+    if len(opportunity_by_id) != len(payload.opportunity_ids):
+        raise HTTPException(status_code=422, detail="Every opportunity must belong to this target's organization and pipeline")
+    for opportunity in opportunities:
+        stage_outcome = stage_outcomes.get(opportunity.stage_key, "open")
+        in_target_period = (
+            opportunity.expected_close_date is None
+            or target.period_start <= opportunity.expected_close_date <= target.period_end
+        )
+        matching_currency = opportunity.currency in (target.currency, None)
+        if stage_outcome != "open" or not in_target_period or not matching_currency:
+            raise HTTPException(
+                status_code=422,
+                detail="Only open opportunities in this target period and currency can be selected",
+            )
+    created = []
+    for opportunity_id in payload.opportunity_ids:
+        opportunity = opportunity_by_id[opportunity_id]
+        title = f"{payload.title_prefix}: {opportunity.name}"[:200]
+        item = CRMWorkItem(
+            id=uuid4(),
+            tenant_id=target.tenant_id,
+            organization_unit_id=target.organization_unit_id,
+            profile_id=opportunity.profile_id,
+            opportunity_id=opportunity.id,
+            campaign_id=None,
+            assigned_membership_id=payload.assigned_membership_id,
+            created_by_membership_id=context.access.membership_id,
+            title=title,
+            description=payload.description,
+            due_at=payload.due_at,
+            priority=payload.priority,
+            status="open",
+            completed_at=None,
+        )
+        context.session.add(item)
+        await context.session.flush()
+        _audit(
+            context,
+            item,
+            "crm_work_item.created_from_sales_review",
+            None,
+            {**_snapshot(item), "source_sales_target_id": str(target.id)},
+        )
+        created.append(WorkItemRead.model_validate(item))
+    await context.session.flush()
+    return {"created_count": len(created), "items": created}
