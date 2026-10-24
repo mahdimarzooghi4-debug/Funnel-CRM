@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -17,6 +18,7 @@ from sqlalchemy import (
     Uuid,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -280,6 +282,59 @@ class TenantRecord(Base):
     organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     record_type: Mapped[str] = mapped_column(String(80), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class AuditEvent(Base):
+    """Append-only tenant audit event for security and organization changes."""
+
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        CheckConstraint(
+            "actor_kind IN ('user', 'system')",
+            name="ck_audit_events_actor_kind",
+        ),
+        CheckConstraint(
+            "(actor_kind = 'user' AND actor_identity_id IS NOT NULL "
+            "AND actor_membership_id IS NOT NULL) OR "
+            "(actor_kind = 'system' AND actor_identity_id IS NULL "
+            "AND actor_membership_id IS NULL)",
+            name="ck_audit_events_actor_shape",
+        ),
+        UniqueConstraint("tenant_id", "event_id", name="uq_audit_events_tenant_event"),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_audit_events_workspace",
+            ondelete="CASCADE",
+        ),
+        Index("ix_audit_events_tenant_time", "tenant_id", "occurred_at"),
+        Index("ix_audit_events_tenant_actor_time", "tenant_id", "actor_identity_id", "occurred_at"),
+        Index("ix_audit_events_tenant_target_time", "tenant_id", "target_type", "target_key", "occurred_at"),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    actor_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_identity_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    actor_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    action_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_key: Mapped[str] = mapped_column(String(250), nullable=False)
+    organization_unit_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    before_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    after_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    correlation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
