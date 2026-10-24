@@ -144,6 +144,14 @@ _PAGE = """<!doctype html>
           <tbody id="channel-period-comparison"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">هزینهٔ ثبت‌شده به‌ازای سرنخ و تبدیل</h3>
+      <p class="muted">این نسبت فقط از کمپین‌هایی محاسبه می‌شود که هزینه و شاخص مربوط را ثبت کرده‌اند و هزینه‌شان یک ارز واحد دارد. کمپین‌های چندارزی برای جلوگیری از نسبت‌دهی مبهم کنار گذاشته می‌شوند. این شاخص ROI نیست.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کانال</th><th scope="col">شاخص</th><th scope="col">ارز</th><th scope="col">هزینهٔ واحد قبلی</th><th scope="col">هزینهٔ واحد جاری</th><th scope="col">درصد تغییر</th><th scope="col">مجموع شاخص جاری</th><th scope="col">کمپین‌های جاری</th></tr></thead>
+          <tbody id="unit-cost-comparison"></tbody>
+        </table>
+      </div>
       <div id="scenario-results" class="cards"></div>
       <h2 style="margin-top:28px">عملکرد کمپین‌ها در همین بازه</h2>
       <div class="table-wrap">
@@ -190,6 +198,7 @@ _CLIENT_SCRIPT = r"""(() => {
     byId("period-comparison-period").textContent = "";
     byId("period-comparison").replaceChildren();
     byId("channel-period-comparison").replaceChildren();
+    byId("unit-cost-comparison").replaceChildren();
     resultsPanel.hidden = true;
     byId("evidence-coverage").replaceChildren();
     byId("channel-coverage").replaceChildren();
@@ -566,6 +575,80 @@ _CLIENT_SCRIPT = r"""(() => {
       body.appendChild(row);
     });
   }
+  function unitCostRows(report) {
+    const groups = new Map();
+    (report.campaigns || []).forEach((campaign) => {
+      const currencies = Object.entries(campaign.recorded_spend_by_currency || {});
+      if (currencies.length !== 1) return;
+      const [currency, amount] = currencies[0];
+      ["leads", "conversions"].forEach((key) => {
+        const actual = (campaign.metrics || {})[key]?.actual;
+        if (actual === null || actual === undefined) return;
+        const channel = campaignChannel(campaign);
+        const id = JSON.stringify([channel, currency, key]);
+        const group = groups.get(id) || { channel, currency, key, spend: 0, metricTotal: 0, campaignCount: 0 };
+        group.spend += Number(amount);
+        group.metricTotal += Number(actual);
+        group.campaignCount += 1;
+        groups.set(id, group);
+      });
+    });
+    groups.forEach((group) => {
+      group.unitCost = group.metricTotal > 0 && group.spend >= 0 ? group.spend / group.metricTotal : null;
+    });
+    return groups;
+  }
+  function compareUnitCosts(currentReport, previousReport) {
+    if (!previousReport) return [];
+    const current = unitCostRows(currentReport);
+    const previous = unitCostRows(previousReport);
+    return Array.from(new Set([...previous.keys(), ...current.keys()])).map((id) => {
+      const before = previous.get(id) || null;
+      const now = current.get(id) || null;
+      const item = now || before;
+      const beforeCost = before?.unitCost ?? null;
+      const nowCost = now?.unitCost ?? null;
+      return {
+        channel: item.channel, currency: item.currency, key: item.key,
+        before, now, beforeCost, nowCost,
+        percent: beforeCost === null || nowCost === null || beforeCost === 0
+          ? null : ((nowCost - beforeCost) / Math.abs(beforeCost)) * 100,
+      };
+    }).sort((a, b) => a.channel.localeCompare(b.channel, "fa")
+      || a.currency.localeCompare(b.currency)
+      || ["leads", "conversions"].indexOf(a.key) - ["leads", "conversions"].indexOf(b.key));
+  }
+  function unitCostText(group) {
+    if (!group) return "ثبت نشده";
+    if (group.unitCost === null) return "نامشخص";
+    return displayAmount(group.unitCost, group.currency);
+  }
+  function renderUnitCostComparison(currentReport, previousReport) {
+    const body = byId("unit-cost-comparison");
+    body.replaceChildren();
+    const rows = compareUnitCosts(currentReport, previousReport);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای کمپین‌های این گزارش دادهٔ کافی و هم‌ارز پیدا نشد.");
+      cell.colSpan = 8;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      const metric = item.key === "leads" ? "هزینه به‌ازای هر سرنخ" : "هزینه به‌ازای هر تبدیل";
+      row.append(element("td", "", item.channel),
+        element("td", "", metric),
+        element("td", "", item.currency),
+        element("td", "", unitCostText(item.before)),
+        element("td", "", unitCostText(item.now)),
+        element("td", "", item.percent === null ? "نامشخص" : formatNumber.format(item.percent) + "٪"),
+        element("td", "", item.now ? formatNumber.format(item.now.metricTotal) : "—"),
+        element("td", "", item.now ? formatNumber.format(item.now.campaignCount) : "۰"));
+      body.appendChild(row);
+    });
+  }
   function renderPeriodComparison(currentReport, previousReport, fields) {
     const body = byId("period-comparison");
     body.replaceChildren();
@@ -714,6 +797,16 @@ _CLIENT_SCRIPT = r"""(() => {
           + "؛ مقدار قبلی: " + (item.before ?? "ثبت نشده") + "؛ مقدار جاری: " + (item.now ?? "ثبت نشده")
           + "؛ درصد تغییر: " + (item.percent === null ? "نامشخص" : item.percent + "٪"),
       ]));
+      compareUnitCosts(result, latestPreviousComparison).forEach((item) => rows.push([
+        "هزینهٔ واحد ثبت‌شده", fields.start, fields.end, "", "", item.channel, item.currency,
+        item.key === "leads" ? "هزینه به‌ازای هر سرنخ" : "هزینه به‌ازای هر تبدیل",
+        item.nowCost,
+        "بازه قبلی " + precedingPeriod(fields).start + " تا " + precedingPeriod(fields).end
+          + "؛ هزینه واحد قبلی: " + (item.beforeCost ?? "نامشخص")
+          + "؛ مجموع شاخص جاری: " + (item.now?.metricTotal ?? "ثبت نشده")
+          + "؛ درصد تغییر: " + (item.percent === null ? "نامشخص" : item.percent + "٪")
+          + "؛ کمپین‌های چندارزی از محاسبه حذف شده‌اند",
+      ]));
     }
     (result.scenarios || []).forEach((scenario) => {
       Object.keys(scenario.reconciliation_by_currency || {}).sort().forEach((currency) => {
@@ -825,6 +918,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderCampaignRows(result.campaigns || []);
       renderPeriodComparison(result, previousResult, fields);
       renderChannelPeriodComparison(result, previousResult);
+      renderUnitCostComparison(result, previousResult);
       updateReportUrl(fields, ids);
       latestComparison = result;
       latestPreviousComparison = previousResult;
