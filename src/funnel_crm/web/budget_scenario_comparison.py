@@ -161,10 +161,10 @@ _PAGE = """<!doctype html>
         </table>
       </div>
       <h3 style="margin-top:22px">تطبیق بودجه به تفکیک هدف بازاریابی</h3>
-      <p class="muted">بودجهٔ برنامه‌ریزی‌شده و هزینهٔ واقعی هم‌ارز را به تفکیک هدف، سناریو و ارز ببینید. پوشش نشان می‌دهد چند تخصیص از کل تخصیص‌ها هزینهٔ قابل‌مقایسه داشته‌اند؛ ارزها تبدیل نمی‌شوند.</p>
+      <p class="muted">بودجهٔ برنامه‌ریزی‌شده و هزینهٔ واقعی هم‌ارز را به تفکیک هدف، سناریو و ارز ببینید. سهم بودجه، ترکیب تخصیص همان سناریو را نشان می‌دهد؛ پوشش، تعداد تخصیص‌های قابل‌مقایسه را. ارزها تبدیل نمی‌شوند.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th scope="col">هدف بازاریابی</th><th scope="col">سناریو</th><th scope="col">ارز</th><th scope="col">بودجهٔ برنامه‌ریزی‌شده</th><th scope="col">بودجهٔ تخصیص‌های قابل‌مقایسه</th><th scope="col">هزینهٔ واقعی هم‌ارز</th><th scope="col">واریانس</th><th scope="col">پوشش تخصیص</th></tr></thead>
+          <thead><tr><th scope="col">هدف بازاریابی</th><th scope="col">سناریو</th><th scope="col">ارز</th><th scope="col">بودجهٔ برنامه‌ریزی‌شده</th><th scope="col">بودجهٔ تخصیص‌های قابل‌مقایسه</th><th scope="col">هزینهٔ واقعی هم‌ارز</th><th scope="col">واریانس</th><th scope="col">پوشش تخصیص</th><th scope="col">سهم از بودجهٔ سناریو</th></tr></thead>
           <tbody id="objective-budget-reconciliation"></tbody>
         </table>
       </div>
@@ -756,7 +756,7 @@ _CLIENT_SCRIPT = r"""(() => {
     if (!rows.length) {
       const row = document.createElement("tr");
       const cell = element("td", "muted", "برای این گزارش دادهٔ کمپینی وجود ندارد.");
-      cell.colSpan = 8;
+      cell.colSpan = 9;
       row.appendChild(cell);
       body.appendChild(row);
       return;
@@ -803,7 +803,17 @@ _CLIENT_SCRIPT = r"""(() => {
         groups.set(id, group);
       });
     });
-    return Array.from(groups.values()).sort((a, b) =>
+    const rows = Array.from(groups.values());
+    const totals = new Map();
+    rows.forEach((item) => {
+      const key = JSON.stringify([item.scenario, item.currency]);
+      totals.set(key, (totals.get(key) || 0) + item.planned);
+    });
+    rows.forEach((item) => {
+      const total = totals.get(JSON.stringify([item.scenario, item.currency])) || 0;
+      item.mixSharePercent = total > 0 ? item.planned * 100 / total : null;
+    });
+    return rows.sort((a, b) =>
       a.objective.localeCompare(b.objective, "fa") || a.scenario.localeCompare(b.scenario, "fa")
         || a.currency.localeCompare(b.currency));
   }
@@ -827,7 +837,8 @@ _CLIENT_SCRIPT = r"""(() => {
         element("td", "", displayAmount(item.comparablePlanned, item.currency)),
         element("td", "", item.comparableAllocations ? displayAmount(item.observedSpend, item.currency) : "نامشخص"),
         element("td", "", item.comparableAllocations ? displayAmount(item.variance, item.currency) : "نامشخص"),
-        element("td", "", formatNumber.format(item.comparableAllocations) + " / " + formatNumber.format(item.allocations)));
+        element("td", "", formatNumber.format(item.comparableAllocations) + " / " + formatNumber.format(item.allocations)),
+        element("td", "", item.mixSharePercent === null ? "نامشخص" : formatNumber.format(item.mixSharePercent) + "٪"));
       body.appendChild(row);
     });
   }
@@ -1399,7 +1410,8 @@ _CLIENT_SCRIPT = r"""(() => {
     objectiveBudgetRows(result).forEach((item) => rows.push([
       "تطبیق بودجه بر اساس هدف", fields.start, fields.end, item.scenario, "", "",
       item.currency, item.objective, item.comparableAllocations ? item.observedSpend : "",
-      "بودجه برنامه‌ریزی‌شده: " + item.planned + "؛ بودجه تخصیص‌های قابل‌مقایسه: " + item.comparablePlanned
+      "بودجه برنامه‌ریزی‌شده: " + item.planned + "؛ سهم از بودجه سناریو: " + (item.mixSharePercent === null ? "نامشخص" : item.mixSharePercent)
+        + "٪؛ بودجه تخصیص‌های قابل‌مقایسه: " + item.comparablePlanned
         + "؛ واریانس: " + (item.comparableAllocations ? item.variance : "نامشخص")
         + "؛ پوشش تخصیص: " + item.comparableAllocations + " از " + item.allocations,
     ]));
