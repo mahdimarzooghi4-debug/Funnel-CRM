@@ -152,6 +152,14 @@ _PAGE = """<!doctype html>
           <tbody id="unit-cost-comparison"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">هزینهٔ واحد به تفکیک کمپین</h3>
+      <p class="muted">برای هر کمپین، هزینهٔ ثبت‌شده بر سرنخ یا تبدیل ثبت‌شده محاسبه می‌شود. مقایسهٔ دو بازه فقط با دادهٔ کافی و ارز یکسان انجام می‌شود؛ این شاخص ROI نیست.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کمپین</th><th scope="col">کانال</th><th scope="col">شاخص</th><th scope="col">ارز</th><th scope="col">هزینهٔ واحد قبلی</th><th scope="col">هزینهٔ واحد جاری</th><th scope="col">درصد تغییر</th></tr></thead>
+          <tbody id="campaign-unit-cost"></tbody>
+        </table>
+      </div>
       <div id="scenario-results" class="cards"></div>
       <h2 style="margin-top:28px">عملکرد کمپین‌ها در همین بازه</h2>
       <div class="table-wrap">
@@ -234,6 +242,7 @@ _CLIENT_SCRIPT = r"""(() => {
     byId("target-period-comparison-note").textContent = "";
     byId("target-period-comparison").replaceChildren();
     byId("lead-conversion-ratio").replaceChildren();
+    byId("campaign-unit-cost").replaceChildren();
     byId("target-outcomes-note").textContent = "";
     byId("target-outcomes").replaceChildren();
     byId("channel-target-summary-note").textContent = "";
@@ -671,6 +680,86 @@ _CLIENT_SCRIPT = r"""(() => {
         element("td", "", describe(item.previous)),
         element("td", "", describe(item.current)),
         element("td", "", item.delta === null ? "نامشخص" : formatNumber.format(item.delta) + " واحد درصد"));
+      body.appendChild(row);
+    });
+  }
+  function campaignUnitCostValue(campaign, key) {
+    if (!campaign) return { value: null, currency: null, reason: "campaign_missing" };
+    const spend = Object.entries(campaign.recorded_spend_by_currency || {});
+    if (!spend.length) return { value: null, currency: null, reason: "spend_missing" };
+    if (spend.length !== 1) return { value: null, currency: null, reason: "multi_currency" };
+    const [currency, amount] = spend[0];
+    const actual = (campaign.metrics || {})[key]?.actual;
+    if (actual === null || actual === undefined) return { value: null, currency, reason: "metric_missing" };
+    const denominator = Number(actual);
+    const numerator = Number(amount);
+    if (!Number.isFinite(denominator) || denominator <= 0) return { value: null, currency, reason: "invalid_denominator" };
+    if (!Number.isFinite(numerator) || numerator < 0) return { value: null, currency, reason: "invalid_spend" };
+    return { value: numerator / denominator, currency, reason: null };
+  }
+  function unitCostReason(reason) {
+    return ({
+      campaign_missing: "کمپین در بازهٔ قبلی موجود نیست",
+      spend_missing: "هزینه ثبت نشده",
+      multi_currency: "هزینه چندارزی است",
+      metric_missing: "شاخص ثبت نشده",
+      invalid_denominator: "مخرج صفر یا نامعتبر است",
+      invalid_spend: "هزینه نامعتبر است",
+      currency_mismatch: "ارز دو بازه یکسان نیست",
+    })[reason] || "نامشخص";
+  }
+  function campaignUnitCostRows(currentReport, previousReport) {
+    const previousById = new Map((previousReport?.campaigns || [])
+      .filter((campaign) => campaign.campaign_id !== null && campaign.campaign_id !== undefined)
+      .map((campaign) => [String(campaign.campaign_id), campaign]));
+    const rows = [];
+    (currentReport.campaigns || []).forEach((campaign) => {
+      const id = campaign.campaign_id === null || campaign.campaign_id === undefined
+        ? null : String(campaign.campaign_id);
+      const previousCampaign = id === null ? null : previousById.get(id) || null;
+      ["leads", "conversions"].forEach((key) => {
+        const current = campaignUnitCostValue(campaign, key);
+        const previous = campaignUnitCostValue(previousCampaign, key);
+        const currencyMismatch = current.value !== null && previous.value !== null
+          && current.currency !== previous.currency;
+        const percent = current.value === null || previous.value === null || currencyMismatch || previous.value === 0
+          ? null : ((current.value - previous.value) / Math.abs(previous.value)) * 100;
+        rows.push({
+          campaign: campaign.campaign_name || campaign.name || id || "نامشخص",
+          channel: campaign.channel || "نامشخص",
+          key, current, previous, percent,
+          currency: current.currency || previous.currency || "",
+          previousReason: previous.reason || (currencyMismatch ? "currency_mismatch" : null),
+        });
+      });
+    });
+    return rows;
+  }
+  function campaignUnitCostText(value, reason, currency) {
+    if (value !== null && value !== undefined) return displayAmount(value, currency);
+    return unitCostReason(reason);
+  }
+  function renderCampaignUnitCosts(currentReport, previousReport) {
+    const body = byId("campaign-unit-cost");
+    body.replaceChildren();
+    const rows = campaignUnitCostRows(currentReport, previousReport);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای این گزارش کمپینی وجود ندارد.");
+      cell.colSpan = 7;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.campaign),
+        element("td", "", item.channel),
+        element("td", "", item.key === "leads" ? "هزینه به‌ازای سرنخ" : "هزینه به‌ازای تبدیل"),
+        element("td", "", item.currency || "—"),
+        element("td", "", campaignUnitCostText(item.previous.value, item.previousReason || item.previous.reason, item.previous.currency)),
+        element("td", "", campaignUnitCostText(item.current.value, item.current.reason, item.current.currency)),
+        element("td", "", item.percent === null ? "نامشخص" : formatNumber.format(item.percent) + "٪"));
       body.appendChild(row);
     });
   }
@@ -1159,6 +1248,15 @@ _CLIENT_SCRIPT = r"""(() => {
           campaign.channel, currency, "واریانس", allocation.variance_amount, ""]);
       });
     });
+    campaignUnitCostRows(result, latestPreviousComparison).forEach((item) => rows.push([
+      "هزینهٔ واحد کمپین", fields.start, fields.end, "", item.campaign, item.channel, item.currency,
+      item.key === "leads" ? "هزینه به‌ازای سرنخ" : "هزینه به‌ازای تبدیل",
+      item.current.value ?? "",
+      "هزینهٔ واحد قبلی: " + (item.previous.value === null ? unitCostReason(item.previousReason || item.previous.reason) : item.previous.value)
+        + "؛ هزینهٔ واحد جاری: " + (item.current.value === null ? unitCostReason(item.current.reason) : item.current.value)
+        + "؛ درصد تغییر: " + (item.percent === null ? "نامشخص" : item.percent + "٪")
+        + "؛ نسبت فقط با ارز همسان مقایسه می‌شود",
+    ]));
     const csv = "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -1234,6 +1332,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderChannelPeriodComparison(result, previousResult);
       renderUnitCostComparison(result, previousResult);
       renderLeadConversionRatio(result, previousResult);
+      renderCampaignUnitCosts(result, previousResult);
       const targetQuery = new URLSearchParams({
         period_start: fields.start,
         period_end: fields.end,

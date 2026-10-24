@@ -67,7 +67,7 @@ const ids = [
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
   "target-period-comparison-note", "target-period-comparison",
-  "lead-conversion-ratio",
+  "lead-conversion-ratio", "campaign-unit-cost",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -145,7 +145,7 @@ const fetch = async (path, options = {}) => {
         period_calendar_days: 14,
         scenarios: [],
         campaigns: [{
-          campaign_name: "Previous period", channel: "email",
+          campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email",
           recorded_spend_by_currency: { USD: 600 },
           metrics: { leads: { actual: 10 }, conversions: { actual: 2 } },
           scenario_allocations: [],
@@ -222,6 +222,11 @@ async function main() {
   assert.deepEqual(elements.get("target-outcomes").children.map((row) => row.children.map((cell) => cell.textContent)), [
     ["Spring launch", "تبدیل", "۴", "ثبت نشده", "دادهٔ کافی ثبت نشده", "۰٪"],
     ["Spring launch", "سرنخ", "۱۰", "۱۲", "هدف محقق‌شده", "۷٫۱۴٪"],
+  ]);
+  assert.deepEqual(elements.get("campaign-unit-cost").children.slice(0, 2).map((row) =>
+    row.children.map((cell) => cell.textContent)), [
+    ["Spring launch", "email", "هزینه به‌ازای سرنخ", "USD", "۶۰ USD", "۷۵ USD", "۲۵٪"],
+    ["Spring launch", "email", "هزینه به‌ازای تبدیل", "USD", "۳۰۰ USD", "شاخص ثبت نشده", "نامشخص"],
   ]);
   assert.deepEqual(elements.get("channel-target-summary").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
@@ -321,6 +326,7 @@ async function main() {
   assert.ok(csv.includes('"مقایسه کانال"'));
   assert.ok(csv.includes('"هزینهٔ واحد ثبت‌شده"'));
   assert.ok(csv.includes('"هزینه به‌ازای هر سرنخ"'));
+  assert.ok(csv.includes('"هزینهٔ واحد کمپین"'));
   assert.ok(csv.includes('"وضعیت هدف کمپین"'));
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
   assert.ok(csv.includes('"خلاصه هدف کانال"'));
