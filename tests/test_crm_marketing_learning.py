@@ -185,7 +185,10 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         events = (await context.session.scalars(
             select(AuditEvent).where(
                 AuditEvent.tenant_id == tenant_id,
-                AuditEvent.target_type == "crm_marketing_learning_review",
+                AuditEvent.target_type.in_([
+                    "crm_marketing_learning_review",
+                    "crm_marketing_learning_portfolio",
+                ]),
             )
         )).all()
         assert {event.action_key for event in events} >= {
