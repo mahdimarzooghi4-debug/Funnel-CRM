@@ -101,6 +101,7 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:create"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:view"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:update"),
         ])
         await context.session.flush()
 
@@ -143,6 +144,11 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         )
         assert task_list.status_code == 200, task_list.text
         assert [row["id"] for row in task_list.json()] == [task_id]
+        task_progress = await client.patch(
+            f"/api/v1/crm/work-items/{task_id}", headers=headers,
+            json={"status": "in_progress"},
+        )
+        assert task_progress.status_code == 200, task_progress.text
 
         initial = await client.get(f"{base}/{review_id}", headers=headers)
         assert initial.status_code == 200, initial.text
@@ -153,7 +159,8 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         portfolio = await client.get(
             f"{base}/portfolio",
             headers=headers,
-            params={"period_start": "2026-10-16", "period_end": "2026-10-17"},
+            params={"period_start": "2026-10-16", "period_end": "2026-10-17",
+                    "include_work_items": "true"},
         )
         assert portfolio.status_code == 200, portfolio.text
         portfolio_body = portfolio.json()
@@ -162,6 +169,11 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert portfolio_body["evaluated_count"] == 0
         assert portfolio_body["items"][0]["review"]["id"] == review_id
         assert portfolio_body["items"][0]["learning_state"] == "awaiting_follow_up"
+        assert portfolio_body["items"][0]["work_item"]["status"] == "in_progress"
+        assert portfolio_body["work_item_counts"] == {
+            "linked": 1, "without_work_item": 0, "open": 0,
+            "in_progress": 1, "completed": 0, "cancelled": 0,
+        }
 
         missing_data = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
             "follow_up_target_plan_id": str(empty_follow_up_id),
@@ -183,11 +195,17 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert body["baseline"]["metrics"]["conversions"]["actual"] == 1
         assert body["follow_up"]["metrics"]["conversions"]["actual"] == 3
         assert body["follow_up"]["metrics"]["conversions"]["status"] == "met"
+        task_complete = await client.patch(
+            f"/api/v1/crm/work-items/{task_id}", headers=headers,
+            json={"status": "completed"},
+        )
+        assert task_complete.status_code == 200, task_complete.text
 
         evaluated_portfolio = await client.get(
             f"{base}/portfolio",
             headers=headers,
-            params={"status": "evaluated", "organization_unit_id": str(root_id)},
+            params={"status": "evaluated", "organization_unit_id": str(root_id),
+                    "include_work_items": "true"},
         )
         assert evaluated_portfolio.status_code == 200, evaluated_portfolio.text
         evaluated_body = evaluated_portfolio.json()
@@ -196,6 +214,8 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert evaluated_body["evaluated_count"] == 1
         assert evaluated_body["items"][0]["learning_state"] == "follow_up_evaluated"
         assert evaluated_body["items"][0]["follow_up_period_start"] == "2026-10-18"
+        assert evaluated_body["items"][0]["work_item"]["status"] == "completed"
+        assert evaluated_body["work_item_counts"]["completed"] == 1
 
         repeated = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
             "follow_up_target_plan_id": str(follow_up_id),
