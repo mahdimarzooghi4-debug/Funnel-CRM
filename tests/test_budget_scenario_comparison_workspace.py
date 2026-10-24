@@ -20,7 +20,7 @@ def test_budget_comparison_workspace_serves_rtl_shell_with_security_headers() ->
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert 'lang="fa" dir="rtl"' in response.text
     assert 'src="/assets/budget-scenario-comparison.js"' in response.text
-    assert "شناسهٔ فضای کاری" in response.text
+    assert "فضای کاری" in response.text
     assert "گزارش واقعی؛ بدون پیش‌بینی" in response.text
 
 

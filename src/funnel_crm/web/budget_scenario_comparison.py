@@ -27,7 +27,7 @@ _PAGE = """<!doctype html>
     .panel { background: #fff; border: 1px solid #e1e8ef; border-radius: 14px; padding: 22px; margin: 18px 0; box-shadow: 0 5px 20px #142d4210; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
     label { display: grid; gap: 7px; color: #405367; font-size: 13px; }
-    input { width: 100%; min-height: 42px; border: 1px solid #cbd6e0; border-radius: 8px; padding: 9px 11px; color: #182638; background: #fff; font: inherit; }
+    input, select { width: 100%; min-height: 42px; border: 1px solid #cbd6e0; border-radius: 8px; padding: 9px 11px; color: #182638; background: #fff; font: inherit; }
     button { min-height: 42px; border: 0; border-radius: 8px; padding: 9px 16px; background: #1578a8; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
     button:hover { background: #0e648f; }
     button:disabled { opacity: .55; cursor: wait; }
@@ -77,11 +77,11 @@ _PAGE = """<!doctype html>
     <section class="panel" aria-labelledby="scope-title">
       <h2 id="scope-title">فضای کاری و بازهٔ گزارش</h2>
       <div class="grid">
-        <label for="workspace-id">شناسهٔ فضای کاری
-          <input id="workspace-id" name="workspace_id" autocomplete="off" required placeholder="UUID فضای کاری">
+        <label for="workspace-id">فضای کاری
+          <select id="workspace-id" name="workspace_id" required><option value="">در حال بارگذاری…</option></select>
         </label>
-        <label for="organization-id">شناسهٔ واحد سازمانی
-          <input id="organization-id" name="organization_unit_id" autocomplete="off" required placeholder="UUID واحد سازمانی">
+        <label for="organization-id">واحد سازمانی مجاز
+          <select id="organization-id" name="organization_unit_id" required><option value="">ابتدا فضای کاری را انتخاب کنید</option></select>
         </label>
         <label for="period-start">از تاریخ
           <input id="period-start" type="date" required>
@@ -92,7 +92,7 @@ _PAGE = """<!doctype html>
       </div>
       <div class="actions">
         <button id="load-scenarios" type="button">بارگذاری سناریوها</button>
-        <span class="hint">شناسه‌ها فقط محدودهٔ درخواست را مشخص می‌کنند؛ دسترسی با عضویت و مجوزهای حساب شما کنترل می‌شود.</span>
+        <span class="hint">فهرست‌ها بر اساس عضویت فعال و مجوزهای مشاهدهٔ کمپین و سناریوی بودجهٔ حساب شما بارگذاری می‌شوند.</span>
       </div>
       <p id="status" role="status" aria-live="polite"></p>
     </section>
@@ -134,8 +134,8 @@ _CLIENT_SCRIPT = r"""(() => {
   const formatNumber = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 2 });
 
   const params = new URLSearchParams(window.location.search);
-  workspaceInput.value = params.get("workspace_id") || "";
-  organizationInput.value = params.get("organization_unit_id") || "";
+  const requestedWorkspaceId = params.get("workspace_id") || "";
+  const requestedOrganizationId = params.get("organization_unit_id") || "";
   byId("period-start").value = params.get("period_start") || "";
   byId("period-end").value = params.get("period_end") || "";
 
@@ -170,7 +170,9 @@ _CLIENT_SCRIPT = r"""(() => {
     const response = await fetch(path, {
       method: "GET",
       credentials: "same-origin",
-      headers: { "Accept": "application/json", "X-Workspace-ID": workspaceId }
+      headers: workspaceId
+        ? { "Accept": "application/json", "X-Workspace-ID": workspaceId }
+        : { "Accept": "application/json" }
     });
     let payload = {};
     try { payload = await response.json(); } catch (_) {}
@@ -180,6 +182,36 @@ _CLIENT_SCRIPT = r"""(() => {
       throw new Error(payload.detail || "دریافت اطلاعات ناموفق بود. دوباره تلاش کنید.");
     }
     return payload;
+  }
+  function appendChoice(select, value, label) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+  }
+  async function loadOrganizationChoices() {
+    organizationInput.replaceChildren();
+    appendChoice(organizationInput, "", "در حال بارگذاری…");
+    const units = await getJson("/api/v1/system/organization-units", workspaceInput.value);
+    organizationInput.replaceChildren();
+    appendChoice(organizationInput, "", "واحد سازمانی را انتخاب کنید");
+    units.forEach((unit) => appendChoice(organizationInput, unit.id, unit.name));
+    const requested = units.find((unit) => unit.id === requestedOrganizationId);
+    const root = units.find((unit) => unit.unit_type === "root");
+    if (requested) organizationInput.value = requested.id;
+    else if (root) organizationInput.value = root.id;
+    if (!units.length) appendChoice(organizationInput, "", "واحد مجاز پیدا نشد");
+  }
+  async function loadContextChoices() {
+    const workspaces = await getJson("/api/v1/system/workspaces");
+    workspaceInput.replaceChildren();
+    appendChoice(workspaceInput, "", "فضای کاری را انتخاب کنید");
+    workspaces.forEach((workspace) => appendChoice(workspaceInput, workspace.id, workspace.name));
+    const requested = workspaces.find((workspace) => workspace.id === requestedWorkspaceId);
+    if (requested) workspaceInput.value = requested.id;
+    else if (workspaces.length === 1) workspaceInput.value = workspaces[0].id;
+    if (workspaceInput.value) await loadOrganizationChoices();
+    else organizationInput.replaceChildren();
   }
   async function loadAllScenarios(fields) {
     const result = [];
@@ -346,12 +378,26 @@ _CLIENT_SCRIPT = r"""(() => {
   }
   byId("load-scenarios").addEventListener("click", loadScenarios);
   byId("compare").addEventListener("click", compareScenarios);
-  [workspaceInput, organizationInput, byId("period-start"), byId("period-end")].forEach((input) => {
+  workspaceInput.addEventListener("change", async () => {
+    scenarioPanel.hidden = true;
+    clearResults();
+    setStatus("", false);
+    if (!workspaceInput.value) {
+      organizationInput.replaceChildren();
+      return;
+    }
+    try { await loadOrganizationChoices(); }
+    catch (error) { setStatus(error.message || "دریافت واحدهای مجاز ناموفق بود.", true); }
+  });
+  [organizationInput, byId("period-start"), byId("period-end")].forEach((input) => {
     input.addEventListener("change", () => {
       scenarioPanel.hidden = true;
       clearResults();
       setStatus("", false);
     });
+  });
+  loadContextChoices().catch((error) => {
+    setStatus(error.message || "دریافت فضاهای کاری ناموفق بود.", true);
   });
   updateSelectionCount();
 })();"""

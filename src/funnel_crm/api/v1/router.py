@@ -34,9 +34,11 @@ from funnel_crm.api.v1.integrations import router as integrations_router
 from funnel_crm.api.v1.product_connections import router as product_connections_router
 from funnel_crm.api.v1.system import router as system_router
 from funnel_crm.api.v1.crm_metric_catalog import router as crm_metric_catalog_router
+from funnel_crm.api.v1.crm_workspace_context import router as crm_workspace_context_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(system_router)
+router.include_router(crm_workspace_context_router)
 router.include_router(integrations_router)
 router.include_router(product_connections_router)
 router.include_router(crm_profiles_router)
