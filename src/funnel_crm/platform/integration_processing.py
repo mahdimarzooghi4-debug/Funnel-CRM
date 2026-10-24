@@ -31,6 +31,7 @@ class LeaseLostError(Exception):
 class ClaimedIntegrationEvent:
     id: UUID
     tenant_id: UUID
+    connection_id: UUID
     event_id: UUID
     source_product: str
     event_type: str
@@ -78,7 +79,13 @@ class PostgresProductEventProcessor:
         self._keyring = keyring
 
     async def claim(
-        self, tenant_id: UUID, *, limit: int = 10
+        self,
+        tenant_id: UUID,
+        *,
+        limit: int = 10,
+        event_type: str | None = None,
+        contract_name: str | None = None,
+        contract_version: int | None = None,
     ) -> list[ClaimedIntegrationEvent]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -124,13 +131,26 @@ class PostgresProductEventProcessor:
                         IntegrationEventInbox.attempt_count < self._max_attempts,
                     ),
                 )
+                claim_filters = [
+                    IntegrationEventInbox.tenant_id == tenant_id,
+                    eligible,
+                ]
+                if event_type is not None:
+                    claim_filters.append(
+                        IntegrationEventInbox.event_type == event_type
+                    )
+                if contract_name is not None:
+                    claim_filters.append(
+                        IntegrationEventInbox.contract_name == contract_name
+                    )
+                if contract_version is not None:
+                    claim_filters.append(
+                        IntegrationEventInbox.contract_version == contract_version
+                    )
                 rows = (
                     await session.scalars(
                         select(IntegrationEventInbox)
-                        .where(
-                            IntegrationEventInbox.tenant_id == tenant_id,
-                            eligible,
-                        )
+                        .where(*claim_filters)
                         .order_by(
                             IntegrationEventInbox.available_at,
                             IntegrationEventInbox.received_at,
@@ -172,6 +192,7 @@ class PostgresProductEventProcessor:
                         ClaimedIntegrationEvent(
                             id=row.id,
                             tenant_id=row.tenant_id,
+                            connection_id=row.connection_id,
                             event_id=row.event_id,
                             source_product=row.source_product,
                             event_type=row.event_type,

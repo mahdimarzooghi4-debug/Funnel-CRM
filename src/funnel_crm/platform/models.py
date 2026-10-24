@@ -979,3 +979,57 @@ class CRMCommunicationConsentEvent(Base):
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
     )
+
+
+
+class ProductCustomerIdentity(Base):
+    """Stable source-product customer key mapped to one CRM profile per tenant."""
+
+    __tablename__ = "product_customer_identities"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(source_product)) BETWEEN 2 AND 80",
+            name="ck_product_customer_identities_source",
+        ),
+        CheckConstraint(
+            "length(trim(external_customer_id)) BETWEEN 1 AND 200",
+            name="ck_product_customer_identities_external_id",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_product_customer_identities_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_product_customer_identities_profile_same_tenant",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "source_product",
+            "profile_id",
+            name="uq_product_customer_identities_profile_source",
+        ),
+        Index(
+            "ix_product_customer_identities_tenant_profile",
+            "tenant_id",
+            "profile_id",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    source_product: Mapped[str] = mapped_column(String(80), primary_key=True)
+    external_customer_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
