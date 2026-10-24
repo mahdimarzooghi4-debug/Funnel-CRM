@@ -41,6 +41,15 @@ def upgrade() -> None:
     )
     op.create_index("ix_crm_sales_targets_tenant_org_period", "crm_sales_targets",
                     ["tenant_id", "organization_unit_id", "period_start", "period_end"])
+    permission_table = sa.table(
+        "permission_definitions",
+        sa.column("key", sa.String(160)),
+        sa.column("description", sa.String(500)),
+    )
+    op.bulk_insert(permission_table, [
+        {"key": "crm.sales_target:view", "description": "View sales targets and attainment in authorized organization scopes"},
+        {"key": "crm.sales_target:manage", "description": "Create sales targets in authorized organization scopes"},
+    ])
     op.execute("ALTER TABLE crm_sales_targets ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE crm_sales_targets FORCE ROW LEVEL SECURITY")
     op.execute(
@@ -56,3 +65,12 @@ def downgrade() -> None:
     op.execute("ALTER TABLE crm_sales_targets DISABLE ROW LEVEL SECURITY")
     op.drop_index("ix_crm_sales_targets_tenant_org_period", table_name="crm_sales_targets")
     op.drop_table("crm_sales_targets")
+    op.execute(
+        "DELETE FROM role_permissions WHERE permission_key IN "
+        "('crm.sales_target:view', 'crm.sales_target:manage')"
+    )
+    op.execute(
+        "DELETE FROM permission_definitions WHERE key IN "
+        "('crm.sales_target:view', 'crm.sales_target:manage')"
+    )
+
