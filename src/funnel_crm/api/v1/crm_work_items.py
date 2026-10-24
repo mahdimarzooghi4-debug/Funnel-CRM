@@ -126,6 +126,7 @@ class WorkItemRead(BaseModel):
     campaign_id: UUID | None
     assigned_membership_id: UUID | None
     created_by_membership_id: UUID
+    source_learning_review_id: UUID | None
     title: str
     description: str | None
     due_at: datetime | None
@@ -214,6 +215,7 @@ def _snapshot(item: CRMWorkItem) -> dict:
         "profile_id": str(item.profile_id) if item.profile_id else None,
         "opportunity_id": str(item.opportunity_id) if item.opportunity_id else None,
         "campaign_id": str(item.campaign_id) if item.campaign_id else None,
+        "source_learning_review_id": str(item.source_learning_review_id) if item.source_learning_review_id else None,
         "assigned_membership_id": str(item.assigned_membership_id) if item.assigned_membership_id else None,
         "title": item.title,
         "due_at": item.due_at.isoformat() if item.due_at else None,
