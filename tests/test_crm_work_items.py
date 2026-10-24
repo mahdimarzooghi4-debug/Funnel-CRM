@@ -305,7 +305,7 @@ async def test_selected_sales_review_items_create_scoped_audited_followups(
         summary = execution.json()["items"][0]
         assert summary["opportunity_count"] == 1
         assert summary["opportunities_without_work_item_count"] == 0
-        assert summary["follow_up_coverage_percent"] == "100.00"
+        assert Decimal(str(summary["follow_up_coverage_percent"])) == Decimal("100.00")
         assert summary["work_item_count_by_status"]["open"] == 1
         assert summary["unassigned_active_work_item_count"] == 1
 
