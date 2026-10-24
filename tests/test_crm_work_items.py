@@ -225,6 +225,7 @@ async def test_selected_sales_review_items_create_scoped_audited_followups(
             target_amount=Decimal("1000"),
             created_by_membership_id=context.access.membership_id,
         ))
+        await context.session.flush()
         context.session.add(CRMOpportunity(
             id=opportunity_id,
             tenant_id=tenant_id,
