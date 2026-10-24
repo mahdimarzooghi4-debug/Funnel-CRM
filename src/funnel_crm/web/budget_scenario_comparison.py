@@ -137,6 +137,13 @@ _PAGE = """<!doctype html>
           <tbody id="period-comparison"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">مقایسهٔ تغییرها به تفکیک کانال</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کانال</th><th scope="col">شاخص</th><th scope="col">بازهٔ قبلی</th><th scope="col">بازهٔ جاری</th><th scope="col">تغییر</th><th scope="col">درصد تغییر</th></tr></thead>
+          <tbody id="channel-period-comparison"></tbody>
+        </table>
+      </div>
       <div id="scenario-results" class="cards"></div>
       <h2 style="margin-top:28px">عملکرد کمپین‌ها در همین بازه</h2>
       <div class="table-wrap">
@@ -182,6 +189,7 @@ _CLIENT_SCRIPT = r"""(() => {
     latestFields = null;
     byId("period-comparison-period").textContent = "";
     byId("period-comparison").replaceChildren();
+    byId("channel-period-comparison").replaceChildren();
     resultsPanel.hidden = true;
     byId("evidence-coverage").replaceChildren();
     byId("channel-coverage").replaceChildren();
@@ -488,6 +496,76 @@ _CLIENT_SCRIPT = r"""(() => {
     if (value === null || value === undefined) return "ثبت نشده";
     return currency ? displayAmount(value, currency) : formatNumber.format(value);
   }
+  function aggregateReportEvidenceByChannel(report) {
+    const groups = new Map();
+    (report.campaigns || []).forEach((campaign) => {
+      const channel = campaignChannel(campaign);
+      const group = groups.get(channel) || { channel, spend: {}, leads: [], conversions: [] };
+      Object.entries(campaign.recorded_spend_by_currency || {}).forEach(([currency, amount]) => {
+        group.spend[currency] = (group.spend[currency] || 0) + Number(amount);
+      });
+      ["leads", "conversions"].forEach((key) => {
+        const actual = (campaign.metrics || {})[key]?.actual;
+        if (actual !== null && actual !== undefined) group[key].push(Number(actual));
+      });
+      groups.set(channel, group);
+    });
+    groups.forEach((group) => {
+      ["leads", "conversions"].forEach((key) => {
+        group[key] = group[key].length ? group[key].reduce((sum, value) => sum + value, 0) : null;
+      });
+    });
+    return groups;
+  }
+  function channelComparisonRows(currentReport, previousReport) {
+    if (!previousReport) return [];
+    const current = aggregateReportEvidenceByChannel(currentReport);
+    const previous = aggregateReportEvidenceByChannel(previousReport);
+    const rows = [];
+    Array.from(new Set([...previous.keys(), ...current.keys()])).sort((a, b) => a.localeCompare(b, "fa")).forEach((channel) => {
+      const beforeGroup = previous.get(channel);
+      const currentGroup = current.get(channel);
+      [["سرنخ", "leads"], ["تبدیل", "conversions"]].forEach(([label, key]) => {
+        const before = beforeGroup?.[key] ?? null;
+        const now = currentGroup?.[key] ?? null;
+        rows.push({ channel, label, currency: "", before, now,
+          delta: before === null || now === null ? null : now - before,
+          percent: before === null || now === null || before === 0 ? null : ((now - before) / Math.abs(before)) * 100 });
+      });
+      const currencies = new Set([...Object.keys(beforeGroup?.spend || {}), ...Object.keys(currentGroup?.spend || {})]);
+      Array.from(currencies).sort().forEach((currency) => {
+        const before = beforeGroup && Object.hasOwn(beforeGroup.spend, currency) ? beforeGroup.spend[currency] : null;
+        const now = currentGroup && Object.hasOwn(currentGroup.spend, currency) ? currentGroup.spend[currency] : null;
+        rows.push({ channel, label: "هزینهٔ ثبت‌شده", currency, before, now,
+          delta: before === null || now === null ? null : now - before,
+          percent: before === null || now === null || before === 0 ? null : ((now - before) / Math.abs(before)) * 100 });
+      });
+    });
+    return rows;
+  }
+  function renderChannelPeriodComparison(currentReport, previousReport) {
+    const body = byId("channel-period-comparison");
+    body.replaceChildren();
+    const rows = channelComparisonRows(currentReport, previousReport);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "دادهٔ مقایسه‌ای کانال‌ها در دسترس نیست.");
+      cell.colSpan = 6;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.channel),
+        element("td", "", item.label + (item.currency ? " · " + item.currency : "")),
+        element("td", "", comparisonValue(item.before, item.currency)),
+        element("td", "", comparisonValue(item.now, item.currency)),
+        element("td", "", item.delta === null ? "نامشخص" : comparisonValue(item.delta, item.currency)),
+        element("td", "", item.percent === null ? "نامشخص" : formatNumber.format(item.percent) + "٪"));
+      body.appendChild(row);
+    });
+  }
   function renderPeriodComparison(currentReport, previousReport, fields) {
     const body = byId("period-comparison");
     body.replaceChildren();
@@ -629,6 +707,13 @@ _CLIENT_SCRIPT = r"""(() => {
           + "؛ مقدار قبلی: " + (item.before ?? "ثبت نشده") + "؛ مقدار جاری: " + (item.now ?? "ثبت نشده")
           + "؛ درصد تغییر: " + (item.percent === null ? "نامشخص" : item.percent + "٪"),
       ]));
+      channelComparisonRows(result, latestPreviousComparison).forEach((item) => rows.push([
+        "مقایسه کانال", fields.start, fields.end, "", "", item.channel, item.currency,
+        item.label + " · تغییر", item.delta,
+        "بازه قبلی " + precedingPeriod(fields).start + " تا " + precedingPeriod(fields).end
+          + "؛ مقدار قبلی: " + (item.before ?? "ثبت نشده") + "؛ مقدار جاری: " + (item.now ?? "ثبت نشده")
+          + "؛ درصد تغییر: " + (item.percent === null ? "نامشخص" : item.percent + "٪"),
+      ]));
     }
     (result.scenarios || []).forEach((scenario) => {
       Object.keys(scenario.reconciliation_by_currency || {}).sort().forEach((currency) => {
@@ -739,6 +824,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderScenarioSummaries(result.scenarios || []);
       renderCampaignRows(result.campaigns || []);
       renderPeriodComparison(result, previousResult, fields);
+      renderChannelPeriodComparison(result, previousResult);
       updateReportUrl(fields, ids);
       latestComparison = result;
       latestPreviousComparison = previousResult;

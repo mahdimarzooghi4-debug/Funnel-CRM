@@ -63,7 +63,7 @@ const ids = [
   "workspace-id", "organization-id", "status", "scenario-list",
   "scenario-panel", "results", "scenario-results", "campaign-results", "evidence-coverage", "channel-coverage", "evidence-gaps",
   "selection-count", "compare", "load-scenarios", "period-start", "period-end", "export-csv",
-  "period-comparison-period", "period-comparison",
+  "period-comparison-period", "period-comparison", "channel-period-comparison",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -187,6 +187,12 @@ async function main() {
     ["تبدیل", "۲", "۳", "۱", "۵۰٪"],
     ["هزینهٔ ثبت‌شده · USD", "۶۰۰ USD", "۹۰۰ USD", "۳۰۰ USD", "۵۰٪"],
   ]);
+  const channelComparison = elements.get("channel-period-comparison").children;
+  assert.deepEqual(channelComparison.map((row) => row.children.map((cell) => cell.textContent)), [
+    ["email", "سرنخ", "۱۰", "۱۲", "۲", "۲۰٪"],
+    ["email", "تبدیل", "۲", "۳", "۱", "۵۰٪"],
+    ["email", "هزینهٔ ثبت‌شده · USD", "۶۰۰ USD", "۹۰۰ USD", "۳۰۰ USD", "۵۰٪"],
+  ]);
   assert.equal(elements.get("scenario-list").children[0].children[0].checked, true);
   assert.equal(elements.get("scenario-list").children[1].children[0].checked, true);
   assert.ok(reportUrls[0].includes("workspace_id=workspace-1"));
@@ -252,6 +258,7 @@ async function main() {
   assert.ok(csv.includes('"email"'));
   assert.ok(csv.includes('"مقایسه با بازه قبلی"'));
   assert.ok(csv.includes('"سرنخ · تغییر"'));
+  assert.ok(csv.includes('"مقایسه کانال"'));
   assert.ok(csv.includes('"شکاف شواهد"'));
   assert.ok(csv.includes('"دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
