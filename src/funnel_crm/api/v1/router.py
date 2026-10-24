@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from funnel_crm.api.v1.crm_segments import router as crm_segments_router
 from funnel_crm.api.v1.crm_campaigns import router as crm_campaigns_router
 from funnel_crm.api.v1.crm_campaign_measurements import router as crm_campaign_measurements_router
+from funnel_crm.api.v1.crm_campaign_measurement_imports import router as crm_campaign_measurement_imports_router
 from funnel_crm.api.v1.crm_campaign_portfolio_analytics import router as crm_campaign_portfolio_analytics_router
 from funnel_crm.api.v1.crm_budget_scenarios import router as crm_budget_scenarios_router
 from funnel_crm.api.v1.crm_customer_activity_analytics import router as crm_customer_activity_analytics_router
@@ -30,6 +31,7 @@ router.include_router(crm_customer_activity_analytics_router)
 router.include_router(crm_segments_router)
 router.include_router(crm_campaigns_router)
 router.include_router(crm_campaign_measurements_router)
+router.include_router(crm_campaign_measurement_imports_router)
 router.include_router(crm_campaign_portfolio_analytics_router)
 router.include_router(crm_budget_scenarios_router)
 router.include_router(crm_contact_points_router)
