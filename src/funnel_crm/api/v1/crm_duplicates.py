@@ -70,6 +70,8 @@ async def list_duplicate_candidates(
         raise HTTPException(status_code=404, detail="CRM profile not found")
     if profile.merged_into_profile_id is not None:
         raise HTTPException(status_code=409, detail="Merged profiles cannot start a duplicate review")
+    if profile.archived_at is not None:
+        raise HTTPException(status_code=409, detail="Archived profiles cannot start a duplicate review")
 
     for permission in ("crm.profile:view", "crm.profile:review_duplicates"):
         if not await has_crm_permission(
@@ -132,6 +134,7 @@ async def list_duplicate_candidates(
                 CRMProfile.tenant_id == tenant_id,
                 CRMProfile.id != profile.id,
                 CRMProfile.merged_into_profile_id.is_(None),
+                CRMProfile.archived_at.is_(None),
                 CRMProfile.organization_unit_id.in_(
                     crm_scope_ids(context, permission_key="crm.profile:view")
                 ),

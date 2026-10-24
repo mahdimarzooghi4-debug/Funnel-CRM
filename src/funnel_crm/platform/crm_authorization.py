@@ -41,6 +41,7 @@ def crm_scope_ids(
     context: TenantSessionContext,
     *,
     permission_key: str,
+    cte_name: str = "crm_assigned_scope",
 ):
     """Build a tenant-bound query of units covered by one CRM permission.
 
@@ -84,7 +85,7 @@ def crm_scope_ids(
             Role.is_active.is_(True),
             RolePermission.permission_key == permission_key,
         )
-        .cte("crm_assigned_scope", recursive=True)
+        .cte(cte_name, recursive=True)
     )
     child_unit = aliased(OrganizationUnit)
     expanded_scope = assigned_units.union(
