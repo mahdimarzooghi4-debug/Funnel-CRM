@@ -36,6 +36,8 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.segment:view",
         "crm.segment:manage",
         "crm.integration:manage",
+        "crm.campaign:view",
+        "crm.campaign:manage",
     }
 )
 
