@@ -92,6 +92,51 @@ class CampaignPortfolioPerformance(BaseModel):
     sort_by: Literal["conversions", "leads", "clicks"]
 
 
+class ValueChange(BaseModel):
+    current_value: Decimal | int | float | None
+    comparison_value: Decimal | int | float | None
+    absolute_change: Decimal | int | float | None
+    percent_change: float | None
+    comparable: bool
+
+
+class PerformanceChange(BaseModel):
+    campaign_count: ValueChange
+    measurement_record_count: ValueChange
+    observed_campaign_days: dict[str, ValueChange]
+    totals: dict[str, ValueChange]
+    rates: dict[str, ValueChange]
+    actual_spend_by_currency: dict[str, ValueChange]
+    attributed_revenue_by_currency: dict[str, ValueChange]
+    cost_per_lead_by_currency: dict[str, ValueChange]
+    cost_per_conversion_by_currency: dict[str, ValueChange]
+    roas_by_currency: dict[str, ValueChange]
+
+
+class AggregatePeriodComparison(BaseModel):
+    current: PerformanceAggregate
+    comparison: PerformanceAggregate
+    change: PerformanceChange
+
+
+class GroupPeriodComparison(BaseModel):
+    key: str
+    current: PerformanceAggregate | None
+    comparison: PerformanceAggregate | None
+    change: PerformanceChange
+
+
+class CampaignPortfolioComparison(BaseModel):
+    current_period_start: date
+    current_period_end: date
+    comparison_period_start: date
+    comparison_period_end: date
+    organization_unit_id: UUID | None
+    grouped_by: Literal["channel", "objective"]
+    total: AggregatePeriodComparison
+    groups: list[GroupPeriodComparison]
+
+
 def _rate(numerator: int, denominator: int, paired_campaign_days: int) -> float | None:
     return round(100 * numerator / denominator, 4) if paired_campaign_days and denominator > 0 else None
 
@@ -121,6 +166,97 @@ def _empty_accumulator() -> dict[str, object]:
 def _add_money(target: dict[str, Decimal], currency: str | None, amount: Decimal | None) -> None:
     if currency is not None and amount is not None:
         target[currency] = target.get(currency, Decimal("0")) + amount
+
+
+def _value_change(
+    current: Decimal | int | float | None,
+    comparison: Decimal | int | float | None,
+) -> ValueChange:
+    comparable = current is not None and comparison is not None
+    difference = current - comparison if comparable else None
+    percent = (
+        round(float(difference) / abs(float(comparison)) * 100, 4)
+        if comparable and comparison != 0
+        else None
+    )
+    return ValueChange(
+        current_value=current,
+        comparison_value=comparison,
+        absolute_change=difference,
+        percent_change=percent,
+        comparable=comparable,
+    )
+
+
+def _map_change(
+    current: dict[str, Decimal | int | float],
+    comparison: dict[str, Decimal | int | float],
+) -> dict[str, ValueChange]:
+    return {
+        key: _value_change(current.get(key), comparison.get(key))
+        for key in sorted(set(current) | set(comparison))
+    }
+
+
+def _performance_change(
+    current: PerformanceAggregate | None,
+    comparison: PerformanceAggregate | None,
+) -> PerformanceChange:
+    def efficiency_values(
+        aggregate: PerformanceAggregate | None, attribute: str, value_attribute: str
+    ) -> dict[str, Decimal | None]:
+        if aggregate is None:
+            return {}
+        metrics = getattr(aggregate.efficiency, attribute)
+        return {
+            currency: getattr(metric, value_attribute)
+            for currency, metric in metrics.items()
+        }
+
+    current_campaign_count = current.campaign_count if current is not None else None
+    comparison_campaign_count = comparison.campaign_count if comparison is not None else None
+    current_record_count = current.measurement_record_count if current is not None else None
+    comparison_record_count = comparison.measurement_record_count if comparison is not None else None
+    current_observed = current.observed_campaign_days if current is not None else {}
+    comparison_observed = comparison.observed_campaign_days if comparison is not None else {}
+    current_totals = current.totals if current is not None else {}
+    comparison_totals = comparison.totals if comparison is not None else {}
+    current_spend = current.actual_spend_by_currency if current is not None else {}
+    comparison_spend = comparison.actual_spend_by_currency if comparison is not None else {}
+    current_revenue = current.attributed_revenue_by_currency if current is not None else {}
+    comparison_revenue = comparison.attributed_revenue_by_currency if comparison is not None else {}
+
+    return PerformanceChange(
+        campaign_count=_value_change(current_campaign_count, comparison_campaign_count),
+        measurement_record_count=_value_change(current_record_count, comparison_record_count),
+        observed_campaign_days=_map_change(current_observed, comparison_observed),
+        totals=_map_change(current_totals, comparison_totals),
+        rates={
+            key: _value_change(
+                getattr(current, key) if current is not None else None,
+                getattr(comparison, key) if comparison is not None else None,
+            )
+            for key in (
+                "click_through_rate_percent",
+                "lead_rate_per_click_percent",
+                "conversion_rate_per_click_percent",
+            )
+        },
+        actual_spend_by_currency=_map_change(current_spend, comparison_spend),
+        attributed_revenue_by_currency=_map_change(current_revenue, comparison_revenue),
+        cost_per_lead_by_currency=_map_change(
+            efficiency_values(current, "cost_per_lead_by_currency", "cost_per_outcome"),
+            efficiency_values(comparison, "cost_per_lead_by_currency", "cost_per_outcome"),
+        ),
+        cost_per_conversion_by_currency=_map_change(
+            efficiency_values(current, "cost_per_conversion_by_currency", "cost_per_outcome"),
+            efficiency_values(comparison, "cost_per_conversion_by_currency", "cost_per_outcome"),
+        ),
+        roas_by_currency=_map_change(
+            efficiency_values(current, "roas_by_currency", "return_multiple"),
+            efficiency_values(comparison, "roas_by_currency", "return_multiple"),
+        ),
+    )
 
 
 def _divide(numerator: Decimal, denominator: Decimal) -> Decimal | None:
@@ -509,3 +645,83 @@ def _accumulate(acc: dict[str, object], item: dict[str, object]) -> None:
     currency = item["planned_budget_currency"]
     amount = item["planned_budget_amount"]
     _add_money(acc["planned_budget_by_currency"], currency, amount)
+
+
+
+@router.get(
+    "/comparison",
+    response_model=CampaignPortfolioComparison,
+    operation_id="compareCampaignPortfolioPerformance",
+)
+async def compare_campaign_portfolio_performance(
+    current_period_start: date = Query(...),
+    current_period_end: date = Query(...),
+    comparison_period_start: date = Query(...),
+    comparison_period_end: date = Query(...),
+    grouped_by: Literal["channel", "objective"] = Query(default="channel"),
+    organization_unit_id: UUID | None = None,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignPortfolioComparison:
+    periods = (
+        (current_period_start, current_period_end),
+        (comparison_period_start, comparison_period_end),
+    )
+    if any(start > end for start, end in periods):
+        raise HTTPException(status_code=422, detail="Period start must not be after period end")
+    if any((end - start).days > 365 for start, end in periods):
+        raise HTTPException(status_code=422, detail="Performance reports are limited to 366 calendar days")
+    if (current_period_end - current_period_start).days != (
+        comparison_period_end - comparison_period_start
+    ).days:
+        raise HTTPException(status_code=422, detail="Comparison periods must have the same number of calendar days")
+    overlaps = current_period_start <= comparison_period_end and comparison_period_start <= current_period_end
+    if overlaps:
+        raise HTTPException(status_code=422, detail="Comparison periods must not overlap")
+
+    current_report = await get_campaign_portfolio_performance(
+        period_start=current_period_start,
+        period_end=current_period_end,
+        grouped_by=grouped_by,
+        organization_unit_id=organization_unit_id,
+        sort_by="conversions",
+        limit=1,
+        offset=0,
+        context=context,
+    )
+    comparison_report = await get_campaign_portfolio_performance(
+        period_start=comparison_period_start,
+        period_end=comparison_period_end,
+        grouped_by=grouped_by,
+        organization_unit_id=organization_unit_id,
+        sort_by="conversions",
+        limit=1,
+        offset=0,
+        context=context,
+    )
+    current_groups = {group.key: group.metrics for group in current_report.groups}
+    comparison_groups = {group.key: group.metrics for group in comparison_report.groups}
+    return CampaignPortfolioComparison(
+        current_period_start=current_period_start,
+        current_period_end=current_period_end,
+        comparison_period_start=comparison_period_start,
+        comparison_period_end=comparison_period_end,
+        organization_unit_id=organization_unit_id,
+        grouped_by=grouped_by,
+        total=AggregatePeriodComparison(
+            current=current_report.totals,
+            comparison=comparison_report.totals,
+            change=_performance_change(current_report.totals, comparison_report.totals),
+        ),
+        groups=[
+            GroupPeriodComparison(
+                key=key,
+                current=current_groups.get(key),
+                comparison=comparison_groups.get(key),
+                change=_performance_change(
+                    current_groups.get(key),
+                    comparison_groups.get(key),
+                ),
+            )
+            for key in sorted(set(current_groups) | set(comparison_groups))
+        ],
+    )
