@@ -66,6 +66,7 @@ const ids = [
   "period-comparison-period", "period-comparison", "channel-period-comparison", "unit-cost-comparison",
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
+  "target-period-comparison-note", "target-period-comparison",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -110,6 +111,19 @@ const targetPortfolio = {
     },
   }],
 };
+const previousTargetPortfolio = {
+  ...targetPortfolio,
+  period_start: "2026-09-17",
+  period_end: "2026-09-30",
+  campaigns: [{
+    ...targetPortfolio.campaigns[0],
+    target_plan_id: "target-plan-previous",
+    metrics: {
+      leads: { ...targetPortfolio.campaigns[0].metrics.leads, actual: 8, status: "not_met" },
+      conversions: { ...targetPortfolio.campaigns[0].metrics.conversions },
+    },
+  }],
+};
 let reportCampaigns = null;
 const fetch = async (path, options = {}) => {
   calls.push({ path, options });
@@ -121,7 +135,8 @@ const fetch = async (path, options = {}) => {
   } else if (path.startsWith("/api/v1/crm/budget-scenarios?")) {
     payload = scenarios;
   } else if (path.startsWith("/api/v1/crm/analytics/campaign-target-performance/portfolio?")) {
-    payload = targetPortfolio;
+    const query = new URLSearchParams(path.split("?")[1]);
+    payload = query.get("period_start") === "2026-09-17" ? previousTargetPortfolio : targetPortfolio;
   } else if (path.startsWith("/api/v1/crm/budget-scenarios/compare/performance-context?")) {
     const query = new URLSearchParams(path.split("?")[1]);
     if (query.get("period_start") === "2026-09-17") {
@@ -213,6 +228,12 @@ async function main() {
     ["email", "سرنخ", "۱", "۱", "۰", "۰", "۰"],
   ]);
   assert.match(elements.get("channel-target-summary-note").textContent, /وضعیت‌های نامشخص/);
+  assert.deepEqual(elements.get("target-period-comparison").children.map((row) =>
+    row.children.map((cell) => cell.textContent)), [
+    ["email", "تبدیل", "دادهٔ کافی ثبت نشده", "دادهٔ کافی ثبت نشده", "۱"],
+    ["email", "سرنخ", "هدف محقق‌نشده", "هدف محقق‌شده", "۱"],
+  ]);
+  assert.match(elements.get("target-period-comparison-note").textContent, /تغییرها توصیفی‌اند/);
   assert.match(elements.get("period-comparison-period").textContent, /2026-09-17 تا 2026-09-30/);
   const periodRows = elements.get("period-comparison").children;
   assert.deepEqual(periodRows.map((row) => row.children.map((cell) => cell.textContent)), [
@@ -303,6 +324,8 @@ async function main() {
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
   assert.ok(csv.includes('"خلاصه هدف کانال"'));
   assert.ok(csv.includes('"محقق‌شده: 1؛ محقق‌نشده: 0؛ داده ناکافی: 0؛ نامشخص: 0"'));
+  assert.ok(csv.includes('"تغییر وضعیت هدف"'));
+  assert.ok(csv.includes('هدف محقق‌نشده ← هدف محقق‌شده'));
   assert.ok(csv.includes('"شکاف شواهد"'));
   assert.ok(csv.includes('"دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
@@ -333,6 +356,13 @@ async function main() {
   assert.equal(targetQuery.get("period_start"), "2026-10-01");
   assert.equal(targetQuery.get("period_end"), "2026-10-14");
   assert.equal(targetQuery.get("organization_unit_id"), "root-1");
+  const priorTargetCall = calls.find((call) => {
+    if (!call.path.startsWith("/api/v1/crm/analytics/campaign-target-performance/portfolio?")) return false;
+    return new URLSearchParams(call.path.split("?")[1]).get("period_start") === "2026-09-17";
+  });
+  assert.ok(priorTargetCall);
+  const priorTargetQuery = new URLSearchParams(priorTargetCall.path.split("?")[1]);
+  assert.equal(priorTargetQuery.get("period_end"), "2026-09-30");
 
   const compareCall = calls.find((call) => call.path.startsWith("/api/v1/crm/budget-scenarios/compare/"));
   assert.ok(compareCall);

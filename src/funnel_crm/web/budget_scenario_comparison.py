@@ -176,6 +176,14 @@ _PAGE = """<!doctype html>
           <tbody id="channel-target-summary"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">تغییر وضعیت هدف‌ها نسبت به بازهٔ قبلی</h3>
+      <p id="target-period-comparison-note" class="muted">مقایسهٔ توصیفی وضعیت هدف‌ها برای کمپین‌های مشترک در دو بازهٔ هم‌طول است.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کانال</th><th scope="col">شاخص</th><th scope="col">وضعیت بازهٔ قبلی</th><th scope="col">وضعیت بازهٔ جاری</th><th scope="col">تعداد کمپین</th></tr></thead>
+          <tbody id="target-period-comparison"></tbody>
+        </table>
+      </div>
     </section>
   </main>
 </body>
@@ -195,6 +203,7 @@ _CLIENT_SCRIPT = r"""(() => {
   let latestComparison = null;
   let latestPreviousComparison = null;
   let latestTargetPortfolio = null;
+  let latestPreviousTargetPortfolio = null;
   let latestFields = null;
 
   const params = new URLSearchParams(window.location.search);
@@ -212,7 +221,10 @@ _CLIENT_SCRIPT = r"""(() => {
     latestComparison = null;
     latestPreviousComparison = null;
     latestTargetPortfolio = null;
+    latestPreviousTargetPortfolio = null;
     latestFields = null;
+    byId("target-period-comparison-note").textContent = "";
+    byId("target-period-comparison").replaceChildren();
     byId("target-outcomes-note").textContent = "";
     byId("target-outcomes").replaceChildren();
     byId("channel-target-summary-note").textContent = "";
@@ -739,6 +751,75 @@ _CLIENT_SCRIPT = r"""(() => {
       body.appendChild(row);
     });
   }
+  function targetStatusByCampaign(portfolio, includedIds) {
+    const statuses = new Map();
+    (portfolio.campaigns || []).filter((campaign) =>
+      includedIds.has(String(campaign.campaign_id))).forEach((campaign) => {
+      Object.entries(campaign.metrics || {}).forEach(([key, metric]) => {
+        const status = ["met", "not_met", "no_data"].includes(metric.status) ? metric.status : "unknown";
+        statuses.set(JSON.stringify([String(campaign.campaign_id), key]), {
+          campaignId: String(campaign.campaign_id),
+          channel: campaign.group_key || "نامشخص",
+          key,
+          status,
+        });
+      });
+    });
+    return statuses;
+  }
+  function targetPeriodTransitionRows(current, previous, includedIds) {
+    if (!current || !previous || current.campaign_list_truncated || previous.campaign_list_truncated) return null;
+    const now = targetStatusByCampaign(current, includedIds);
+    const before = targetStatusByCampaign(previous, includedIds);
+    const grouped = new Map();
+    Array.from(new Set([...now.keys(), ...before.keys()])).forEach((id) => {
+      const oldItem = before.get(id);
+      const newItem = now.get(id);
+      const item = newItem || oldItem;
+      const from = oldItem ? oldItem.status : "no_plan";
+      const to = newItem ? newItem.status : "no_plan";
+      const groupId = JSON.stringify([item.channel, item.key, from, to]);
+      const group = grouped.get(groupId) || { channel: item.channel, key: item.key, from, to, campaigns: 0 };
+      group.campaigns += 1;
+      grouped.set(groupId, group);
+    });
+    return Array.from(grouped.values()).sort((a, b) =>
+      a.channel.localeCompare(b.channel, "fa") || a.key.localeCompare(b.key)
+        || a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+  }
+  function targetTransitionLabel(status) {
+    return ({ met: "هدف محقق‌شده", not_met: "هدف محقق‌نشده",
+      no_data: "دادهٔ کافی ثبت نشده", unknown: "نامشخص", no_plan: "هدف ثبت نشده" })[status] || "نامشخص";
+  }
+  function renderTargetPeriodComparison(report, current, previous) {
+    const body = byId("target-period-comparison");
+    const note = byId("target-period-comparison-note");
+    body.replaceChildren();
+    const includedIds = new Set((report.campaigns || []).map((campaign) => String(campaign.campaign_id)));
+    const rows = targetPeriodTransitionRows(current, previous, includedIds);
+    if (rows === null) {
+      note.textContent = "مقایسهٔ وضعیت هدف‌ها در دسترس نیست یا فهرست ارزیابی یکی از بازه‌ها ناقص است.";
+      return;
+    }
+    note.textContent = "تغییرها توصیفی‌اند؛ فقط کمپین‌های مشترک گزارش شمرده می‌شوند و تغییر هدف یا نبود هدف به‌عنوان وضعیت جدا دیده می‌شود.";
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای کمپین‌های مشترک در دو بازه هدفی برای مقایسه پیدا نشد.");
+      cell.colSpan = 5;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.channel),
+        element("td", "", targetMetricLabel(item.key)),
+        element("td", "", targetTransitionLabel(item.from)),
+        element("td", "", targetTransitionLabel(item.to)),
+        element("td", "", formatNumber.format(item.campaigns)));
+      body.appendChild(row);
+    });
+  }
   function targetMetricLabel(key) {
     return ({ impressions: "نمایش", clicks: "کلیک", leads: "سرنخ", conversions: "تبدیل",
       spend: "هزینه", cost_per_lead: "هزینه به‌ازای سرنخ",
@@ -958,6 +1039,13 @@ _CLIENT_SCRIPT = r"""(() => {
         "محقق‌شده: " + item.met + "؛ محقق‌نشده: " + item.notMet
           + "؛ داده ناکافی: " + item.noData + "؛ نامشخص: " + item.unknown,
       ]));
+      const targetTransitions = targetPeriodTransitionRows(latestTargetPortfolio, latestPreviousTargetPortfolio,
+        new Set(campaigns.map((campaign) => String(campaign.campaign_id))));
+      (targetTransitions || []).forEach((item) => rows.push([
+        "تغییر وضعیت هدف", fields.start, fields.end, "", "", item.channel, "",
+        targetMetricLabel(item.key) + " · " + targetTransitionLabel(item.from) + " ← " + targetTransitionLabel(item.to),
+        item.campaigns, "ارزیابی وضعیت هدف در بازه‌های هم‌طول",
+      ]));
     }
     (result.scenarios || []).forEach((scenario) => {
       Object.keys(scenario.reconciliation_by_currency || {}).sort().forEach((currency) => {
@@ -1080,12 +1168,24 @@ _CLIENT_SCRIPT = r"""(() => {
       try {
         targetPortfolio = await getJson("/api/v1/crm/analytics/campaign-target-performance/portfolio?" + targetQuery.toString(), fields.workspace);
       } catch (_) {}
+      const previousTargetQuery = new URLSearchParams({
+        period_start: prior.start,
+        period_end: prior.end,
+        organization_unit_id: fields.organization,
+        grouped_by: "channel",
+      });
+      let previousTargetPortfolio = null;
+      try {
+        previousTargetPortfolio = await getJson("/api/v1/crm/analytics/campaign-target-performance/portfolio?" + previousTargetQuery.toString(), fields.workspace);
+      } catch (_) {}
       renderCampaignTargetOutcomes(result, targetPortfolio);
       renderChannelTargetSummary(result, targetPortfolio);
+      renderTargetPeriodComparison(result, targetPortfolio, previousTargetPortfolio);
       updateReportUrl(fields, ids);
       latestComparison = result;
       latestPreviousComparison = previousResult;
       latestTargetPortfolio = targetPortfolio;
+      latestPreviousTargetPortfolio = previousTargetPortfolio;
       latestFields = fields;
       resultsPanel.hidden = false;
       setStatus("گزارش برای " + result.period_calendar_days + " روز تقویمی آماده شد.", false);
