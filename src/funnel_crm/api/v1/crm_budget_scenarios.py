@@ -148,6 +148,68 @@ class BudgetScenarioPerformanceContext(BaseModel):
     causal_attribution_applied: bool
     automatic_recommendation_issued: bool
 
+class ScenarioCurrencyReconciliation(BaseModel):
+    allocation_count: int
+    observed_allocation_count: int
+    unobserved_allocation_count: int
+    currency_mismatch_allocation_count: int
+    planned_amount: Decimal
+    comparable_planned_amount: Decimal
+    observed_spend_amount: Decimal | None
+    variance_amount: Decimal | None
+    budget_used_percent: Decimal | None
+    allocation_coverage_percent: Decimal
+
+
+class BudgetScenarioEvidenceSummary(BaseModel):
+    scenario_id: UUID
+    name: str
+    allocation_count: int
+    planned_budget_by_currency: dict[str, Decimal]
+    reconciliation_by_currency: dict[str, ScenarioCurrencyReconciliation]
+
+
+class ScenarioMetricObservation(BaseModel):
+    actual: int | None
+    observed_days: int
+    period_days: int
+    recorded_day_coverage_percent: Decimal
+
+
+class BudgetScenarioCampaignAllocation(BaseModel):
+    scenario_id: UUID
+    scenario_name: str
+    planned_budget_amount: Decimal
+    planned_budget_currency: str
+    actual_spend_in_allocation_currency: Decimal | None
+    variance_amount: Decimal | None
+    budget_used_percent: Decimal | None
+
+
+class BudgetScenarioComparisonCampaign(BaseModel):
+    campaign_id: UUID
+    campaign_name: str
+    channel: str
+    objective_key: str
+    recorded_spend_by_currency: dict[str, Decimal]
+    metrics: dict[str, ScenarioMetricObservation]
+    scenario_allocations: list[BudgetScenarioCampaignAllocation]
+
+
+class BudgetScenarioPerformanceComparison(BaseModel):
+    organization_unit_id: UUID
+    period_start: date
+    period_end: date
+    period_calendar_days: int
+    common_campaign_ids: list[UUID]
+    scenarios: list[BudgetScenarioEvidenceSummary]
+    campaigns: list[BudgetScenarioComparisonCampaign]
+    metric_definitions: dict[str, MetricDefinition]
+    interpretation: str
+    currency_conversion_applied: bool
+    causal_attribution_applied: bool
+    counterfactual_outcomes_predicted: bool
+
 
 async def _require_scenario_permission(
     context: TenantSessionContext,
@@ -426,6 +488,258 @@ async def compare_budget_scenarios(
         ],
     )
 
+
+
+
+@router.get(
+    "/compare/performance-context",
+    response_model=BudgetScenarioPerformanceComparison,
+    operation_id="compareCRMMarketingBudgetScenarioPerformanceContext",
+)
+async def compare_budget_scenario_performance_context(
+    scenario_ids: list[UUID] = Query(min_length=2, max_length=5),
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> BudgetScenarioPerformanceComparison:
+    if period_start > period_end or (period_end - period_start).days >= 366:
+        raise HTTPException(status_code=422, detail="Period must be ordered and no longer than 366 days")
+    if len(scenario_ids) != len(set(scenario_ids)):
+        raise HTTPException(status_code=422, detail="Scenario IDs must be unique")
+
+    scenarios = (await context.session.scalars(
+        select(CRMMarketingBudgetScenario).where(
+            CRMMarketingBudgetScenario.tenant_id == context.access.tenant_id,
+            CRMMarketingBudgetScenario.id.in_(scenario_ids),
+        )
+    )).all()
+    if len(scenarios) != len(scenario_ids):
+        raise HTTPException(status_code=404, detail="One or more marketing budget scenarios were not found")
+    organization_ids = {item.organization_unit_id for item in scenarios}
+    if len(organization_ids) != 1:
+        raise HTTPException(status_code=422, detail="Scenarios must belong to the same organization scope")
+    organization_unit_id = next(iter(organization_ids))
+    await _require_scenario_permission(
+        context, permission_key="crm.budget_scenario:view",
+        organization_unit_id=organization_unit_id,
+    )
+    await _require_campaign_view(context, organization_unit_id)
+
+    lines = (await context.session.execute(
+        select(
+            CRMMarketingBudgetScenarioLine.scenario_id,
+            CRMMarketingBudgetScenarioLine.campaign_id,
+            CRMMarketingBudgetScenarioLine.planned_budget_amount,
+            CRMMarketingBudgetScenarioLine.planned_budget_currency,
+            CRMMarketingCampaign.name,
+            CRMMarketingCampaign.channel,
+            CRMMarketingCampaign.objective_key,
+        ).join(
+            CRMMarketingCampaign,
+            (CRMMarketingCampaign.tenant_id == CRMMarketingBudgetScenarioLine.tenant_id)
+            & (CRMMarketingCampaign.organization_unit_id == CRMMarketingBudgetScenarioLine.organization_unit_id)
+            & (CRMMarketingCampaign.id == CRMMarketingBudgetScenarioLine.campaign_id),
+        ).where(
+            CRMMarketingBudgetScenarioLine.tenant_id == context.access.tenant_id,
+            CRMMarketingBudgetScenarioLine.organization_unit_id == organization_unit_id,
+            CRMMarketingBudgetScenarioLine.scenario_id.in_(scenario_ids),
+        )
+    )).all()
+    scenario_campaign_ids: dict[UUID, set[UUID]] = {item.id: set() for item in scenarios}
+    line_by_scenario_campaign: dict[UUID, dict[UUID, object]] = {
+        item.id: {} for item in scenarios
+    }
+    campaign_metadata = {}
+    for line in lines:
+        scenario_campaign_ids[line.scenario_id].add(line.campaign_id)
+        line_by_scenario_campaign[line.scenario_id][line.campaign_id] = line
+        campaign_metadata[line.campaign_id] = (
+            line.name, line.channel, line.objective_key
+        )
+    reference_campaign_ids = next(iter(scenario_campaign_ids.values()))
+    if any(ids != reference_campaign_ids for ids in scenario_campaign_ids.values()):
+        raise HTTPException(
+            status_code=422,
+            detail="Scenarios can be compared only when they allocate the same campaign set",
+        )
+    common_campaign_ids = sorted(reference_campaign_ids, key=str)
+    period_days = (period_end - period_start).days + 1
+    measurements = []
+    if common_campaign_ids:
+        measurements = (await context.session.scalars(
+            select(CRMMarketingCampaignMeasurement).where(
+                CRMMarketingCampaignMeasurement.tenant_id == context.access.tenant_id,
+                CRMMarketingCampaignMeasurement.organization_unit_id == organization_unit_id,
+                CRMMarketingCampaignMeasurement.campaign_id.in_(common_campaign_ids),
+                CRMMarketingCampaignMeasurement.measured_on >= period_start,
+                CRMMarketingCampaignMeasurement.measured_on <= period_end,
+            ).order_by(CRMMarketingCampaignMeasurement.measured_on)
+        )).all()
+
+    rows_by_campaign: dict[UUID, list[CRMMarketingCampaignMeasurement]] = {
+        campaign_id: [] for campaign_id in common_campaign_ids
+    }
+    for measurement in measurements:
+        rows_by_campaign[measurement.campaign_id].append(measurement)
+
+    def observed_metric(values: list[int | None]) -> ScenarioMetricObservation:
+        present = [value for value in values if value is not None]
+        days = len(present)
+        return ScenarioMetricObservation(
+            actual=sum(present) if present else None,
+            observed_days=days,
+            period_days=period_days,
+            recorded_day_coverage_percent=(
+                (Decimal(days) * Decimal("100") / Decimal(period_days)).quantize(Decimal("0.01"))
+                if period_days > 0 else Decimal("0")
+            ),
+        )
+
+    spend_by_campaign: dict[UUID, dict[str, Decimal]] = {}
+    for campaign_id, campaign_measurements in rows_by_campaign.items():
+        currency_totals: dict[str, Decimal] = {}
+        for measurement in campaign_measurements:
+            if measurement.actual_spend_amount is not None and measurement.actual_spend_currency is not None:
+                currency = measurement.actual_spend_currency
+                currency_totals[currency] = currency_totals.get(currency, Decimal("0")) + measurement.actual_spend_amount
+        spend_by_campaign[campaign_id] = currency_totals
+
+    scenario_summaries: list[BudgetScenarioEvidenceSummary] = []
+    for scenario in sorted(scenarios, key=lambda item: (item.name.casefold(), str(item.id))):
+        scenario_lines = line_by_scenario_campaign[scenario.id]
+        planned_by_currency: dict[str, Decimal] = {}
+        reconciliation_state: dict[str, dict[str, object]] = {}
+        for campaign_id, line in scenario_lines.items():
+            currency = line.planned_budget_currency
+            planned_by_currency[currency] = planned_by_currency.get(currency, Decimal("0")) + line.planned_budget_amount
+            bucket = reconciliation_state.setdefault(currency, {
+                "allocation_count": 0,
+                "observed_allocation_count": 0,
+                "unobserved_allocation_count": 0,
+                "currency_mismatch_allocation_count": 0,
+                "planned_amount": Decimal("0"),
+                "comparable_planned_amount": Decimal("0"),
+                "observed_spend_amount": Decimal("0"),
+            })
+            bucket["allocation_count"] += 1
+            bucket["planned_amount"] += line.planned_budget_amount
+            recorded = spend_by_campaign.get(campaign_id, {})
+            if currency in recorded:
+                bucket["observed_allocation_count"] += 1
+                bucket["comparable_planned_amount"] += line.planned_budget_amount
+                bucket["observed_spend_amount"] += recorded[currency]
+            else:
+                bucket["unobserved_allocation_count"] += 1
+                if recorded:
+                    bucket["currency_mismatch_allocation_count"] += 1
+
+        reconciliation = {}
+        for currency, state in reconciliation_state.items():
+            observed_count = int(state["observed_allocation_count"])
+            allocation_count = int(state["allocation_count"])
+            actual = state["observed_spend_amount"] if observed_count else None
+            comparable_plan = state["comparable_planned_amount"]
+            reconciliation[currency] = ScenarioCurrencyReconciliation(
+                allocation_count=allocation_count,
+                observed_allocation_count=observed_count,
+                unobserved_allocation_count=int(state["unobserved_allocation_count"]),
+                currency_mismatch_allocation_count=int(state["currency_mismatch_allocation_count"]),
+                planned_amount=state["planned_amount"],
+                comparable_planned_amount=comparable_plan,
+                observed_spend_amount=actual,
+                variance_amount=(comparable_plan - actual) if actual is not None else None,
+                budget_used_percent=(
+                    (actual * Decimal("100") / comparable_plan).quantize(Decimal("0.01"))
+                    if actual is not None and comparable_plan > 0 else None
+                ),
+                allocation_coverage_percent=(
+                    (Decimal(observed_count) * Decimal("100") / Decimal(allocation_count)).quantize(Decimal("0.01"))
+                    if allocation_count else Decimal("0")
+                ),
+            )
+        scenario_summaries.append(BudgetScenarioEvidenceSummary(
+            scenario_id=scenario.id,
+            name=scenario.name,
+            allocation_count=len(scenario_lines),
+            planned_budget_by_currency=planned_by_currency,
+            reconciliation_by_currency=reconciliation,
+        ))
+
+    campaign_items = []
+    for campaign_id in common_campaign_ids:
+        name, channel, objective = campaign_metadata[campaign_id]
+        campaign_measurements = rows_by_campaign[campaign_id]
+        scenario_allocations = []
+        for scenario in sorted(scenarios, key=lambda item: (item.name.casefold(), str(item.id))):
+            line = line_by_scenario_campaign[scenario.id][campaign_id]
+            currency = line.planned_budget_currency
+            actual = spend_by_campaign.get(campaign_id, {}).get(currency)
+            scenario_allocations.append(BudgetScenarioCampaignAllocation(
+                scenario_id=scenario.id,
+                scenario_name=scenario.name,
+                planned_budget_amount=line.planned_budget_amount,
+                planned_budget_currency=currency,
+                actual_spend_in_allocation_currency=actual,
+                variance_amount=(line.planned_budget_amount - actual) if actual is not None else None,
+                budget_used_percent=(
+                    (actual * Decimal("100") / line.planned_budget_amount).quantize(Decimal("0.01"))
+                    if actual is not None and line.planned_budget_amount > 0 else None
+                ),
+            ))
+        campaign_items.append(BudgetScenarioComparisonCampaign(
+            campaign_id=campaign_id,
+            campaign_name=name,
+            channel=channel,
+            objective_key=objective,
+            recorded_spend_by_currency=spend_by_campaign.get(campaign_id, {}),
+            metrics={
+                "leads": observed_metric([item.leads for item in campaign_measurements]),
+                "conversions": observed_metric([item.conversions for item in campaign_measurements]),
+            },
+            scenario_allocations=scenario_allocations,
+        ))
+
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_budget_scenario.performance_comparison_viewed",
+        target_type="crm_marketing_budget_scenario_performance_comparison",
+        target_key=",".join(str(item.id) for item in sorted(scenarios, key=lambda item: str(item.id))),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "scenario_count": len(scenarios),
+            "campaign_count": len(common_campaign_ids),
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    metric_definitions = {
+        key: definition
+        for key in ("actual_spend", "leads", "conversions")
+        if (definition := get_metric_definition(key)) is not None
+    }
+    return BudgetScenarioPerformanceComparison(
+        organization_unit_id=organization_unit_id,
+        period_start=period_start,
+        period_end=period_end,
+        period_calendar_days=period_days,
+        common_campaign_ids=common_campaign_ids,
+        scenarios=scenario_summaries,
+        campaigns=campaign_items,
+        metric_definitions=metric_definitions,
+        interpretation=(
+            "Observed results are attached to the common campaigns and are not predictions of scenario outcomes. "
+            "Variances include only allocations with recorded spend in the same currency."
+        ),
+        currency_conversion_applied=False,
+        causal_attribution_applied=False,
+        counterfactual_outcomes_predicted=False,
+    )
 
 
 @router.get(
