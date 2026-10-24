@@ -11,7 +11,10 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from funnel_crm.platform.models import (
+    CRMCustomerActivity,
     CRMCustomerSupportCase,
+    CRMOpportunity,
+    CRMProductCommerceEvent,
     CRMProfile,
     UserIdentity,
     Workspace,
@@ -134,6 +137,19 @@ async def tenant_case() -> AsyncIterator[dict[str, object]]:
                                 "identity_id": str(membership.identity_id),
                                 "membership_id": str(membership.id),
                             },
+                        )
+                        await session.execute(
+                            delete(CRMOpportunity).where(CRMOpportunity.tenant_id == tenant_id)
+                        )
+                        await session.execute(
+                            delete(CRMProductCommerceEvent).where(
+                                CRMProductCommerceEvent.tenant_id == tenant_id
+                            )
+                        )
+                        await session.execute(
+                            delete(CRMCustomerActivity).where(
+                                CRMCustomerActivity.tenant_id == tenant_id
+                            )
                         )
                         await session.execute(
                             delete(CRMCustomerSupportCase).where(
