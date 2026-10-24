@@ -6,11 +6,13 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import or_, select
+from sqlalchemy import false, func, or_, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
-from funnel_crm.platform.models import CRMOpportunity, CRMPipeline, CRMSalesTarget, OrganizationUnit
+from funnel_crm.platform.models import (
+    CRMOpportunity, CRMPipeline, CRMSalesTarget, CRMWorkItem, OrganizationUnit,
+)
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
 router = APIRouter(prefix="/crm/sales-targets", tags=["CRM sales targets"])
@@ -506,3 +508,140 @@ async def sales_funnel_decision_review(
         "as_of_date": as_of,
         "currency_basis": "Stage values are shown only in each target's currency; no currency conversion is applied.",
     }
+
+
+@router.get("/execution-review", operation_id="getCRMSalesTargetExecutionReview")
+async def sales_target_execution_review(
+    organization_unit_id: UUID | None = None,
+    as_of_date: date | None = None,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    """Roll up existing CRM work against visible target-linked opportunities."""
+    as_of = as_of_date or datetime.now(timezone.utc).date()
+    as_of_exclusive = datetime.combine(
+        as_of + __import__("datetime").timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=timezone.utc,
+    )
+    scopes = crm_scope_ids(context, permission_key="crm.sales_target:view")
+    filters = [
+        CRMSalesTarget.tenant_id == context.access.tenant_id,
+        CRMSalesTarget.organization_unit_id.in_(scopes),
+    ]
+    if organization_unit_id is not None:
+        await _authorized(context, "crm.sales_target:view", organization_unit_id)
+        filters.append(CRMSalesTarget.organization_unit_id == organization_unit_id)
+    targets = list(await context.session.scalars(select(CRMSalesTarget).where(*filters).order_by(
+        CRMSalesTarget.period_start, CRMSalesTarget.organization_unit_id,
+        CRMSalesTarget.pipeline_id, CRMSalesTarget.currency,
+    ).limit(250)))
+    items = []
+    for target in targets:
+        await _authorized(context, "crm.opportunity:view", target.organization_unit_id)
+        await _authorized(context, "crm.work_item:view", target.organization_unit_id)
+        opportunities = list(await context.session.scalars(select(CRMOpportunity).where(
+            CRMOpportunity.tenant_id == target.tenant_id,
+            CRMOpportunity.organization_unit_id == target.organization_unit_id,
+            CRMOpportunity.pipeline_id == target.pipeline_id,
+            or_(
+                CRMOpportunity.expected_close_date.is_(None),
+                (
+                    (CRMOpportunity.expected_close_date >= target.period_start)
+                    & (CRMOpportunity.expected_close_date <= target.period_end)
+                ),
+            ),
+            or_(
+                CRMOpportunity.currency == target.currency,
+                CRMOpportunity.currency.is_(None),
+            ),
+        ).order_by(CRMOpportunity.expected_close_date, CRMOpportunity.name).limit(2000)))
+        opportunity_ids = [opportunity.id for opportunity in opportunities]
+        task_filters = [
+            CRMWorkItem.tenant_id == target.tenant_id,
+            CRMWorkItem.organization_unit_id == target.organization_unit_id,
+            CRMWorkItem.opportunity_id.in_(opportunity_ids) if opportunity_ids else false(),
+        ]
+        grouped_statuses = await context.session.execute(
+            select(CRMWorkItem.status, func.count())
+            .where(*task_filters)
+            .group_by(CRMWorkItem.status)
+        )
+        status_counts = {status: count for status, count in grouped_statuses}
+        active_statuses = ("open", "in_progress")
+        overdue_count = await context.session.scalar(
+            select(func.count()).select_from(CRMWorkItem).where(
+                *task_filters,
+                CRMWorkItem.status.in_(active_statuses),
+                CRMWorkItem.due_at.is_not(None),
+                CRMWorkItem.due_at < as_of_exclusive,
+            )
+        ) or 0
+        unassigned_count = await context.session.scalar(
+            select(func.count()).select_from(CRMWorkItem).where(
+                *task_filters,
+                CRMWorkItem.status.in_(active_statuses),
+                CRMWorkItem.assigned_membership_id.is_(None),
+            )
+        ) or 0
+        covered_count = await context.session.scalar(
+            select(func.count(func.distinct(CRMWorkItem.opportunity_id)))
+            .where(*task_filters)
+        ) or 0
+        workload_rows = await context.session.execute(
+            select(CRMWorkItem.assigned_membership_id, CRMWorkItem.status, func.count())
+            .where(*task_filters)
+            .group_by(CRMWorkItem.assigned_membership_id, CRMWorkItem.status)
+        )
+        workload = {}
+        for member_id, status, count in workload_rows:
+            key = str(member_id) if member_id else None
+            member = workload.setdefault(key, {
+                "assigned_membership_id": member_id,
+                "open": 0,
+                "in_progress": 0,
+                "completed": 0,
+                "cancelled": 0,
+            })
+            member[status] = count
+        details = list(await context.session.scalars(
+            select(CRMWorkItem)
+            .where(*task_filters)
+            .order_by(CRMWorkItem.due_at.asc().nulls_last(), CRMWorkItem.created_at.desc())
+            .limit(100)
+        ))
+        items.append({
+            "target_id": target.id,
+            "organization_unit_id": target.organization_unit_id,
+            "pipeline_id": target.pipeline_id,
+            "period_start": target.period_start,
+            "period_end": target.period_end,
+            "currency": target.currency,
+            "target_amount": target.target_amount,
+            "as_of_date": as_of,
+            "opportunity_count": len(opportunities),
+            "opportunity_count_capped": len(opportunities) == 2000,
+            "opportunities_without_work_item_count": max(len(opportunities) - covered_count, 0),
+            "follow_up_coverage_percent": (
+                (Decimal(covered_count) / Decimal(len(opportunities)) * Decimal("100")).quantize(Decimal("0.01"))
+                if opportunities else Decimal("0.00")
+            ),
+            "work_item_count_by_status": status_counts,
+            "overdue_active_work_item_count": overdue_count,
+            "unassigned_active_work_item_count": unassigned_count,
+            "workload_by_assignee": sorted(
+                workload.values(),
+                key=lambda row: (row["assigned_membership_id"] is None, str(row["assigned_membership_id"] or "")),
+            ),
+            "work_items": [{
+                "id": item.id,
+                "opportunity_id": item.opportunity_id,
+                "assigned_membership_id": item.assigned_membership_id,
+                "title": item.title,
+                "due_at": item.due_at,
+                "priority": item.priority,
+                "status": item.status,
+                "completed_at": item.completed_at,
+            } for item in details],
+            "work_item_detail_limit": 100,
+        })
+    return {"items": items, "as_of_date": as_of}
