@@ -1819,9 +1819,44 @@ class CRMCustomerSupportCase(Base):
     status: Mapped[str] = mapped_column(String(24), nullable=False, server_default="open")
     priority: Mapped[str] = mapped_column(String(16), nullable=False, server_default="normal")
     response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+
+class CRMCustomerSupportCaseEntry(Base):
+    """Append-only staff-authored support case note or recorded response."""
+
+    __tablename__ = "crm_support_case_entries"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_support_case_entries_tenant_id"),
+        CheckConstraint(
+            "entry_kind IN ('internal_note', 'response_record')",
+            name="ck_crm_support_case_entries_kind",
+        ),
+        CheckConstraint("length(trim(body)) BETWEEN 1 AND 4000",
+                        name="ck_crm_support_case_entries_body"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_support_case_entries_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "support_case_id"],
+            ["crm_support_cases.tenant_id", "crm_support_cases.id"],
+            name="fk_crm_support_case_entries_case_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "author_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_support_case_entries_author_same_tenant", ondelete="RESTRICT"),
+        Index("ix_crm_support_case_entries_tenant_case_created",
+              "tenant_id", "support_case_id", "created_at", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    support_case_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    author_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    entry_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    body: Mapped[str] = mapped_column(String(4000), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
 class CRMWorkItem(Base):
