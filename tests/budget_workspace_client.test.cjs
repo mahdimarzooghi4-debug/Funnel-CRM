@@ -60,7 +60,7 @@ Object.defineProperty(Element.prototype, "innerHTML", {
 
 const ids = [
   "workspace-id", "organization-id", "status", "scenario-list",
-  "scenario-panel", "results", "scenario-results", "campaign-results", "evidence-coverage",
+  "scenario-panel", "results", "scenario-results", "campaign-results", "evidence-coverage", "channel-coverage",
   "selection-count", "compare", "load-scenarios", "period-start", "period-end", "export-csv",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
@@ -105,6 +105,11 @@ const fetch = async (path, options = {}) => {
           scenario_name: scenarios[1].name, planned_budget_currency: "USD", planned_budget_amount: 1000,
           actual_spend_in_allocation_currency: null, variance_amount: null,
         }],
+      }, {
+        campaign_name: "Brand awareness", channel: "social",
+        recorded_spend_by_currency: {},
+        metrics: { leads: { actual: null }, conversions: { actual: 3 } },
+        scenario_allocations: [],
       }],
     };
   } else {
@@ -166,11 +171,15 @@ async function main() {
   const coverage = elements.get("evidence-coverage").children;
   assert.equal(coverage.length, 5);
   assert.equal(coverage[0].children[0].textContent, "۲");
-  assert.equal(coverage[1].children[0].textContent, "۱");
+  assert.equal(coverage[1].children[0].textContent, "۲");
   assert.equal(coverage[2].children[0].textContent, "۱");
   assert.equal(coverage[3].children[0].textContent, "۱");
-  assert.equal(coverage[4].children[0].textContent, "۰");
-  assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · از 1 کمپین");
+  assert.equal(coverage[4].children[0].textContent, "۱");
+  assert.equal(coverage[4].children[1].textContent, "کمپین دارای دادهٔ تبدیل · از 2 کمپین");
+  const channelRows = elements.get("channel-coverage").children;
+  assert.equal(channelRows.length, 2);
+  assert.deepEqual(channelRows[0].children.map((cell) => cell.textContent), ["email", "۱", "۱", "۱", "۰"]);
+  assert.deepEqual(channelRows[1].children.map((cell) => cell.textContent), ["social", "۱", "۰", "۰", "۱"]);
   assert.equal(elements.get("scenario-results").children[0].children[0].textContent,
     "<img src=x onerror=alert(1)>");
   await elements.get("export-csv").dispatch("click");
@@ -186,6 +195,8 @@ async function main() {
   assert.ok(csv.startsWith("\uFEFF"));
   assert.ok(csv.includes('"هزینه ثبت‌شده"'));
   assert.ok(csv.includes('"کمپین دارای دادهٔ تبدیل"'));
+  assert.ok(csv.includes('"پوشش کانال"'));
+  assert.ok(csv.includes('"social"'));
   assert.ok(csv.includes('"Spring launch"'));
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
     "formula-like labels must be neutralized and CSV-escaped");

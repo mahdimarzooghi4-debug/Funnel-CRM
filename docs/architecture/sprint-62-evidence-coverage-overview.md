@@ -6,4 +6,4 @@ The summary does not score performance, infer zero from missing data, combine cu
 
 ## Validation
 
-Pending exact-head CI.
+Exact head `d1e18cc9ec6ef44fea5d63ec9d401b5030fc3c8c`: GitHub Actions run `39953915096` succeeded; Alembic passed, pytest reported 94 passed with 3 warnings, and the Node client behavior test passed.
