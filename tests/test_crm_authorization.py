@@ -142,6 +142,8 @@ async def test_crm_permission_requires_matching_action_and_inherited_org_scope(
                 "crm.integration:manage",
                 "crm.campaign:view",
                 "crm.campaign:manage",
+                "crm.budget_scenario:view",
+                "crm.budget_scenario:manage",
             }
         )
 

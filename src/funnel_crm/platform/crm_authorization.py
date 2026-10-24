@@ -38,6 +38,8 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.integration:manage",
         "crm.campaign:view",
         "crm.campaign:manage",
+        "crm.budget_scenario:view",
+        "crm.budget_scenario:manage",
     }
 )
 
