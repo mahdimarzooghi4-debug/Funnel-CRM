@@ -64,6 +64,7 @@ class CRMProfileRead(BaseModel):
     profile_kind: str
     display_name: str
     lifecycle_stage: str
+    merged_into_profile_id: UUID | None
 
 
 class CRMProfilePage(BaseModel):
@@ -107,6 +108,7 @@ async def list_crm_profiles(
     filters = [
         CRMProfile.tenant_id == context.access.tenant_id,
         CRMProfile.organization_unit_id.in_(allowed_units),
+        CRMProfile.merged_into_profile_id.is_(None),
     ]
     if organization_unit_id is not None:
         filters.append(CRMProfile.organization_unit_id == organization_unit_id)
@@ -214,6 +216,59 @@ async def create_crm_profile(
     return CRMProfileRead.model_validate(profile)
 
 
+@router.post(
+    "/{profile_id}/merge-into/{target_id}",
+    response_model=CRMProfileRead,
+    operation_id="mergeCRMProfileIntoSurvivor",
+    summary="Mark a duplicate profile as merged into a surviving profile",
+)
+async def merge_crm_profile(
+    profile_id: UUID,
+    target_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CRMProfileRead:
+    if profile_id == target_id:
+        raise HTTPException(status_code=422, detail="A profile cannot be merged into itself")
+    profiles = (
+        await context.session.scalars(
+            select(CRMProfile)
+            .where(
+                CRMProfile.tenant_id == context.access.tenant_id,
+                CRMProfile.id.in_([profile_id, target_id]),
+            )
+            .order_by(CRMProfile.id)
+            .with_for_update()
+        )
+    ).all()
+    by_id = {profile.id: profile for profile in profiles}
+    source = by_id.get(profile_id)
+    target = by_id.get(target_id)
+    if source is None or target is None:
+        raise HTTPException(status_code=404, detail="CRM profile not found")
+
+    for profile in (source, target):
+        for permission in ("crm.profile:view", "crm.profile:update", "crm.profile:review_duplicates"):
+            if not await has_crm_permission(
+                context,
+                permission_key=permission,
+                organization_unit_id=profile.organization_unit_id,
+            ):
+                raise HTTPException(status_code=403, detail="CRM profile merge is not authorized")
+
+    if source.profile_kind != target.profile_kind:
+        raise HTTPException(status_code=409, detail="Only profiles of the same kind can be merged")
+    if source.merged_into_profile_id is not None:
+        if source.merged_into_profile_id == target.id:
+            return CRMProfileRead.model_validate(source)
+        raise HTTPException(status_code=409, detail="Source profile is already merged")
+    if target.merged_into_profile_id is not None:
+        raise HTTPException(status_code=409, detail="Target profile is already merged")
+
+    source.merged_into_profile_id = target.id
+    await context.session.flush()
+    return CRMProfileRead.model_validate(source)
+
+
 @router.get(
     "/{profile_id}",
     response_model=CRMProfileRead,
@@ -235,6 +290,19 @@ async def get_crm_profile(
     )
     if profile is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CRM profile not found")
+    if profile.merged_into_profile_id is not None:
+        target_org_id = await context.session.scalar(
+            select(CRMProfile.organization_unit_id).where(
+                CRMProfile.tenant_id == context.access.tenant_id,
+                CRMProfile.id == profile.merged_into_profile_id,
+            )
+        )
+        if target_org_id is None or not await has_crm_permission(
+            context,
+            permission_key="crm.profile:view",
+            organization_unit_id=target_org_id,
+        ):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CRM profile not found")
     return CRMProfileRead.model_validate(profile)
 
 
