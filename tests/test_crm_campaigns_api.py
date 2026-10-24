@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
@@ -102,6 +103,8 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
                 "name": "Spring offer",
                 "objective_key": "repeat_purchase",
                 "channel": "email",
+                "planned_budget_amount": "1200.50",
+                "planned_budget_currency": "USD",
                 "starts_at": starts.isoformat(),
                 "ends_at": ends.isoformat(),
             },
@@ -109,19 +112,29 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert created.status_code == 201, created.text
         campaign_id = created.json()["id"]
         assert created.json()["status"] == "draft"
+        assert created.json()["planned_budget_amount"] == "1200.50"
+        assert created.json()["planned_budget_currency"] == "USD"
 
         listed = await client.get("/api/v1/crm/campaigns", headers=headers)
         assert listed.status_code == 200
         assert listed.json()["total"] == 1
         assert listed.json()["items"][0]["id"] == campaign_id
 
+        partial_budget = await client.patch(
+            f"/api/v1/crm/campaigns/{campaign_id}",
+            headers=headers,
+            json={"planned_budget_amount": "900.00"},
+        )
+        assert partial_budget.status_code == 422
+
         updated = await client.patch(
             f"/api/v1/crm/campaigns/{campaign_id}",
             headers=headers,
-            json={"channel": "store", "ends_at": (ends + timedelta(days=1)).isoformat()},
+            json={"channel": "store", "ends_at": (ends + timedelta(days=1)).isoformat(), "planned_budget_amount": "1000.00", "planned_budget_currency": "USD"},
         )
         assert updated.status_code == 200, updated.text
         assert updated.json()["channel"] == "store"
+        assert updated.json()["planned_budget_amount"] == "1000.00"
 
         archived = await client.post(
             f"/api/v1/crm/campaigns/{campaign_id}/archive", headers=headers
@@ -180,25 +193,29 @@ async def test_campaign_portfolio_reports_only_proven_same_segment_schedule_conf
         CRMMarketingCampaign(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
             segment_id=first_segment_id, name="Email A", objective_key="retention",
-            channel="email", starts_at=window_start + timedelta(hours=2),
+            channel="email", planned_budget_amount=Decimal("100.50"), planned_budget_currency="USD",
+            starts_at=window_start + timedelta(hours=2),
             ends_at=window_start + timedelta(days=4), status="draft",
         ),
         CRMMarketingCampaign(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
             segment_id=first_segment_id, name="Phone B", objective_key="retention",
-            channel="phone", starts_at=window_start + timedelta(days=2),
+            channel="phone", planned_budget_amount=Decimal("200"), planned_budget_currency="USD",
+            starts_at=window_start + timedelta(days=2),
             ends_at=window_start + timedelta(days=6), status="draft",
         ),
         CRMMarketingCampaign(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
             segment_id=other_segment_id, name="Store C", objective_key="awareness",
-            channel="store", starts_at=window_start + timedelta(days=2),
+            channel="store", planned_budget_amount=Decimal("300"), planned_budget_currency="EUR",
+            starts_at=window_start + timedelta(days=2),
             ends_at=window_start + timedelta(days=6), status="draft",
         ),
         CRMMarketingCampaign(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
             segment_id=first_segment_id, name="Outside window", objective_key="retention",
-            channel="email", starts_at=window_end + timedelta(days=2),
+            channel="email", planned_budget_amount=Decimal("50"), planned_budget_currency="USD",
+            starts_at=window_end + timedelta(days=2),
             ends_at=window_end + timedelta(days=4), status="draft",
         ),
         CRMMarketingCampaign(
@@ -260,6 +277,8 @@ async def test_campaign_portfolio_reports_only_proven_same_segment_schedule_conf
     assert result["total_draft_campaigns"] == 5
     assert result["scheduled_campaigns_in_window"] == 3
     assert result["unscheduled_campaigns"] == 1
+    assert result["unbudgeted_draft_campaigns"] == 1
+    assert result["draft_budget_by_currency"] == {"EUR": "300.000000", "USD": "350.500000"}
     assert result["exact_same_segment_conflict_pairs"] == 1
     assert result["overlap_basis"] == "same_segment_id_and_overlapping_schedule"
     assert result["truncated"] is False

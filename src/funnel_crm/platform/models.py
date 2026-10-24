@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,6 +17,7 @@ from sqlalchemy import (
     Index,
     Identity,
     LargeBinary,
+    Numeric,
     String,
     UniqueConstraint,
     Uuid,
@@ -803,6 +805,14 @@ class CRMMarketingCampaign(Base):
         ),
         CheckConstraint("status IN ('draft', 'archived')", name="ck_crm_marketing_campaigns_status"),
         CheckConstraint(
+            "(planned_budget_amount IS NULL AND planned_budget_currency IS NULL) OR "
+            "(planned_budget_amount IS NOT NULL AND planned_budget_amount >= 0 "
+            "AND length(planned_budget_currency) = 3 "
+            "AND planned_budget_currency = upper(planned_budget_currency) "
+            "AND planned_budget_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaigns_budget_pair",
+        ),
+        CheckConstraint(
             "starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at",
             name="ck_crm_marketing_campaigns_schedule_order",
         ),
@@ -833,6 +843,8 @@ class CRMMarketingCampaign(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     objective_key: Mapped[str] = mapped_column(String(80), nullable=False)
     channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    planned_budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    planned_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(
