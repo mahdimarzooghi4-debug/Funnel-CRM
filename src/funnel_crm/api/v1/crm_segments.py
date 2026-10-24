@@ -1,18 +1,19 @@
 """Tenant- and organization-scoped saved customer audience segments."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import aliased
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
     AuditEvent,
+    CRMCustomerActivity,
     CRMProfile,
     CRMProfileSegment,
     OrganizationUnit,
@@ -22,11 +23,61 @@ from funnel_crm.platform.tenant_context import TenantSessionContext
 router = APIRouter(prefix="/crm/segments", tags=["CRM audience segments"])
 
 
+class CRMProfileActivityCriteria(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    activity_types: list[str] | None = Field(default=None, max_length=20)
+    channels: list[
+        Literal["online", "phone", "store", "field", "support", "campaign", "other"]
+    ] | None = Field(default=None, max_length=7)
+    within_last_days: int | None = Field(default=None, ge=1, le=3650)
+
+    @field_validator("activity_types")
+    @classmethod
+    def validate_activity_types(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        normalized = [value.strip() for value in values]
+        if (
+            not normalized
+            or any(
+                not value
+                or len(value) > 80
+                or not value[0].islower()
+                or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789_.-" for ch in value)
+                for value in normalized
+            )
+            or len(normalized) != len(set(normalized))
+        ):
+            raise ValueError("activity_types must contain unique stable activity keys")
+        return normalized
+
+    @field_validator("channels")
+    @classmethod
+    def validate_channels(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        if not values or len(values) != len(set(values)):
+            raise ValueError("channels must be a non-empty list without duplicates")
+        return values
+
+    @model_validator(mode="after")
+    def require_activity_filter(self) -> "CRMProfileActivityCriteria":
+        if (
+            self.activity_types is None
+            and self.channels is None
+            and self.within_last_days is None
+        ):
+            raise ValueError("At least one activity filter is required")
+        return self
+
+
 class CRMProfileSegmentCriteria(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     profile_kinds: list[Literal["person", "organization"]] | None = Field(default=None, max_length=2)
     lifecycle_stages: list[str] | None = Field(default=None, max_length=20)
+    activity: CRMProfileActivityCriteria | None = None
 
     @field_validator("profile_kinds")
     @classmethod
@@ -53,10 +104,13 @@ class CRMProfileSegmentCriteria(BaseModel):
 
     @model_validator(mode="after")
     def require_filter(self) -> "CRMProfileSegmentCriteria":
-        if self.profile_kinds is None and self.lifecycle_stages is None:
-            raise ValueError("At least one profile filter is required")
+        if (
+            self.profile_kinds is None
+            and self.lifecycle_stages is None
+            and self.activity is None
+        ):
+            raise ValueError("At least one profile or activity filter is required")
         return self
-
 
 class CRMProfileSegmentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -394,6 +448,28 @@ async def preview_crm_profile_segment(
         filters.append(CRMProfile.profile_kind.in_(criteria.profile_kinds))
     if criteria.lifecycle_stages is not None:
         filters.append(CRMProfile.lifecycle_stage.in_(criteria.lifecycle_stages))
+    if criteria.activity is not None:
+        activity_filters = [
+            CRMCustomerActivity.tenant_id == context.access.tenant_id,
+            CRMCustomerActivity.profile_id == CRMProfile.id,
+        ]
+        if criteria.activity.activity_types is not None:
+            activity_filters.append(
+                CRMCustomerActivity.activity_type.in_(
+                    criteria.activity.activity_types
+                )
+            )
+        if criteria.activity.channels is not None:
+            activity_filters.append(
+                CRMCustomerActivity.channel.in_(criteria.activity.channels)
+            )
+        if criteria.activity.within_last_days is not None:
+            activity_filters.append(
+                CRMCustomerActivity.occurred_at
+                >= datetime.now(timezone.utc)
+                - timedelta(days=criteria.activity.within_last_days)
+            )
+        filters.append(exists(select(1).where(*activity_filters)))
 
     total = int(
         await context.session.scalar(

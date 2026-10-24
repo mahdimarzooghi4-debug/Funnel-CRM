@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import httpx
@@ -7,7 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_segments import router
-from funnel_crm.platform.models import AuditEvent, CRMProfile, CRMProfileSegment, Role, RoleAssignment, RolePermission, TenantRecord
+from funnel_crm.platform.models import AuditEvent, CRMCustomerActivity, CRMProfile, CRMProfileSegment, Role, RoleAssignment, RolePermission, TenantRecord
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
 
@@ -55,6 +56,20 @@ async def test_saved_segment_previews_scoped_profiles_and_records_audit(
                 profile_kind="person",
                 display_name="Segment test profile",
                 lifecycle_stage="lead",
+            )
+        )
+        await context.session.flush()
+        context.session.add(
+            CRMCustomerActivity(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                source_product="funnel.store",
+                source_event_id=uuid4(),
+                activity_type="order.completed",
+                channel="online",
+                source_record_id="order-segment-1",
+                occurred_at=datetime.now(timezone.utc) - timedelta(days=5),
             )
         )
         role = Role(tenant_id=tenant_id, name=f"Segment manager {profile_id.hex[:8]}")
@@ -111,6 +126,48 @@ async def test_saved_segment_previews_scoped_profiles_and_records_audit(
         )
         assert preview_after_update.status_code == 200
         assert preview_after_update.json()["total"] == 0
+
+        activity_criteria = await client.patch(
+            f"/api/v1/crm/segments/{segment_id}",
+            headers=headers,
+            json={
+                "criteria": {
+                    "activity": {
+                        "activity_types": ["order.completed"],
+                        "channels": ["online"],
+                        "within_last_days": 30,
+                    }
+                }
+            },
+        )
+        assert activity_criteria.status_code == 200
+        activity_preview = await client.get(
+            f"/api/v1/crm/segments/{segment_id}/preview",
+            headers=headers,
+        )
+        assert activity_preview.status_code == 200
+        assert activity_preview.json()["total"] == 1
+
+        no_match_criteria = await client.patch(
+            f"/api/v1/crm/segments/{segment_id}",
+            headers=headers,
+            json={
+                "criteria": {
+                    "activity": {
+                        "activity_types": ["order.refunded"],
+                        "channels": ["online"],
+                        "within_last_days": 30,
+                    }
+                }
+            },
+        )
+        assert no_match_criteria.status_code == 200
+        no_match_preview = await client.get(
+            f"/api/v1/crm/segments/{segment_id}/preview",
+            headers=headers,
+        )
+        assert no_match_preview.status_code == 200
+        assert no_match_preview.json()["total"] == 0
 
         deactivated = await client.post(
             f"/api/v1/crm/segments/{segment_id}/deactivate",
