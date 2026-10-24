@@ -134,6 +134,32 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert moved.json()["stage_key"] == "proposal"
         assert moved.json()["amount"] == "13250.00"
 
+        history = await client.get(
+            f"/api/v1/crm/opportunities/{opportunity_id}/history",
+            headers=headers,
+            params={"limit": 1},
+        )
+        assert history.status_code == 200, history.text
+        history_page = history.json()
+        assert history_page["opportunity_id"] == opportunity_id
+        assert history_page["total"] == 2
+        assert len(history_page["items"]) == 1
+        latest_event = history_page["items"][0]
+        assert latest_event["action_key"] == "crm_opportunity.updated"
+        assert latest_event["from_stage_key"] == "qualified"
+        assert latest_event["to_stage_key"] == "proposal"
+        assert latest_event["changed_fields"] == ["stage_key", "amount"]
+        history_first_page = await client.get(
+            f"/api/v1/crm/opportunities/{opportunity_id}/history",
+            headers=headers,
+            params={"limit": 10},
+        )
+        assert history_first_page.status_code == 200, history_first_page.text
+        created_event = history_first_page.json()["items"][-1]
+        assert created_event["action_key"] == "crm_opportunity.created"
+        assert created_event["from_stage_key"] is None
+        assert created_event["to_stage_key"] == "qualified"
+
         euro_opportunity = await client.post(
             "/api/v1/crm/opportunities",
             headers=headers,

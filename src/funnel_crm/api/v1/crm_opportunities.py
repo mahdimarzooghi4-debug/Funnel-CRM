@@ -159,6 +159,24 @@ class OpportunityWorklistRead(BaseModel):
     limit: int
     offset: int
 
+class OpportunityHistoryItem(BaseModel):
+    event_id: UUID
+    occurred_at: datetime
+    action_key: str
+    actor_kind: Literal["user", "system"]
+    actor_identity_id: UUID | None
+    from_stage_key: str | None
+    to_stage_key: str | None
+    changed_fields: list[str]
+
+
+class OpportunityHistoryRead(BaseModel):
+    opportunity_id: UUID
+    items: list[OpportunityHistoryItem]
+    total: int
+    limit: int
+    offset: int
+
 
 async def _require(context: TenantSessionContext, permission_key: str, unit_id: UUID) -> None:
     if not await has_crm_permission(
@@ -503,6 +521,82 @@ async def create_opportunity(
            before=None, after=_state(opportunity))
     await context.session.flush()
     return OpportunityRead.model_validate(opportunity)
+
+
+@router.get(
+    "/{opportunity_id}/history",
+    response_model=OpportunityHistoryRead,
+    operation_id="getCRMOpportunityHistory",
+)
+async def get_opportunity_history(
+    opportunity_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> OpportunityHistoryRead:
+    opportunity = await context.session.scalar(select(CRMOpportunity).where(
+        CRMOpportunity.tenant_id == context.access.tenant_id,
+        CRMOpportunity.id == opportunity_id,
+    ))
+    if opportunity is None:
+        raise HTTPException(status_code=404, detail="CRM opportunity not found")
+    await _require(context, "crm.opportunity:view", opportunity.organization_unit_id)
+
+    event_filters = [
+        AuditEvent.tenant_id == context.access.tenant_id,
+        AuditEvent.target_type == "crm_opportunity",
+        AuditEvent.target_key == str(opportunity.id),
+        AuditEvent.organization_unit_id == opportunity.organization_unit_id,
+    ]
+    total = int(await context.session.scalar(
+        select(func.count()).select_from(AuditEvent).where(*event_filters)
+    ) or 0)
+    events = (await context.session.scalars(
+        select(AuditEvent).where(*event_filters)
+        .order_by(AuditEvent.occurred_at.desc(), AuditEvent.event_id.desc())
+        .limit(limit).offset(offset)
+    )).all()
+    changed_keys = ("name", "stage_key", "amount", "currency", "expected_close_date")
+    items = []
+    for event in events:
+        before = event.before_state or {}
+        after = event.after_state or {}
+        changed = [
+            key for key in changed_keys
+            if before.get(key) != after.get(key)
+        ]
+        items.append(OpportunityHistoryItem(
+            event_id=event.event_id,
+            occurred_at=event.occurred_at,
+            action_key=event.action_key,
+            actor_kind=event.actor_kind,
+            actor_identity_id=event.actor_identity_id,
+            from_stage_key=before.get("stage_key"),
+            to_stage_key=after.get("stage_key"),
+            changed_fields=changed,
+        ))
+
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_opportunity.history_viewed",
+        target_type="crm_opportunity_history",
+        target_key=str(opportunity.id),
+        organization_unit_id=opportunity.organization_unit_id,
+        before_state=None,
+        after_state={"returned": len(events), "total": total, "limit": limit, "offset": offset},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return OpportunityHistoryRead(
+        opportunity_id=opportunity.id,
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.patch("/{opportunity_id}", response_model=OpportunityRead,
