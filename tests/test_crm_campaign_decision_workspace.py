@@ -153,6 +153,14 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         )
         assert response.status_code == 200, response.text
         workspace = response.json()
+        queue_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id)},
+        )
+        assert queue_response.status_code == 200, queue_response.text
+        queue = queue_response.json()
 
     assert workspace["campaign_name"] == "Decision workspace campaign"
     assert workspace["period_calendar_days"] == 7
@@ -182,6 +190,13 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert currency_rows["USD"]["refunded_amount"] == "10.000000"
     assert currency_rows["USD"]["observed_paid_to_spend_multiple"] == "2.000000"
     assert currency_rows["EUR"]["paid_amount"] == "6.000000"
+    assert queue["total_count"] == 1
+    assert queue["automatic_recommendation_issued"] is False
+    assert queue["items"][0]["target_plan_id"] == str(plan_id)
+    assert queue["items"][0]["status"] == "review_required"
+    assert set(queue["items"][0]["attention_reasons"]) == {
+        "target_missed", "low_recorded_day_coverage"
+    }
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
