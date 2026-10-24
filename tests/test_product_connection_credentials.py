@@ -11,6 +11,7 @@ from sqlalchemy import select
 from funnel_crm.api.v1.integrations import router as integrations_router
 from funnel_crm.api.v1.product_connections import router as connections_router
 from funnel_crm.platform.integration_auth import authenticate_product_credential
+from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.models import AuditEvent, ProductConnection, Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -18,6 +19,9 @@ from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_ses
 def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
     app = FastAPI()
     app.state.session_factory = session_factory
+    app.state.integration_payload_keyring = IntegrationPayloadKeyring(
+        active_key_id="test-v1", keys={"test-v1": b"t" * 32}
+    )
 
     @app.middleware("http")
     async def inject_identity(request, call_next):

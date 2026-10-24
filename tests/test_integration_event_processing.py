@@ -13,6 +13,7 @@ from funnel_crm.platform.integration_processing import (
     LeaseLostError,
     PostgresProductEventProcessor,
 )
+from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.models import IntegrationEventInbox
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -20,6 +21,9 @@ from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_ses
 def create_event_app(connection: VerifiedProductConnection, session_factory) -> FastAPI:
     app = FastAPI()
     app.state.session_factory = session_factory
+    app.state.integration_payload_keyring = IntegrationPayloadKeyring(
+        active_key_id="test-v1", keys={"test-v1": b"t" * 32}
+    )
     app.include_router(router, prefix="/api/v1")
 
     @app.middleware("http")
@@ -71,7 +75,9 @@ async def test_processor_claims_with_tenant_scope_and_completes_once(
     ) as client:
         event_id = await send_event(client, tenant_id)
 
-    processor = PostgresProductEventProcessor(runtime_session_factory)
+    processor = PostgresProductEventProcessor(
+        runtime_session_factory, keyring=app.state.integration_payload_keyring
+    )
     claims = await processor.claim(tenant_id, limit=10)
     assert len(claims) == 1
     claim = claims[0]
@@ -130,6 +136,7 @@ async def test_processor_recovers_expired_lease_and_bounds_retries(
         max_attempts=2,
         base_retry_seconds=0,
         max_retry_seconds=0,
+        keyring=app.state.integration_payload_keyring,
     )
     first = (await processor.claim(tenant_id))[0]
     # Simulate a worker crash after claiming; the next worker must acquire a

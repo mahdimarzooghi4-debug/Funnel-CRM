@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from sqlalchemy import select
 
 from funnel_crm.api.v1.integrations import VerifiedProductConnection, router
+from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.models import AuditEvent, IntegrationEventInbox
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -16,6 +17,9 @@ from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_ses
 def create_app(connection: VerifiedProductConnection, session_factory) -> FastAPI:
     app = FastAPI()
     app.state.session_factory = session_factory
+    app.state.integration_payload_keyring = IntegrationPayloadKeyring(
+        active_key_id="test-v1", keys={"test-v1": b"t" * 32}
+    )
     app.include_router(router, prefix="/api/v1")
 
     @app.middleware("http")
@@ -95,8 +99,22 @@ async def test_postgres_event_inbox_is_durable_idempotent_and_tenant_scoped(
         )
         assert persisted is not None
         assert persisted.processing_status == "received"
-        assert persisted.payload == body["payload"]
+        assert persisted.payload == {}
+        assert persisted.payload_key_id == "test-v1"
+        assert persisted.encrypted_payload is not None
+        decrypted = app.state.integration_payload_keyring.decrypt(
+            tenant_id=tenant_id,
+            event_id=event_id,
+            source_product=body["source_product"],
+            event_type=body["event_type"],
+            contract_name=body["contract_name"],
+            contract_version=body["contract_version"],
+            key_id=persisted.payload_key_id,
+            ciphertext=persisted.encrypted_payload,
+        )
+        assert decrypted == body["payload"]
         assert len(persisted.event_digest) == 32
+        assert persisted.event_digest_key_id == "test-v1"
 
         audits = (
             await context.session.scalars(

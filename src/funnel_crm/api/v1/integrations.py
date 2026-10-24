@@ -131,7 +131,10 @@ async def ingest_product_event(
         if session_factory is not None:
             from funnel_crm.platform.integration_sink import PostgresProductEventSink
 
-            sink = PostgresProductEventSink(session_factory)
+            sink = PostgresProductEventSink(
+                session_factory,
+                keyring=getattr(request.app.state, "integration_payload_keyring", None),
+            )
     if sink is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

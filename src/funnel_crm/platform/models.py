@@ -642,6 +642,14 @@ class IntegrationEventInbox(Base):
             name="ck_integration_event_inbox_payload",
         ),
         CheckConstraint(
+            "(payload_key_id IS NULL) = (encrypted_payload IS NULL)",
+            name="ck_integration_event_inbox_payload_cipher_pair",
+        ),
+        CheckConstraint(
+            "payload_key_id IS NULL OR payload = '{}'::jsonb",
+            name="ck_integration_event_inbox_cipher_has_empty_legacy_payload",
+        ),
+        CheckConstraint(
             "processing_status IN ('received', 'processing', 'processed', 'failed')",
             name="ck_integration_event_inbox_status",
         ),
@@ -695,7 +703,10 @@ class IntegrationEventInbox(Base):
     correlation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    payload_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    encrypted_payload: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     event_digest: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    event_digest_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     processing_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="received", server_default="received"
     )
