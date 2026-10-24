@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import httpx
@@ -349,6 +350,26 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         )
         assert stale_only.status_code == 200, stale_only.text
         assert stale_only.json()["total"] == 0
+
+        today = datetime.now(timezone.utc).date().isoformat()
+        outcome_report = await client.get(
+            "/api/v1/crm/sales-forecast/outcomes",
+            headers=headers,
+            params={
+                "pipeline_id": pipeline_id,
+                "period_start": today,
+                "period_end": today,
+                "organization_unit_id": str(root_id),
+            },
+        )
+        assert outcome_report.status_code == 200, outcome_report.text
+        outcomes = outcome_report.json()
+        assert outcomes["basis"] == "recorded_terminal_stage_transition"
+        assert outcomes["won_count"] == 1
+        assert outcomes["lost_count"] == 1
+        assert outcomes["won_amount_by_currency"] == {"USD": "7000"}
+        assert outcomes["lost_amount_by_currency"] == {"USD": "3000"}
+        assert {bucket["outcome_key"] for bucket in outcomes["buckets"]} == {"won", "lost"}
 
         invalid_stage = await client.patch(
             f"/api/v1/crm/opportunities/{opportunity_id}",
