@@ -1,15 +1,18 @@
 # Funnel CRM
 
-The repository contains the technical design and the first executable service foundation for the Funnel CRM platform.
+The repository contains the technical design and executable service foundation for the Funnel CRM platform.
 
 ## Run locally
 
-Requires Python 3.12 or later.
+Requires Python 3.12 or later and PostgreSQL 16.
 
 ```sh
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install -e ".[dev]"
+export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/funnel_crm
+export TEST_DATABASE_URL="$DATABASE_URL"
+alembic upgrade head
 uvicorn funnel_crm.main:app --reload
 ```
 
@@ -20,4 +23,6 @@ The service provides:
 - Versioned API routes under `/api/v1`
 - OpenAPI schema at `/openapi.json` and interactive documentation at `/docs`
 
-Readiness currently confirms application initialization. Checks for required infrastructure will be added with those dependencies.
+The platform model provisions each workspace with its own root organization. Composite foreign keys prevent organization-parent and workspace-root references from crossing tenant boundaries. PostgreSQL integration tests run against the versioned schema.
+
+Readiness currently confirms application initialization. Infrastructure health checks will be added with the corresponding service integration.
