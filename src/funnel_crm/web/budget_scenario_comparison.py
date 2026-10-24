@@ -160,6 +160,14 @@ _PAGE = """<!doctype html>
           <tbody id="objective-performance"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">تطبیق بودجه به تفکیک هدف بازاریابی</h3>
+      <p class="muted">بودجهٔ برنامه‌ریزی‌شده و هزینهٔ واقعی هم‌ارز را به تفکیک هدف، سناریو و ارز ببینید. پوشش نشان می‌دهد چند تخصیص از کل تخصیص‌ها هزینهٔ قابل‌مقایسه داشته‌اند؛ ارزها تبدیل نمی‌شوند.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">هدف بازاریابی</th><th scope="col">سناریو</th><th scope="col">ارز</th><th scope="col">بودجهٔ برنامه‌ریزی‌شده</th><th scope="col">بودجهٔ تخصیص‌های قابل‌مقایسه</th><th scope="col">هزینهٔ واقعی هم‌ارز</th><th scope="col">واریانس</th><th scope="col">پوشش تخصیص</th></tr></thead>
+          <tbody id="objective-budget-reconciliation"></tbody>
+        </table>
+      </div>
       <h3 style="margin-top:22px">هزینهٔ واحد به تفکیک کمپین</h3>
       <p class="muted">برای هر کمپین، هزینهٔ ثبت‌شده بر سرنخ یا تبدیل ثبت‌شده محاسبه می‌شود. مقایسهٔ دو بازه فقط با دادهٔ کافی و ارز یکسان انجام می‌شود؛ این شاخص ROI نیست.</p>
       <div class="table-wrap">
@@ -252,6 +260,7 @@ _CLIENT_SCRIPT = r"""(() => {
     byId("lead-conversion-ratio").replaceChildren();
     byId("campaign-unit-cost").replaceChildren();
     byId("objective-performance").replaceChildren();
+    byId("objective-budget-reconciliation").replaceChildren();
     byId("target-outcomes-note").textContent = "";
     byId("target-outcomes").replaceChildren();
     byId("channel-target-summary-note").textContent = "";
@@ -763,6 +772,62 @@ _CLIENT_SCRIPT = r"""(() => {
         element("td", "", item.delta === null ? "نامشخص" : formatNumber.format(item.delta)),
         element("td", "", coverage(item.previousCoverage)),
         element("td", "", coverage(item.currentCoverage)));
+      body.appendChild(row);
+    });
+  }
+  function objectiveBudgetRows(report) {
+    const groups = new Map();
+    (report?.campaigns || []).forEach((campaign) => {
+      const objective = campaign.objective_key || "بدون هدف ثبت‌شده";
+      (campaign.scenario_allocations || []).forEach((allocation) => {
+        const scenario = allocation.scenario_name || "سناریوی نامشخص";
+        const currency = allocation.planned_budget_currency || "ارز نامشخص";
+        const id = JSON.stringify([objective, scenario, currency]);
+        const group = groups.get(id) || {
+          objective, scenario, currency, planned: 0, comparablePlanned: 0,
+          observedSpend: 0, variance: 0, allocations: 0, comparableAllocations: 0,
+        };
+        const planned = Number(allocation.planned_budget_amount);
+        group.allocations += 1;
+        if (Number.isFinite(planned)) group.planned += planned;
+        const actual = allocation.actual_spend_in_allocation_currency;
+        const variance = allocation.variance_amount;
+        if (actual !== null && actual !== undefined && Number.isFinite(Number(actual))
+          && variance !== null && variance !== undefined && Number.isFinite(Number(variance))
+          && Number.isFinite(planned)) {
+          group.comparableAllocations += 1;
+          group.comparablePlanned += planned;
+          group.observedSpend += Number(actual);
+          group.variance += Number(variance);
+        }
+        groups.set(id, group);
+      });
+    });
+    return Array.from(groups.values()).sort((a, b) =>
+      a.objective.localeCompare(b.objective, "fa") || a.scenario.localeCompare(b.scenario, "fa")
+        || a.currency.localeCompare(b.currency));
+  }
+  function renderObjectiveBudgetReconciliation(report) {
+    const body = byId("objective-budget-reconciliation");
+    body.replaceChildren();
+    const rows = objectiveBudgetRows(report);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای تخصیص‌های این گزارش داده‌ای وجود ندارد.");
+      cell.colSpan = 8;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.objective), element("td", "", item.scenario),
+        element("td", "", item.currency),
+        element("td", "", displayAmount(item.planned, item.currency)),
+        element("td", "", displayAmount(item.comparablePlanned, item.currency)),
+        element("td", "", item.comparableAllocations ? displayAmount(item.observedSpend, item.currency) : "نامشخص"),
+        element("td", "", item.comparableAllocations ? displayAmount(item.variance, item.currency) : "نامشخص"),
+        element("td", "", formatNumber.format(item.comparableAllocations) + " / " + formatNumber.format(item.allocations)));
       body.appendChild(row);
     });
   }
@@ -1331,6 +1396,13 @@ _CLIENT_SCRIPT = r"""(() => {
           campaign.channel, currency, "واریانس", allocation.variance_amount, ""]);
       });
     });
+    objectiveBudgetRows(result).forEach((item) => rows.push([
+      "تطبیق بودجه بر اساس هدف", fields.start, fields.end, item.scenario, "", "",
+      item.currency, item.objective, item.comparableAllocations ? item.observedSpend : "",
+      "بودجه برنامه‌ریزی‌شده: " + item.planned + "؛ بودجه تخصیص‌های قابل‌مقایسه: " + item.comparablePlanned
+        + "؛ واریانس: " + (item.comparableAllocations ? item.variance : "نامشخص")
+        + "؛ پوشش تخصیص: " + item.comparableAllocations + " از " + item.allocations,
+    ]));
     compareObjectivePerformance(result, latestPreviousComparison).forEach((item) => rows.push([
       "عملکرد هدف بازاریابی", fields.start, fields.end, "", "", item.channel, "",
       item.objective + " · " + (item.key === "leads" ? "سرنخ ثبت‌شده" : "تبدیل ثبت‌شده"),
@@ -1426,6 +1498,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderLeadConversionRatio(result, previousResult);
       renderCampaignUnitCosts(result, previousResult);
       renderObjectivePerformance(result, previousResult);
+      renderObjectiveBudgetReconciliation(result);
       const targetQuery = new URLSearchParams({
         period_start: fields.start,
         period_end: fields.end,

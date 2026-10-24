@@ -67,7 +67,7 @@ const ids = [
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
   "target-period-comparison-note", "target-period-comparison",
-  "lead-conversion-ratio", "campaign-unit-cost", "objective-performance",
+  "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -173,7 +173,10 @@ const fetch = async (path, options = {}) => {
         campaign_id: "campaign-2", campaign_name: "Brand awareness", channel: "email", objective_key: "awareness", objective_key: "awareness", objective_key: "awareness",
         recorded_spend_by_currency: {},
         metrics: { leads: { actual: null }, conversions: { actual: 3 } },
-        scenario_allocations: [],
+        scenario_allocations: [{
+          scenario_name: scenarios[1].name, planned_budget_currency: "EUR", planned_budget_amount: 500,
+          actual_spend_in_allocation_currency: null, variance_amount: null,
+        }],
       }],
     };
     }
@@ -328,6 +331,7 @@ async function main() {
   assert.ok(csv.includes('"هزینه به‌ازای هر سرنخ"'));
   assert.ok(csv.includes('"هزینهٔ واحد کمپین"'));
   assert.ok(csv.includes('"عملکرد هدف بازاریابی"'));
+  assert.ok(csv.includes('"تطبیق بودجه بر اساس هدف"'));
   assert.ok(csv.includes('"وضعیت هدف کمپین"'));
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
   assert.ok(csv.includes('"خلاصه هدف کانال"'));
@@ -345,13 +349,19 @@ async function main() {
       campaign_id: "campaign-1", campaign_name: "Spring launch", channel: "email", objective_key: "acquisition",
       recorded_spend_by_currency: { USD: 900 },
       metrics: { leads: { actual: 12 }, conversions: { actual: 3 } },
-      scenario_allocations: [],
+      scenario_allocations: [{
+        scenario_name: scenarios[0].name, planned_budget_currency: "USD", planned_budget_amount: 1000,
+        actual_spend_in_allocation_currency: 650, variance_amount: 350,
+      }],
     },
     {
       campaign_id: "campaign-2", campaign_name: "Brand awareness", channel: "email", objective_key: "awareness",
       recorded_spend_by_currency: {},
       metrics: { leads: { actual: 5 }, conversions: { actual: 3 } },
-      scenario_allocations: [],
+      scenario_allocations: [{
+        scenario_name: scenarios[1].name, planned_budget_currency: "EUR", planned_budget_amount: 500,
+        actual_spend_in_allocation_currency: null, variance_amount: null,
+      }],
     },
   ];
   await elements.get("compare").dispatch("click");
@@ -361,6 +371,11 @@ async function main() {
     ["acquisition", "email", "تبدیل ثبت‌شده", "۲", "۳", "۱", "۱ / ۱", "۱ / ۱"],
     ["awareness", "email", "سرنخ ثبت‌شده", "ثبت نشده", "۵", "نامشخص", "۰ / ۰", "۱ / ۱"],
     ["awareness", "email", "تبدیل ثبت‌شده", "ثبت نشده", "۳", "نامشخص", "۰ / ۰", "۱ / ۱"],
+  ]);
+  assert.deepEqual(elements.get("objective-budget-reconciliation").children.map((row) =>
+    row.children.map((cell) => cell.textContent)), [
+    ["acquisition", scenarios[0].name, "USD", "۱٬۰۰۰ USD", "۱٬۰۰۰ USD", "۶۵۰ USD", "۳۵۰ USD", "۱ / ۱"],
+    ["awareness", scenarios[1].name, "EUR", "۵۰۰ EUR", "۰ EUR", "نامشخص", "نامشخص", "۰ / ۱"],
   ]);
   assert.deepEqual(elements.get("lead-conversion-ratio").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
