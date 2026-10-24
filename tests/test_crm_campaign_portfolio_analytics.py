@@ -107,7 +107,7 @@ async def test_campaign_portfolio_analytics_groups_observed_results_without_curr
                     source_label="store tally", impressions=2000, reach=1500,
                     clicks=20, responses=10, leads=2, conversions=1,
                     actual_spend_amount=Decimal("30"), actual_spend_currency="USD",
-                    attributed_revenue_amount=Decimal("80"), attributed_revenue_currency="USD",
+                    attributed_revenue_amount=Decimal("80"), attributed_revenue_currency="EUR",
                 ),
             ]
         )
@@ -167,11 +167,43 @@ async def test_campaign_portfolio_analytics_groups_observed_results_without_curr
             "EUR": "10.000000", "USD": "50.000000"
         }
         assert result["totals"]["attributed_revenue_by_currency"] == {
-            "EUR": "40.000000", "USD": "180.000000"
+            "EUR": "120.000000", "USD": "100.000000"
+        }
+        efficiency = result["totals"]["efficiency"]
+        assert efficiency["cost_per_lead_by_currency"]["USD"] == {
+            "paired_campaign_days": 2,
+            "spend_amount": "50.000000",
+            "outcome_count": 7,
+            "cost_per_outcome": "7.142857",
+        }
+        assert efficiency["cost_per_conversion_by_currency"]["USD"] == {
+            "paired_campaign_days": 2,
+            "spend_amount": "50.000000",
+            "outcome_count": 3,
+            "cost_per_outcome": "16.666667",
+        }
+        assert efficiency["cost_per_conversion_by_currency"]["EUR"]["cost_per_outcome"] == "10.000000"
+        assert efficiency["roas_by_currency"] == {
+            "EUR": {
+                "paired_campaign_days": 1,
+                "spend_amount": "10.000000",
+                "attributed_revenue_amount": "40.000000",
+                "return_multiple": "4.000000",
+            },
+            "USD": {
+                "paired_campaign_days": 1,
+                "spend_amount": "20.000000",
+                "attributed_revenue_amount": "100.000000",
+                "return_multiple": "5.000000",
+            },
         }
         assert [item["name"] for item in result["campaigns"]] == [
             "Web acquisition", "Store retention"
         ]
+        web_efficiency = result["campaigns"][0]["efficiency"]
+        assert web_efficiency["cost_per_lead_by_currency"]["USD"]["cost_per_outcome"] == "4.000000"
+        assert web_efficiency["roas_by_currency"]["EUR"]["return_multiple"] == "4.000000"
+        assert "USD" not in result["campaigns"][1]["efficiency"]["roas_by_currency"]
         assert result["campaign_list_truncated"] is False
         assert {item["key"] for item in result["groups"]} == {"store", "web"}
         assert all(item["metrics"]["campaign_count"] == 1 for item in result["groups"])

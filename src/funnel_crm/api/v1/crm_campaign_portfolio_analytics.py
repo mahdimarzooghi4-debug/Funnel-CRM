@@ -21,6 +21,26 @@ router = APIRouter(
 METRICS = ("impressions", "reach", "clicks", "responses", "leads", "conversions")
 
 
+class OutcomeEfficiency(BaseModel):
+    paired_campaign_days: int
+    spend_amount: Decimal
+    outcome_count: int
+    cost_per_outcome: Decimal | None
+
+
+class ReturnEfficiency(BaseModel):
+    paired_campaign_days: int
+    spend_amount: Decimal
+    attributed_revenue_amount: Decimal
+    return_multiple: Decimal | None
+
+
+class CampaignEfficiency(BaseModel):
+    cost_per_lead_by_currency: dict[str, OutcomeEfficiency]
+    cost_per_conversion_by_currency: dict[str, OutcomeEfficiency]
+    roas_by_currency: dict[str, ReturnEfficiency]
+
+
 class PerformanceAggregate(BaseModel):
     campaign_count: int
     measurement_record_count: int
@@ -32,6 +52,7 @@ class PerformanceAggregate(BaseModel):
     planned_budget_by_currency: dict[str, Decimal]
     actual_spend_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
+    efficiency: CampaignEfficiency
 
 
 class CampaignPerformanceItem(BaseModel):
@@ -51,6 +72,7 @@ class CampaignPerformanceItem(BaseModel):
     planned_budget_currency: str | None
     actual_spend_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
+    efficiency: CampaignEfficiency
 
 
 class PerformanceGroup(BaseModel):
@@ -70,8 +92,8 @@ class CampaignPortfolioPerformance(BaseModel):
     sort_by: Literal["conversions", "leads", "clicks"]
 
 
-def _rate(numerator: int, denominator: int, paired_days: int) -> float | None:
-    return round(100 * numerator / denominator, 4) if paired_days and denominator > 0 else None
+def _rate(numerator: int, denominator: int, paired_campaign_days: int) -> float | None:
+    return round(100 * numerator / denominator, 4) if paired_campaign_days and denominator > 0 else None
 
 
 def _empty_accumulator() -> dict[str, object]:
@@ -88,12 +110,56 @@ def _empty_accumulator() -> dict[str, object]:
         "planned_budget_by_currency": {},
         "actual_spend_by_currency": {},
         "attributed_revenue_by_currency": {},
+        "efficiency": {
+            "cost_per_lead": {},
+            "cost_per_conversion": {},
+            "roas": {},
+        },
     }
 
 
 def _add_money(target: dict[str, Decimal], currency: str | None, amount: Decimal | None) -> None:
     if currency is not None and amount is not None:
         target[currency] = target.get(currency, Decimal("0")) + amount
+
+
+def _divide(numerator: Decimal, denominator: Decimal) -> Decimal | None:
+    return (numerator / denominator).quantize(Decimal("0.000001")) if denominator > 0 else None
+
+
+def _finish_efficiency(state: dict[str, object]) -> CampaignEfficiency:
+    cost_per_lead = state["cost_per_lead"]
+    cost_per_conversion = state["cost_per_conversion"]
+    roas = state["roas"]
+    return CampaignEfficiency(
+        cost_per_lead_by_currency={
+            currency: OutcomeEfficiency(
+                paired_campaign_days=values[2],
+                spend_amount=values[0],
+                outcome_count=values[1],
+                cost_per_outcome=_divide(values[0], Decimal(values[1])),
+            )
+            for currency, values in cost_per_lead.items()
+        },
+        cost_per_conversion_by_currency={
+            currency: OutcomeEfficiency(
+                paired_campaign_days=values[2],
+                spend_amount=values[0],
+                outcome_count=values[1],
+                cost_per_outcome=_divide(values[0], Decimal(values[1])),
+            )
+            for currency, values in cost_per_conversion.items()
+        },
+        roas_by_currency={
+            currency: ReturnEfficiency(
+                paired_campaign_days=values[2],
+                spend_amount=values[0],
+                attributed_revenue_amount=values[1],
+                return_multiple=_divide(values[1], values[0]),
+            )
+            for currency, values in roas.items()
+        },
+    )
 
 
 def _finish(acc: dict[str, object]) -> PerformanceAggregate:
@@ -115,6 +181,7 @@ def _finish(acc: dict[str, object]) -> PerformanceAggregate:
         planned_budget_by_currency=acc["planned_budget_by_currency"],
         actual_spend_by_currency=acc["actual_spend_by_currency"],
         attributed_revenue_by_currency=acc["attributed_revenue_by_currency"],
+        efficiency=_finish_efficiency(acc["efficiency"]),
     )
 
 
@@ -271,6 +338,68 @@ async def get_campaign_portfolio_performance(
     for campaign_id, currency, amount in revenue_rows:
         money.setdefault(campaign_id, {"spend": {}, "revenue": {}})["revenue"][currency] = amount
 
+    measured = CRMMarketingCampaignMeasurement
+    spend_present = measured.actual_spend_amount.is_not(None)
+    lead_pair = and_(spend_present, measured.leads.is_not(None))
+    conversion_pair = and_(spend_present, measured.conversions.is_not(None))
+    same_currency_roas_pair = and_(
+        spend_present,
+        measured.attributed_revenue_amount.is_not(None),
+        measured.actual_spend_currency == measured.attributed_revenue_currency,
+    )
+    efficiency_query = select(
+        CRMMarketingCampaign.id.label("campaign_id"),
+        measured.actual_spend_currency.label("currency"),
+        func.sum(case((lead_pair, measured.actual_spend_amount), else_=0)).label("lead_spend"),
+        func.sum(case((lead_pair, measured.leads), else_=0)).label("lead_count"),
+        func.count(case((lead_pair, 1), else_=None)).label("lead_days"),
+        func.sum(case((conversion_pair, measured.actual_spend_amount), else_=0)).label("conversion_spend"),
+        func.sum(case((conversion_pair, measured.conversions), else_=0)).label("conversion_count"),
+        func.count(case((conversion_pair, 1), else_=None)).label("conversion_days"),
+        func.sum(case((same_currency_roas_pair, measured.actual_spend_amount), else_=0)).label("roas_spend"),
+        func.sum(case((same_currency_roas_pair, measured.attributed_revenue_amount), else_=0)).label("roas_revenue"),
+        func.count(case((same_currency_roas_pair, 1), else_=None)).label("roas_days"),
+    ).join(
+        measured,
+        (measured.tenant_id == CRMMarketingCampaign.tenant_id)
+        & (measured.organization_unit_id == CRMMarketingCampaign.organization_unit_id)
+        & (measured.campaign_id == CRMMarketingCampaign.id),
+    ).where(
+        CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+        CRMMarketingCampaign.organization_unit_id.in_(allowed_units),
+        measured.tenant_id == context.access.tenant_id,
+        measured.measured_on >= period_start,
+        measured.measured_on <= period_end,
+    )
+    if organization_unit_id is not None:
+        efficiency_query = efficiency_query.where(
+            CRMMarketingCampaign.organization_unit_id == organization_unit_id
+        )
+    efficiency_rows = (await context.session.execute(
+        efficiency_query.group_by(CRMMarketingCampaign.id, measured.actual_spend_currency)
+    )).mappings().all()
+    efficiency_by_campaign: dict[UUID, dict[str, dict[str, list[object]]]] = {}
+    for row in efficiency_rows:
+        currency = row["currency"]
+        if currency is None:
+            continue
+        campaign_efficiency = efficiency_by_campaign.setdefault(
+            row["campaign_id"],
+            {"cost_per_lead": {}, "cost_per_conversion": {}, "roas": {}},
+        )
+        if row["lead_days"]:
+            campaign_efficiency["cost_per_lead"][currency] = [
+                row["lead_spend"], int(row["lead_count"]), int(row["lead_days"])
+            ]
+        if row["conversion_days"]:
+            campaign_efficiency["cost_per_conversion"][currency] = [
+                row["conversion_spend"], int(row["conversion_count"]), int(row["conversion_days"])
+            ]
+        if row["roas_days"]:
+            campaign_efficiency["roas"][currency] = [
+                row["roas_spend"], row["roas_revenue"], int(row["roas_days"])
+            ]
+
     all_acc = _empty_accumulator()
     group_accs: dict[str, dict[str, object]] = {}
     items: list[tuple[dict[str, object], CampaignPerformanceItem]] = []
@@ -301,6 +430,10 @@ async def get_campaign_portfolio_performance(
             },
             "spend": currency_rows["spend"],
             "revenue": currency_rows["revenue"],
+            "efficiency": efficiency_by_campaign.get(
+                campaign_id,
+                {"cost_per_lead": {}, "cost_per_conversion": {}, "roas": {}},
+            ),
         }
         _accumulate(all_acc, internal)
         group_key = str(row["channel"] if grouped_by == "channel" else row["objective_key"])
@@ -323,6 +456,7 @@ async def get_campaign_portfolio_performance(
             planned_budget_currency=row["planned_budget_currency"],
             actual_spend_by_currency=currency_rows["spend"],
             attributed_revenue_by_currency=currency_rows["revenue"],
+            efficiency=_finish_efficiency(internal["efficiency"]),
         )))
 
     items.sort(
@@ -364,6 +498,14 @@ def _accumulate(acc: dict[str, object], item: dict[str, object]) -> None:
         _add_money(acc["actual_spend_by_currency"], currency, amount)
     for currency, amount in item["revenue"].items():
         _add_money(acc["attributed_revenue_by_currency"], currency, amount)
+    for metric, currency_values in item["efficiency"].items():
+        for currency, values in currency_values.items():
+            target = acc["efficiency"][metric].setdefault(
+                currency,
+                [Decimal("0"), 0, 0],
+            )
+            for index, value in enumerate(values):
+                target[index] += value
     currency = item["planned_budget_currency"]
     amount = item["planned_budget_amount"]
     _add_money(acc["planned_budget_by_currency"], currency, amount)
