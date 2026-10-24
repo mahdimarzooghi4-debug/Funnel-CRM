@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
@@ -370,4 +370,139 @@ async def sales_target_forecast_alignment(
     return {
         "items": items,
         "currency_basis": "Targets and forecasts are compared only within the same currency.",
+    }
+
+
+@router.get("/decision-review", operation_id="getCRMSalesFunnelDecisionReview")
+async def sales_funnel_decision_review(
+    organization_unit_id: UUID | None = None,
+    period_start: date | None = None,
+    period_end: date | None = None,
+    as_of_date: date | None = None,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    """Show stage health and objective data-quality/late-opportunity review items."""
+    if (period_start is None) != (period_end is None):
+        raise HTTPException(status_code=422, detail="Provide both period boundaries")
+    if period_start and (period_start > period_end or (period_end - period_start).days > 365):
+        raise HTTPException(status_code=422, detail="Target period must be ordered and no longer than 366 days")
+    as_of = as_of_date or datetime.now(timezone.utc).date()
+    scopes = crm_scope_ids(context, permission_key="crm.sales_target:view")
+    filters = [
+        CRMSalesTarget.tenant_id == context.access.tenant_id,
+        CRMSalesTarget.organization_unit_id.in_(scopes),
+    ]
+    if organization_unit_id is not None:
+        await _authorized(context, "crm.sales_target:view", organization_unit_id)
+        await _authorized(context, "crm.opportunity:view", organization_unit_id)
+        filters.append(CRMSalesTarget.organization_unit_id == organization_unit_id)
+    targets = list(await context.session.scalars(select(CRMSalesTarget).where(*filters).order_by(
+        CRMSalesTarget.period_start, CRMSalesTarget.organization_unit_id,
+        CRMSalesTarget.pipeline_id, CRMSalesTarget.currency,
+    ).limit(250)))
+    items = []
+    for target in targets:
+        await _authorized(context, "crm.opportunity:view", target.organization_unit_id)
+        pipeline = await context.session.scalar(select(CRMPipeline).where(
+            CRMPipeline.tenant_id == target.tenant_id,
+            CRMPipeline.id == target.pipeline_id,
+        ))
+        stages = {
+            stage["key"]: stage
+            for stage in (pipeline.stages if pipeline else [])
+            if isinstance(stage, dict) and isinstance(stage.get("key"), str)
+        }
+        opportunities = list(await context.session.scalars(select(CRMOpportunity).where(
+            CRMOpportunity.tenant_id == target.tenant_id,
+            CRMOpportunity.organization_unit_id == target.organization_unit_id,
+            CRMOpportunity.pipeline_id == target.pipeline_id,
+            or_(
+                CRMOpportunity.expected_close_date.is_(None),
+                (
+                    (CRMOpportunity.expected_close_date >= target.period_start)
+                    & (CRMOpportunity.expected_close_date <= target.period_end)
+                ),
+            ),
+            or_(
+                CRMOpportunity.currency == target.currency,
+                CRMOpportunity.currency.is_(None),
+            ),
+        ).order_by(CRMOpportunity.expected_close_date, CRMOpportunity.name).limit(2000)))
+        stage_rows = {}
+        watchlist = []
+        for opportunity in opportunities:
+            config = stages.get(opportunity.stage_key)
+            if config is None:
+                config = {}
+            outcome = config.get("outcome_key", "open")
+            if outcome != "open":
+                continue
+            probability = config.get("probability_percent")
+            valid_probability = isinstance(probability, int) and 0 <= probability <= 100
+            priced = opportunity.amount is not None and opportunity.currency == target.currency
+            row = stage_rows.setdefault(opportunity.stage_key, {
+                "stage_key": opportunity.stage_key,
+                "stage_name": config.get("name", opportunity.stage_key),
+                "opportunity_count": 0,
+                "priced_opportunity_count": 0,
+                "unpriced_opportunity_count": 0,
+                "unknown_probability_count": 0,
+                "gross_amount": Decimal("0"),
+                "weighted_amount": Decimal("0"),
+            })
+            row["opportunity_count"] += 1
+            if priced:
+                row["priced_opportunity_count"] += 1
+                row["gross_amount"] += opportunity.amount
+                if valid_probability:
+                    row["weighted_amount"] += opportunity.amount * Decimal(probability) / Decimal("100")
+            else:
+                row["unpriced_opportunity_count"] += 1
+            if not valid_probability:
+                row["unknown_probability_count"] += 1
+            issue_codes = []
+            if not priced:
+                issue_codes.append("missing_amount_or_target_currency")
+            if not valid_probability:
+                issue_codes.append("missing_stage_probability")
+            if opportunity.expected_close_date is None:
+                issue_codes.append("missing_expected_close_date")
+            elif opportunity.expected_close_date < as_of:
+                issue_codes.append("past_expected_close_date")
+            if not config:
+                issue_codes.append("unconfigured_stage")
+            if issue_codes:
+                watchlist.append({
+                    "opportunity_id": opportunity.id,
+                    "name": opportunity.name,
+                    "stage_key": opportunity.stage_key,
+                    "expected_close_date": opportunity.expected_close_date,
+                    "amount": opportunity.amount,
+                    "currency": opportunity.currency,
+                    "issue_codes": issue_codes,
+                })
+        serialized_stages = []
+        for row in sorted(stage_rows.values(), key=lambda item: item["stage_key"]):
+            row["gross_amount"] = row["gross_amount"].quantize(Decimal("0.01"))
+            row["weighted_amount"] = row["weighted_amount"].quantize(Decimal("0.01"))
+            serialized_stages.append(row)
+        items.append({
+            "target_id": target.id,
+            "organization_unit_id": target.organization_unit_id,
+            "pipeline_id": target.pipeline_id,
+            "period_start": target.period_start,
+            "period_end": target.period_end,
+            "currency": target.currency,
+            "target_amount": target.target_amount,
+            "as_of_date": as_of,
+            "stage_health": serialized_stages,
+            "review_items": watchlist[:100],
+            "review_item_count": len(watchlist),
+            "review_item_limit": 100,
+            "basis": "current_open_opportunity_state",
+        })
+    return {
+        "items": items,
+        "as_of_date": as_of,
+        "currency_basis": "Stage values are shown only in each target's currency; no currency conversion is applied.",
     }
