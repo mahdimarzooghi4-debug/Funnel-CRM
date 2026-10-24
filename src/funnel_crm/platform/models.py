@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -11,6 +11,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -923,6 +924,100 @@ class CRMMarketingBudgetScenarioLine(Base):
     campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     planned_budget_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     planned_budget_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+
+
+class CRMMarketingCampaignMeasurement(Base):
+    """Externally recorded daily metrics for a planned marketing campaign."""
+
+    __tablename__ = "crm_marketing_campaign_measurements"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_campaign_measurements_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "campaign_id", "measured_on",
+            name="uq_crm_marketing_campaign_measurements_campaign_day",
+        ),
+        CheckConstraint(
+            "length(trim(source_label)) BETWEEN 1 AND 120",
+            name="ck_crm_marketing_campaign_measurements_source",
+        ),
+        CheckConstraint(
+            "(impressions IS NULL OR impressions >= 0) AND "
+            "(reach IS NULL OR reach >= 0) AND "
+            "(clicks IS NULL OR clicks >= 0) AND "
+            "(responses IS NULL OR responses >= 0) AND "
+            "(leads IS NULL OR leads >= 0) AND "
+            "(conversions IS NULL OR conversions >= 0)",
+            name="ck_crm_marketing_campaign_measurements_counts",
+        ),
+        CheckConstraint(
+            "(actual_spend_amount IS NULL AND actual_spend_currency IS NULL) OR "
+            "(actual_spend_amount IS NOT NULL AND actual_spend_amount >= 0 "
+            "AND length(actual_spend_currency) = 3 "
+            "AND actual_spend_currency = upper(actual_spend_currency) "
+            "AND actual_spend_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_measurements_spend",
+        ),
+        CheckConstraint(
+            "(attributed_revenue_amount IS NULL AND attributed_revenue_currency IS NULL) OR "
+            "(attributed_revenue_amount IS NOT NULL AND attributed_revenue_amount >= 0 "
+            "AND length(attributed_revenue_currency) = 3 "
+            "AND attributed_revenue_currency = upper(attributed_revenue_currency) "
+            "AND attributed_revenue_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_measurements_revenue",
+        ),
+        CheckConstraint(
+            "impressions IS NOT NULL OR reach IS NOT NULL OR clicks IS NOT NULL OR "
+            "responses IS NOT NULL OR leads IS NOT NULL OR conversions IS NOT NULL OR "
+            "actual_spend_amount IS NOT NULL OR attributed_revenue_amount IS NOT NULL",
+            name="ck_crm_marketing_campaign_measurements_has_observation",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_campaign_measurements_workspace", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_marketing_campaign_measurements_org_same_tenant", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_marketing_campaign_measurements_campaign_same_org", ondelete="CASCADE",
+        ),
+        Index(
+            "ix_crm_marketing_campaign_measurements_tenant_org_day",
+            "tenant_id", "organization_unit_id", "measured_on",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    measured_on: Mapped[date] = mapped_column(Date(), nullable=False)
+    source_label: Mapped[str] = mapped_column(String(120), nullable=False)
+    impressions: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    reach: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    clicks: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    responses: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    leads: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    conversions: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    actual_spend_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    actual_spend_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    attributed_revenue_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    attributed_revenue_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
 
 class CRMProfile(Base):
     """Tenant-owned person or organization profile anchored to a tenant record."""
