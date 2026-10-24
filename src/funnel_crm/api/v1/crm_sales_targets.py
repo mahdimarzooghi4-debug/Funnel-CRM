@@ -11,7 +11,8 @@ from sqlalchemy import false, func, or_, select
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
-    CRMOpportunity, CRMPipeline, CRMSalesTarget, CRMWorkItem, OrganizationUnit,
+    AuditEvent, CRMCustomerActivity, CRMMarketingCampaign, CRMOpportunity, CRMPipeline,
+    CRMSalesTarget, CRMWorkItem, OrganizationUnit,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -645,3 +646,231 @@ async def sales_target_execution_review(
             "work_item_detail_limit": 100,
         })
     return {"items": items, "as_of_date": as_of}
+
+
+@router.get("/campaign-influence", operation_id="getCRMSalesTargetCampaignInfluence")
+async def sales_target_campaign_influence(
+    organization_unit_id: UUID | None = None,
+    target_id: UUID | None = None,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    """Connect campaign-tagged customer activity to pipeline targets by recorded touch."""
+    scopes = crm_scope_ids(context, permission_key="crm.sales_target:view")
+    filters = [
+        CRMSalesTarget.tenant_id == context.access.tenant_id,
+        CRMSalesTarget.organization_unit_id.in_(scopes),
+    ]
+    if organization_unit_id is not None:
+        await _authorized(context, "crm.sales_target:view", organization_unit_id)
+        filters.append(CRMSalesTarget.organization_unit_id == organization_unit_id)
+    if target_id is not None:
+        filters.append(CRMSalesTarget.id == target_id)
+    targets = list(await context.session.scalars(
+        select(CRMSalesTarget).where(*filters).order_by(
+            CRMSalesTarget.period_start, CRMSalesTarget.organization_unit_id,
+            CRMSalesTarget.pipeline_id, CRMSalesTarget.currency,
+        ).limit(100)
+    ))
+    items = []
+    for target in targets:
+        for permission in ("crm.campaign:view", "crm.opportunity:view"):
+            await _authorized(context, permission, target.organization_unit_id)
+        pipeline = await context.session.scalar(select(CRMPipeline).where(
+            CRMPipeline.tenant_id == target.tenant_id,
+            CRMPipeline.id == target.pipeline_id,
+        ))
+        stage_config = {
+            stage["key"]: stage
+            for stage in (pipeline.stages if pipeline else [])
+            if isinstance(stage, dict) and isinstance(stage.get("key"), str)
+        }
+        rows = (await context.session.execute(
+            select(
+                CRMMarketingCampaign.id.label("campaign_id"),
+                CRMMarketingCampaign.name.label("campaign_name"),
+                CRMMarketingCampaign.channel.label("campaign_channel"),
+                CRMOpportunity.id.label("opportunity_id"),
+                CRMOpportunity.profile_id.label("profile_id"),
+                CRMOpportunity.stage_key.label("stage_key"),
+                CRMOpportunity.amount.label("amount"),
+                CRMOpportunity.currency.label("currency"),
+                func.count(CRMCustomerActivity.id).label("prior_touch_count"),
+            )
+            .join(
+                CRMCustomerActivity,
+                (CRMCustomerActivity.tenant_id == CRMMarketingCampaign.tenant_id)
+                & (CRMCustomerActivity.campaign_id == CRMMarketingCampaign.id),
+            )
+            .join(
+                CRMOpportunity,
+                (CRMOpportunity.tenant_id == CRMCustomerActivity.tenant_id)
+                & (CRMOpportunity.profile_id == CRMCustomerActivity.profile_id)
+                & (CRMOpportunity.organization_unit_id == CRMMarketingCampaign.organization_unit_id),
+            )
+            .where(
+                CRMMarketingCampaign.tenant_id == target.tenant_id,
+                CRMMarketingCampaign.organization_unit_id == target.organization_unit_id,
+                CRMOpportunity.tenant_id == target.tenant_id,
+                CRMOpportunity.organization_unit_id == target.organization_unit_id,
+                CRMOpportunity.pipeline_id == target.pipeline_id,
+                CRMOpportunity.expected_close_date >= target.period_start,
+                CRMOpportunity.expected_close_date <= target.period_end,
+                CRMOpportunity.profile_id.is_not(None),
+                or_(
+                    CRMOpportunity.currency == target.currency,
+                    CRMOpportunity.currency.is_(None),
+                ),
+                CRMCustomerActivity.occurred_at <= CRMOpportunity.created_at,
+            )
+            .group_by(
+                CRMMarketingCampaign.id, CRMMarketingCampaign.name,
+                CRMMarketingCampaign.channel, CRMOpportunity.id,
+                CRMOpportunity.profile_id, CRMOpportunity.stage_key,
+                CRMOpportunity.amount, CRMOpportunity.currency,
+            )
+            .order_by(CRMMarketingCampaign.name, CRMMarketingCampaign.id, CRMOpportunity.id)
+            .limit(10000)
+        )).all()
+        campaign_data = {}
+        opportunity_data = {}
+        for row in rows:
+            campaign = campaign_data.setdefault(row.campaign_id, {
+                "campaign_id": row.campaign_id,
+                "campaign_name": row.campaign_name,
+                "channel": row.campaign_channel,
+                "opportunities": {},
+                "profiles": set(),
+                "prior_touch_count": 0,
+                "won_amount": Decimal("0"),
+                "open_gross_amount": Decimal("0"),
+                "open_weighted_amount": Decimal("0"),
+                "lost_amount": Decimal("0"),
+                "unpriced_opportunity_count": 0,
+                "unknown_probability_count": 0,
+            })
+            campaign["opportunities"][row.opportunity_id] = True
+            campaign["profiles"].add(row.profile_id)
+            campaign["prior_touch_count"] += int(row.prior_touch_count or 0)
+            opportunity_data.setdefault(row.opportunity_id, {
+                "profile_id": row.profile_id,
+                "stage_key": row.stage_key,
+                "amount": row.amount,
+                "currency": row.currency,
+                "campaign_ids": set(),
+            })
+            opportunity_data[row.opportunity_id]["campaign_ids"].add(row.campaign_id)
+            config = stage_config.get(row.stage_key, {})
+            outcome = config.get("outcome_key", "open")
+            priced = row.amount is not None and row.currency == target.currency
+            if not priced:
+                campaign["unpriced_opportunity_count"] += 1
+                continue
+            if outcome == "won":
+                campaign["won_amount"] += row.amount
+            elif outcome == "lost":
+                campaign["lost_amount"] += row.amount
+            elif outcome == "open":
+                campaign["open_gross_amount"] += row.amount
+                probability = config.get("probability_percent")
+                if isinstance(probability, int) and 0 <= probability <= 100:
+                    campaign["open_weighted_amount"] += (
+                        row.amount * Decimal(probability) / Decimal("100")
+                    )
+                else:
+                    campaign["unknown_probability_count"] += 1
+        unique_won = Decimal("0")
+        unique_lost = Decimal("0")
+        unique_weighted_open = Decimal("0")
+        unique_open_gross = Decimal("0")
+        unique_unpriced = 0
+        unique_unknown_probability = 0
+        for opportunity in opportunity_data.values():
+            config = stage_config.get(opportunity["stage_key"], {})
+            outcome = config.get("outcome_key", "open")
+            priced = (
+                opportunity["amount"] is not None
+                and opportunity["currency"] == target.currency
+            )
+            if not priced:
+                unique_unpriced += 1
+                continue
+            if outcome == "won":
+                unique_won += opportunity["amount"]
+            elif outcome == "lost":
+                unique_lost += opportunity["amount"]
+            elif outcome == "open":
+                unique_open_gross += opportunity["amount"]
+                probability = config.get("probability_percent")
+                if isinstance(probability, int) and 0 <= probability <= 100:
+                    unique_weighted_open += (
+                        opportunity["amount"] * Decimal(probability) / Decimal("100")
+                    )
+                else:
+                    unique_unknown_probability += 1
+        campaign_items = []
+        for campaign in sorted(
+            campaign_data.values(),
+            key=lambda value: (-len(value["opportunities"]), value["campaign_name"], str(value["campaign_id"])),
+        )[:100]:
+            campaign_items.append({
+                "campaign_id": campaign["campaign_id"],
+                "campaign_name": campaign["campaign_name"],
+                "channel": campaign["channel"],
+                "associated_opportunity_count": len(campaign["opportunities"]),
+                "associated_profile_count": len(campaign["profiles"]),
+                "prior_touch_count": campaign["prior_touch_count"],
+                "current_won_amount": campaign["won_amount"].quantize(Decimal("0.01")),
+                "current_lost_amount": campaign["lost_amount"].quantize(Decimal("0.01")),
+                "open_pipeline_gross_amount": campaign["open_gross_amount"].quantize(Decimal("0.01")),
+                "open_pipeline_weighted_amount": campaign["open_weighted_amount"].quantize(Decimal("0.01")),
+                "unpriced_opportunity_count": campaign["unpriced_opportunity_count"],
+                "unknown_probability_count": campaign["unknown_probability_count"],
+            })
+        overlapping = sum(
+            1 for opportunity in opportunity_data.values()
+            if len(opportunity["campaign_ids"]) > 1
+        )
+        items.append({
+            "target_id": target.id,
+            "organization_unit_id": target.organization_unit_id,
+            "pipeline_id": target.pipeline_id,
+            "period_start": target.period_start,
+            "period_end": target.period_end,
+            "currency": target.currency,
+            "target_amount": target.target_amount,
+            "unique_campaign_influenced_opportunity_count": len(opportunity_data),
+            "campaign_opportunity_association_count": len(rows),
+            "multi_campaign_opportunity_count": overlapping,
+            "unique_current_won_amount": unique_won.quantize(Decimal("0.01")),
+            "unique_current_lost_amount": unique_lost.quantize(Decimal("0.01")),
+            "unique_open_pipeline_gross_amount": unique_open_gross.quantize(Decimal("0.01")),
+            "unique_open_pipeline_weighted_amount": unique_weighted_open.quantize(Decimal("0.01")),
+            "unique_unpriced_opportunity_count": unique_unpriced,
+            "unique_unknown_probability_count": unique_unknown_probability,
+            "campaigns": campaign_items,
+            "has_more_campaigns": len(campaign_data) > 100,
+            "association_basis": "campaign_tagged_customer_activity_at_or_before_opportunity_creation",
+            "causal_attribution_applied": False,
+            "currency_conversion_applied": False,
+            "campaign_amounts_are_non_additive": True,
+            "association_rows_truncated": len(rows) == 10000,
+        })
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_sales_target.campaign_influence_viewed",
+        target_type="crm_sales_target_campaign_influence",
+        target_key=str(target_id or organization_unit_id or context.access.tenant_id),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "target_id": str(target_id) if target_id else None,
+            "organization_unit_id": str(organization_unit_id) if organization_unit_id else None,
+            "returned_target_count": len(items),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {"items": items}

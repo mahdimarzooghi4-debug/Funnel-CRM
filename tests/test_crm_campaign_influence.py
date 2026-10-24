@@ -9,6 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaign_influence import router
+from funnel_crm.api.v1.crm_sales_targets import router as sales_targets_router
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMCustomerActivity,
@@ -16,6 +17,7 @@ from funnel_crm.platform.models import (
     CRMOpportunity,
     CRMProfile,
     CRMProfileSegment,
+    CRMSalesTarget,
     CRMPipeline,
     Role,
     RoleAssignment,
@@ -38,6 +40,7 @@ def make_app(
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(sales_targets_router, prefix="/api/v1")
     return app
 
 
@@ -55,7 +58,7 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
     campaign_one, campaign_two, campaign_empty = uuid4(), uuid4(), uuid4()
     profile_one, profile_two, profile_without_history = uuid4(), uuid4(), uuid4()
     opportunity_one, opportunity_two, opportunity_unlinked = uuid4(), uuid4(), uuid4()
-    pipeline_id, segment_id = uuid4(), uuid4()
+    pipeline_id, segment_id, target_id = uuid4(), uuid4(), uuid4()
     created_at = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
 
     async with tenant_session(
@@ -103,10 +106,19 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
             pipeline_key=f"influence-{uuid4().hex[:8]}",
             entity_kind="opportunity", display_name="Influence pipeline",
             stages=[
-                {"key": "qualified", "name": "Qualified", "position": 1},
+                {"key": "qualified", "name": "Qualified", "position": 1,
+                 "outcome_key": "open", "probability_percent": 50},
                 {"key": "proposal", "name": "Proposal", "position": 2},
             ],
             is_default=False,
+        ))
+        await context.session.flush()
+        context.session.add(CRMSalesTarget(
+            id=target_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            pipeline_id=pipeline_id, period_start=date(2026, 10, 1),
+            period_end=date(2026, 10, 31), currency="USD",
+            target_amount=Decimal("20000"),
+            created_by_membership_id=context.access.membership_id,
         ))
         await context.session.flush()
         context.session.add_all([
@@ -136,7 +148,7 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
                 id=opportunity_one, tenant_id=tenant_id, organization_unit_id=root_id,
                 profile_id=profile_one, pipeline_id=pipeline_id, name="Associated opportunity",
                 stage_key="qualified", amount=Decimal("12500"), currency="USD",
-                expected_close_date=None, created_at=created_at,
+                expected_close_date=date(2026, 10, 20), created_at=created_at,
             ),
             CRMOpportunity(
                 id=opportunity_two, tenant_id=tenant_id, organization_unit_id=root_id,
@@ -197,6 +209,9 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
             RolePermission(
                 tenant_id=tenant_id, role_id=role.id, permission_key="crm.opportunity:view",
             ),
+            RolePermission(
+                tenant_id=tenant_id, role_id=role.id, permission_key="crm.sales_target:view",
+            ),
         ])
         await context.session.flush()
 
@@ -235,6 +250,23 @@ async def test_campaign_influence_reports_prior_recorded_touches_without_claimin
         assert beta["associated_opportunity_count"] == 1
         assert beta["prior_campaign_activity_count"] == 1
         assert report["campaigns"][2]["associated_opportunity_count"] == 0
+
+        alignment = await client.get(
+            "/api/v1/crm/sales-targets/campaign-influence",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"target_id": str(target_id)},
+        )
+        assert alignment.status_code == 200, alignment.text
+        target_report = alignment.json()["items"][0]
+        assert target_report["unique_campaign_influenced_opportunity_count"] == 1
+        assert target_report["campaign_opportunity_association_count"] == 2
+        assert target_report["multi_campaign_opportunity_count"] == 1
+        assert target_report["causal_attribution_applied"] is False
+        assert target_report["campaign_amounts_are_non_additive"] is True
+        assert Decimal(str(target_report["unique_open_pipeline_weighted_amount"])) == Decimal("6250")
+        campaign_metrics = {row["campaign_name"]: row for row in target_report["campaigns"]}
+        assert Decimal(str(campaign_metrics["Campaign Alpha"]["open_pipeline_weighted_amount"])) == Decimal("6250")
+        assert Decimal(str(campaign_metrics["Campaign Beta"]["open_pipeline_weighted_amount"])) == Decimal("6250")
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
