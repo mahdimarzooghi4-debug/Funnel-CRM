@@ -11,11 +11,13 @@ from funnel_crm.api.v1.crm_custom_field_values import router as crm_custom_field
 from funnel_crm.api.v1.crm_profiles import router as crm_profiles_router
 from funnel_crm.api.v1.crm_communication_consent import router as crm_communication_consent_router
 from funnel_crm.api.v1.integrations import router as integrations_router
+from funnel_crm.api.v1.product_connections import router as product_connections_router
 from funnel_crm.api.v1.system import router as system_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(system_router)
 router.include_router(integrations_router)
+router.include_router(product_connections_router)
 router.include_router(crm_profiles_router)
 router.include_router(crm_segments_router)
 router.include_router(crm_contact_points_router)
