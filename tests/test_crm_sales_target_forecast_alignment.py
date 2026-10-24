@@ -171,10 +171,10 @@ async def test_target_forecast_alignment_uses_probability_and_separates_currenci
         )
     assert response.status_code == 200, response.text
     rows = {row["currency"]: row for row in response.json()["items"]}
-    assert rows["USD"]["won_amount"] == "100.000000"
-    assert rows["USD"]["weighted_open_pipeline_amount"] == "250.00"
-    assert rows["USD"]["expected_period_amount"] == "350.00"
-    assert rows["USD"]["target_gap_amount"] == "650.00"
+    assert Decimal(str(rows["USD"]["won_amount"])) == Decimal("100")
+    assert Decimal(str(rows["USD"]["weighted_open_pipeline_amount"])) == Decimal("250")
+    assert Decimal(str(rows["USD"]["expected_period_amount"])) == Decimal("350")
+    assert Decimal(str(rows["USD"]["target_gap_amount"])) == Decimal("650")
     assert rows["USD"]["outlook"] == "forecast_below_target"
-    assert rows["EUR"]["weighted_open_pipeline_amount"] == "500.00"
-    assert rows["EUR"]["expected_period_amount"] == "500.00"
+    assert Decimal(str(rows["EUR"]["weighted_open_pipeline_amount"])) == Decimal("500")
+    assert Decimal(str(rows["EUR"]["expected_period_amount"])) == Decimal("500")
