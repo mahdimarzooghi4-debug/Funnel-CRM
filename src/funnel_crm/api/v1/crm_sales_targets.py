@@ -1,6 +1,6 @@
 """Team sales targets and attainment by pipeline period and currency."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -519,7 +519,7 @@ async def sales_target_execution_review(
     """Roll up existing CRM work against visible target-linked opportunities."""
     as_of = as_of_date or datetime.now(timezone.utc).date()
     as_of_exclusive = datetime.combine(
-        as_of + __import__("datetime").timedelta(days=1),
+        as_of + timedelta(days=1),
         datetime.min.time(),
         tzinfo=timezone.utc,
     )
