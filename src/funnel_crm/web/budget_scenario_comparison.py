@@ -168,6 +168,14 @@ _PAGE = """<!doctype html>
           <tbody id="objective-budget-reconciliation"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">هزینهٔ واحد به تفکیک هدف بازاریابی</h3>
+      <p class="muted">هزینهٔ تک‌ارزی کمپین‌های هر هدف بر مجموع سرنخ یا تبدیل ثبت‌شدهٔ همان کمپین‌ها تقسیم می‌شود. دادهٔ شاخص ثبت‌نشده در محاسبه وارد نمی‌شود و هزینه‌های چندارزی به ارز خاصی نسبت داده نمی‌شوند؛ این شاخص ROI یا انتساب علّی نیست.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">هدف بازاریابی</th><th scope="col">ارز</th><th scope="col">شاخص</th><th scope="col">هزینهٔ واردشده</th><th scope="col">مجموع نتیجهٔ ثبت‌شده</th><th scope="col">هزینهٔ واحد</th><th scope="col">پوشش کمپین</th></tr></thead>
+          <tbody id="objective-unit-cost"></tbody>
+        </table>
+      </div>
       <h3 style="margin-top:22px">هزینهٔ واحد به تفکیک کمپین</h3>
       <p class="muted">برای هر کمپین، هزینهٔ ثبت‌شده بر سرنخ یا تبدیل ثبت‌شده محاسبه می‌شود. مقایسهٔ دو بازه فقط با دادهٔ کافی و ارز یکسان انجام می‌شود؛ این شاخص ROI نیست.</p>
       <div class="table-wrap">
@@ -259,6 +267,7 @@ _CLIENT_SCRIPT = r"""(() => {
     byId("target-period-comparison").replaceChildren();
     byId("lead-conversion-ratio").replaceChildren();
     byId("campaign-unit-cost").replaceChildren();
+    byId("objective-unit-cost").replaceChildren();
     byId("objective-performance").replaceChildren();
     byId("objective-budget-reconciliation").replaceChildren();
     byId("target-outcomes-note").textContent = "";
@@ -867,6 +876,72 @@ _CLIENT_SCRIPT = r"""(() => {
       currency_mismatch: "ارز دو بازه یکسان نیست",
     })[reason] || "نامشخص";
   }
+  function objectiveUnitCostRows(report) {
+    const groups = new Map();
+    (report?.campaigns || []).forEach((campaign) => {
+      const spend = Object.entries(campaign.recorded_spend_by_currency || {});
+      if (spend.length !== 1) return;
+      const objective = campaign.objective_key || "بدون هدف ثبت‌شده";
+      const [currency, amountValue] = spend[0];
+      const amount = Number(amountValue);
+      if (!Number.isFinite(amount) || amount < 0) return;
+      const id = JSON.stringify([objective, currency]);
+      const group = groups.get(id) || {
+        objective, currency, campaigns: 0,
+        metrics: {
+          leads: { spend: 0, outcomes: 0, observed: 0 },
+          conversions: { spend: 0, outcomes: 0, observed: 0 },
+        },
+      };
+      group.campaigns += 1;
+      ["leads", "conversions"].forEach((key) => {
+        const value = campaign.metrics?.[key]?.actual;
+        if (value === null || value === undefined || !Number.isFinite(Number(value)) || Number(value) < 0) return;
+        group.metrics[key].spend += amount;
+        group.metrics[key].outcomes += Number(value);
+        group.metrics[key].observed += 1;
+      });
+      groups.set(id, group);
+    });
+    const rows = [];
+    groups.forEach((group) => ["leads", "conversions"].forEach((key) => {
+      const metric = group.metrics[key];
+      rows.push({
+        objective: group.objective, currency: group.currency, key,
+        spend: metric.observed ? metric.spend : null,
+        outcomes: metric.observed ? metric.outcomes : null,
+        unitCost: metric.observed && metric.outcomes > 0 ? metric.spend / metric.outcomes : null,
+        observed: metric.observed, campaigns: group.campaigns,
+      });
+    }));
+    return rows.sort((a, b) =>
+      a.objective.localeCompare(b.objective, "fa") || a.currency.localeCompare(b.currency)
+        || ["leads", "conversions"].indexOf(a.key) - ["leads", "conversions"].indexOf(b.key));
+  }
+  function renderObjectiveUnitCosts(report) {
+    const body = byId("objective-unit-cost");
+    body.replaceChildren();
+    const rows = objectiveUnitCostRows(report);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "کمپین تک‌ارزی دارای هزینه در این گزارش ثبت نشده است.");
+      cell.colSpan = 7;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.objective),
+        element("td", "", item.currency),
+        element("td", "", item.key === "leads" ? "سرنخ ثبت‌شده" : "تبدیل ثبت‌شده"),
+        element("td", "", item.spend === null ? "ثبت نشده" : displayAmount(item.spend, item.currency)),
+        element("td", "", item.outcomes === null ? "ثبت نشده" : formatNumber.format(item.outcomes)),
+        element("td", "", item.unitCost === null ? "نامشخص" : displayAmount(item.unitCost, item.currency)),
+        element("td", "", formatNumber.format(item.observed) + " / " + formatNumber.format(item.campaigns)));
+      body.appendChild(row);
+    });
+  }
   function campaignUnitCostRows(currentReport, previousReport) {
     const previousById = new Map((previousReport?.campaigns || [])
       .filter((campaign) => campaign.campaign_id !== null && campaign.campaign_id !== undefined)
@@ -1424,6 +1499,15 @@ _CLIENT_SCRIPT = r"""(() => {
         + "؛ پوشش قبلی: " + item.previousCoverage.observed + " از " + item.previousCoverage.campaigns
         + "؛ پوشش جاری: " + item.currentCoverage.observed + " از " + item.currentCoverage.campaigns,
     ]));
+    objectiveUnitCostRows(result).forEach((item) => rows.push([
+      "هزینهٔ واحد هدف بازاریابی", fields.start, fields.end, "", "",
+      item.objective + " · " + (item.key === "leads" ? "سرنخ ثبت‌شده" : "تبدیل ثبت‌شده"),
+      item.currency, "هزینهٔ واحد هدف", item.unitCost ?? "",
+      "هزینهٔ واردشده: " + (item.spend === null ? "ثبت نشده" : item.spend)
+        + "؛ مجموع شاخص: " + (item.outcomes === null ? "ثبت نشده" : item.outcomes)
+        + "؛ پوشش: " + item.observed + " از " + item.campaigns
+        + "؛ کمپین چندارزی به ارز خاصی نسبت داده نمی‌شود",
+    ]));
     campaignUnitCostRows(result, latestPreviousComparison).forEach((item) => rows.push([
       "هزینهٔ واحد کمپین", fields.start, fields.end, "", item.campaign, item.channel, item.currency,
       item.key === "leads" ? "هزینه به‌ازای سرنخ" : "هزینه به‌ازای تبدیل",
@@ -1509,6 +1593,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderUnitCostComparison(result, previousResult);
       renderLeadConversionRatio(result, previousResult);
       renderCampaignUnitCosts(result, previousResult);
+      renderObjectiveUnitCosts(result);
       renderObjectivePerformance(result, previousResult);
       renderObjectiveBudgetReconciliation(result);
       const targetQuery = new URLSearchParams({

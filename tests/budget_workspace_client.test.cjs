@@ -67,7 +67,7 @@ const ids = [
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
   "target-period-comparison-note", "target-period-comparison",
-  "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation",
+  "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
@@ -231,6 +231,11 @@ async function main() {
     ["Spring launch", "email", "هزینه به‌ازای سرنخ", "USD", "۶۰ USD", "۷۵ USD", "۲۵٪"],
     ["Spring launch", "email", "هزینه به‌ازای تبدیل", "USD", "۳۰۰ USD", "شاخص ثبت نشده", "نامشخص"],
   ]);
+  assert.deepEqual(elements.get("objective-unit-cost").children.map((row) =>
+    row.children.map((cell) => cell.textContent)), [
+    ["acquisition", "USD", "سرنخ ثبت‌شده", "۹۰۰ USD", "۱۲", "۷۵ USD", "۱ / ۱"],
+    ["acquisition", "USD", "تبدیل ثبت‌شده", "ثبت نشده", "ثبت نشده", "نامشخص", "۰ / ۱"],
+  ]);
   assert.deepEqual(elements.get("channel-target-summary").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
     ["email", "تبدیل", "۱", "۰", "۰", "۱", "۰"],
@@ -332,6 +337,7 @@ async function main() {
   assert.ok(csv.includes('"هزینهٔ واحد کمپین"'));
   assert.ok(csv.includes('"عملکرد هدف بازاریابی"'));
   assert.ok(csv.includes('"تطبیق بودجه بر اساس هدف"'));
+  assert.ok(csv.includes('"هزینهٔ واحد هدف بازاریابی"'));
   assert.ok(csv.includes("سهم از بودجه سناریو"));
   assert.ok(csv.includes('"وضعیت هدف کمپین"'));
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
