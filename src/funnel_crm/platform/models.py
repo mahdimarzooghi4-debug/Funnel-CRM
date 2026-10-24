@@ -589,6 +589,18 @@ class IntegrationEventInbox(Base):
             "processing_status IN ('received', 'processing', 'processed', 'failed')",
             name="ck_integration_event_inbox_status",
         ),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="ck_integration_event_inbox_attempt_count",
+        ),
+        CheckConstraint(
+            "(lease_token IS NULL) = (lease_until IS NULL)",
+            name="ck_integration_event_inbox_lease_pair",
+        ),
+        CheckConstraint(
+            "processing_status <> 'processing' OR lease_token IS NOT NULL",
+            name="ck_integration_event_inbox_processing_lease",
+        ),
         ForeignKeyConstraint(
             ["tenant_id"],
             ["workspaces.id"],
@@ -600,6 +612,19 @@ class IntegrationEventInbox(Base):
             "ix_integration_event_inbox_received_pending",
             "received_at",
             postgresql_where=text("processing_status = 'received'"),
+        ),
+        Index(
+            "ix_integration_event_inbox_available",
+            "tenant_id",
+            "available_at",
+            "received_at",
+            postgresql_where=text("processing_status = 'received'"),
+        ),
+        Index(
+            "ix_integration_event_inbox_expired_lease",
+            "tenant_id",
+            "lease_until",
+            postgresql_where=text("processing_status = 'processing'"),
         ),
     )
 
@@ -622,6 +647,15 @@ class IntegrationEventInbox(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
     )
+    attempt_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CRMProfileSegment(Base):
