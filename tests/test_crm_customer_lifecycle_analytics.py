@@ -51,6 +51,7 @@ async def test_customer_lifecycle_analytics_connects_current_stage_to_period_fac
     assert isinstance(identity, AuthenticatedIdentity)
 
     customer_one, customer_two, lead = uuid4(), uuid4(), uuid4()
+    tenant_case["lifecycle_cleanup_profile_ids"] = (customer_one, customer_two, lead)
     segment_id, campaign_id, pipeline_id = uuid4(), uuid4(), uuid4()
     now = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
     async with tenant_session(
