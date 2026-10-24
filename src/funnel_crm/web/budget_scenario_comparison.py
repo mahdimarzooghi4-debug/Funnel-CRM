@@ -1,0 +1,383 @@
+"""Persian, read-only browser workspace for budget-scenario evidence."""
+
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse, Response
+
+router = APIRouter(tags=["CRM budget scenario workspace"], include_in_schema=False)
+
+_PAGE = """<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مقایسهٔ سناریوهای بودجه | Funnel CRM</title>
+  <style>
+    :root { color-scheme: light; font-family: Tahoma, Arial, sans-serif; background: #f4f7fb; color: #182638; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { background: #12334a; color: #fff; padding: 22px max(20px, calc((100vw - 1240px) / 2)); }
+    header strong { font-size: 14px; letter-spacing: .04em; }
+    main { max-width: 1240px; margin: 28px auto; padding: 0 20px 56px; }
+    h1 { margin: 0 0 8px; font-size: clamp(24px, 4vw, 34px); }
+    h2 { margin: 0 0 16px; font-size: 19px; }
+    p { line-height: 1.8; }
+    .intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+    .intro p { max-width: 760px; margin: 0; color: #526477; }
+    .badge { white-space: nowrap; border-radius: 999px; padding: 8px 12px; background: #e5f4ec; color: #17613b; font-size: 13px; }
+    .panel { background: #fff; border: 1px solid #e1e8ef; border-radius: 14px; padding: 22px; margin: 18px 0; box-shadow: 0 5px 20px #142d4210; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    label { display: grid; gap: 7px; color: #405367; font-size: 13px; }
+    input { width: 100%; min-height: 42px; border: 1px solid #cbd6e0; border-radius: 8px; padding: 9px 11px; color: #182638; background: #fff; font: inherit; }
+    button { min-height: 42px; border: 0; border-radius: 8px; padding: 9px 16px; background: #1578a8; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+    button:hover { background: #0e648f; }
+    button:disabled { opacity: .55; cursor: wait; }
+    .actions { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+    .hint, .muted { color: #687b8d; font-size: 13px; line-height: 1.8; }
+    #status { min-height: 24px; margin: 12px 0 0; color: #8b3b22; }
+    #scenario-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+    .scenario-option { display: flex; align-items: flex-start; gap: 10px; border: 1px solid #dbe4ec; border-radius: 10px; padding: 12px; cursor: pointer; }
+    .scenario-option input { width: 18px; min-height: 18px; margin: 2px 0 0; accent-color: #1578a8; }
+    .scenario-option strong { display: block; color: #20364b; }
+    .scenario-option small { display: block; color: #687b8d; margin-top: 4px; }
+    #results[hidden], #scenario-panel[hidden] { display: none; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+    .scenario-card { border: 1px solid #dce5ed; border-radius: 12px; padding: 16px; }
+    .scenario-card h3 { margin: 0 0 10px; font-size: 17px; }
+    .currency-card { border-top: 1px solid #edf1f5; padding-top: 10px; margin-top: 10px; }
+    .currency-card strong { display: block; margin-bottom: 7px; color: #17658b; }
+    .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 12px; margin: 0; }
+    .facts dt { color: #687b8d; font-size: 12px; }
+    .facts dd { margin: 3px 0 0; font-weight: 700; direction: ltr; text-align: right; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 850px; }
+    th, td { padding: 12px 10px; text-align: right; vertical-align: top; border-bottom: 1px solid #e9eef3; }
+    th { color: #526477; background: #f8fafc; font-size: 13px; }
+    td { line-height: 1.75; }
+    .allocation { display: block; padding: 7px 0; border-bottom: 1px dashed #e0e7ed; }
+    .allocation:last-child { border-bottom: 0; }
+    .allocation strong { display: block; }
+    .allocation small { color: #687b8d; }
+    .notice { background: #f1f7fb; border-right: 3px solid #3594bd; padding: 12px 14px; color: #405367; border-radius: 6px; font-size: 13px; line-height: 1.8; }
+    .empty { padding: 18px; border: 1px dashed #cbd6e0; border-radius: 10px; color: #687b8d; text-align: center; }
+    @media (max-width: 800px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .intro { display: block; } .badge { display: inline-block; margin-top: 12px; } }
+    @media (max-width: 520px) { main { margin-top: 18px; padding-right: 12px; padding-left: 12px; } .panel { padding: 16px; } .grid { grid-template-columns: 1fr; } .actions { align-items: stretch; flex-direction: column; } }
+  </style>
+  <script src="/assets/budget-scenario-comparison.js" defer></script>
+</head>
+<body>
+  <header><strong>FUNNEL CRM</strong></header>
+  <main>
+    <div class="intro">
+      <div>
+        <h1>مقایسهٔ سناریوهای بودجه</h1>
+        <p>تخصیص‌های پیشنهادی را کنار هزینه و نتایج ثبت‌شدهٔ همان کمپین‌ها ببینید تا تصمیم را بر پایهٔ شواهد موجود بگیرید.</p>
+      </div>
+      <span class="badge">گزارش واقعی؛ بدون پیش‌بینی</span>
+    </div>
+    <section class="panel" aria-labelledby="scope-title">
+      <h2 id="scope-title">فضای کاری و بازهٔ گزارش</h2>
+      <div class="grid">
+        <label for="workspace-id">شناسهٔ فضای کاری
+          <input id="workspace-id" name="workspace_id" autocomplete="off" required placeholder="UUID فضای کاری">
+        </label>
+        <label for="organization-id">شناسهٔ واحد سازمانی
+          <input id="organization-id" name="organization_unit_id" autocomplete="off" required placeholder="UUID واحد سازمانی">
+        </label>
+        <label for="period-start">از تاریخ
+          <input id="period-start" type="date" required>
+        </label>
+        <label for="period-end">تا تاریخ
+          <input id="period-end" type="date" required>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="load-scenarios" type="button">بارگذاری سناریوها</button>
+        <span class="hint">شناسه‌ها فقط محدودهٔ درخواست را مشخص می‌کنند؛ دسترسی با عضویت و مجوزهای حساب شما کنترل می‌شود.</span>
+      </div>
+      <p id="status" role="status" aria-live="polite"></p>
+    </section>
+    <section class="panel" id="scenario-panel" hidden aria-labelledby="scenario-title">
+      <h2 id="scenario-title">سناریوهای قابل مقایسه</h2>
+      <p class="muted">بین ۲ تا ۵ سناریوی پیش‌نویس را انتخاب کنید. سناریوها باید برای مجموعهٔ یکسانی از کمپین‌ها تعریف شده باشند.</p>
+      <div id="scenario-list"></div>
+      <div class="actions">
+        <button id="compare" type="button">نمایش مقایسه</button>
+        <span id="selection-count" class="hint"></span>
+      </div>
+    </section>
+    <section class="panel" id="results" hidden aria-labelledby="results-title">
+      <h2 id="results-title">خلاصهٔ بودجه و شواهد واقعی</h2>
+      <p class="notice">نتایج ثبت‌شده برای کمپین‌های مشترک نمایش داده می‌شوند و به یک سناریوی بودجه نسبت داده نمی‌شوند. جمع واریانس فقط شامل هزینه‌های ثبت‌شده با ارز همسان است؛ ارزها تبدیل نمی‌شوند و نبود رکورد به معنی عملکرد صفر نیست.</p>
+      <div id="scenario-results" class="cards"></div>
+      <h2 style="margin-top:28px">عملکرد کمپین‌ها در همین بازه</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کمپین</th><th scope="col">هزینهٔ ثبت‌شده</th><th scope="col">سرنخ / تبدیل</th><th scope="col">تخصیص هر سناریو در برابر هزینهٔ واقعی</th></tr></thead>
+          <tbody id="campaign-results"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+_CLIENT_SCRIPT = r"""(() => {
+  "use strict";
+  const byId = (id) => document.getElementById(id);
+  const workspaceInput = byId("workspace-id");
+  const organizationInput = byId("organization-id");
+  const statusNode = byId("status");
+  const listNode = byId("scenario-list");
+  const scenarioPanel = byId("scenario-panel");
+  const resultsPanel = byId("results");
+  const formatNumber = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 2 });
+
+  const params = new URLSearchParams(window.location.search);
+  workspaceInput.value = params.get("workspace_id") || "";
+  organizationInput.value = params.get("organization_unit_id") || "";
+  byId("period-start").value = params.get("period_start") || "";
+  byId("period-end").value = params.get("period_end") || "";
+
+  function setStatus(message, isError) {
+    statusNode.textContent = message || "";
+    statusNode.style.color = isError ? "#8b3b22" : "#17613b";
+  }
+  function clearResults() {
+    resultsPanel.hidden = true;
+    byId("scenario-results").replaceChildren();
+    byId("campaign-results").replaceChildren();
+  }
+  function selectedIds() {
+    return Array.from(listNode.querySelectorAll("input[type=checkbox]:checked")).map((node) => node.value);
+  }
+  function updateSelectionCount() {
+    const count = selectedIds().length;
+    byId("selection-count").textContent = count + " از ۵ سناریو انتخاب شده";
+    byId("compare").disabled = count < 2 || count > 5;
+  }
+  function selectedRequestFields() {
+    const workspace = workspaceInput.value.trim();
+    const organization = organizationInput.value.trim();
+    const start = byId("period-start").value;
+    const end = byId("period-end").value;
+    if (!workspace || !organization) throw new Error("شناسهٔ فضای کاری و واحد سازمانی را وارد کنید.");
+    if (!start || !end) throw new Error("بازهٔ تاریخ را کامل کنید.");
+    if (start > end) throw new Error("تاریخ شروع باید پیش از تاریخ پایان باشد.");
+    return { workspace: workspace, organization: organization, start: start, end: end };
+  }
+  async function getJson(path, workspaceId) {
+    const response = await fetch(path, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { "Accept": "application/json", "X-Workspace-ID": workspaceId }
+    });
+    let payload = {};
+    try { payload = await response.json(); } catch (_) {}
+    if (!response.ok) {
+      if (response.status === 401) throw new Error("برای دیدن این صفحه ابتدا وارد حساب کاربری شوید.");
+      if (response.status === 403) throw new Error("عضویت فعال یا مجوز مشاهدهٔ این محدوده برای حساب شما ثبت نشده است.");
+      throw new Error(payload.detail || "دریافت اطلاعات ناموفق بود. دوباره تلاش کنید.");
+    }
+    return payload;
+  }
+  async function loadAllScenarios(fields) {
+    const result = [];
+    let offset = 0;
+    while (true) {
+      const query = new URLSearchParams({
+        organization_unit_id: fields.organization,
+        status: "draft",
+        limit: "100",
+        offset: String(offset)
+      });
+      const page = await getJson("/api/v1/crm/budget-scenarios?" + query.toString(), fields.workspace);
+      const items = Array.isArray(page) ? page : [];
+      result.push.apply(result, items);
+      if (items.length < 100) return result;
+      offset += items.length;
+    }
+  }
+  function renderScenarioOptions(items) {
+    listNode.replaceChildren();
+    if (!items.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = "در این واحد سازمانی سناریوی پیش‌نویس پیدا نشد.";
+      listNode.appendChild(empty);
+      return;
+    }
+    items.forEach((scenario) => {
+      const label = document.createElement("label");
+      label.className = "scenario-option";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = scenario.id;
+      checkbox.addEventListener("change", () => {
+        if (selectedIds().length > 5) {
+          checkbox.checked = false;
+          setStatus("حداکثر ۵ سناریو را می‌توان هم‌زمان مقایسه کرد.", true);
+        } else {
+          setStatus("", false);
+        }
+        updateSelectionCount();
+      });
+      const copy = document.createElement("span");
+      const name = document.createElement("strong");
+      name.textContent = scenario.name;
+      const details = document.createElement("small");
+      details.textContent = (scenario.allocation_count || 0) + " تخصیص · " + scenario.id;
+      copy.append(name, details);
+      label.append(checkbox, copy);
+      listNode.appendChild(label);
+    });
+    updateSelectionCount();
+  }
+  function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+  function displayAmount(value, currency) {
+    if (value === null || value === undefined) return "—";
+    const numeric = Number(value);
+    return (Number.isFinite(numeric) ? formatNumber.format(numeric) : String(value)) + " " + currency;
+  }
+  function addFact(list, label, value) {
+    list.append(element("dt", "", label), element("dd", "", value));
+  }
+  function renderScenarioSummaries(scenarios) {
+    const container = byId("scenario-results");
+    container.replaceChildren();
+    scenarios.forEach((scenario) => {
+      const card = element("article", "scenario-card");
+      card.appendChild(element("h3", "", scenario.name));
+      const currencies = Object.keys(scenario.reconciliation_by_currency || {}).sort();
+      if (!currencies.length) card.appendChild(element("p", "muted", "این سناریو تخصیصی برای مقایسه ندارد."));
+      currencies.forEach((currency) => {
+        const reconciliation = scenario.reconciliation_by_currency[currency];
+        const block = element("div", "currency-card");
+        block.appendChild(element("strong", "", "ارز " + currency));
+        const facts = element("dl", "facts");
+        addFact(facts, "بودجهٔ برنامه‌ریزی‌شده", displayAmount(reconciliation.planned_amount, currency));
+        addFact(facts, "بودجه با هزینهٔ هم‌ارز", displayAmount(reconciliation.comparable_planned_amount, currency));
+        addFact(facts, "هزینهٔ ثبت‌شده", displayAmount(reconciliation.observed_spend_amount, currency));
+        addFact(facts, "فاصلهٔ بودجه و هزینه", displayAmount(reconciliation.variance_amount, currency));
+        addFact(facts, "پوشش تخصیص‌های دارای هزینه", formatNumber.format(Number(reconciliation.allocation_coverage_percent)) + "٪");
+        addFact(facts, "تخصیص با ارز متفاوت", formatNumber.format(Number(reconciliation.currency_mismatch_allocation_count)));
+        block.appendChild(facts);
+        card.appendChild(block);
+      });
+      container.appendChild(card);
+    });
+  }
+  function metricText(metrics, key, title) {
+    const metric = metrics[key] || {};
+    const actual = metric.actual === null || metric.actual === undefined ? "ثبت نشده" : formatNumber.format(Number(metric.actual));
+    return title + ": " + actual + " · پوشش " + formatNumber.format(Number(metric.recorded_day_coverage_percent || 0)) + "٪";
+  }
+  function renderCampaignRows(campaigns) {
+    const body = byId("campaign-results");
+    body.replaceChildren();
+    campaigns.forEach((campaign) => {
+      const row = document.createElement("tr");
+      const title = element("td", "", campaign.campaign_name + " · " + campaign.channel);
+      const spendCell = document.createElement("td");
+      const currencies = Object.keys(campaign.recorded_spend_by_currency || {}).sort();
+      spendCell.textContent = currencies.length
+        ? currencies.map((currency) => displayAmount(campaign.recorded_spend_by_currency[currency], currency)).join(" · ")
+        : "هزینه ثبت نشده";
+      const metricCell = element("td", "", metricText(campaign.metrics, "leads", "سرنخ") + " | " + metricText(campaign.metrics, "conversions", "تبدیل"));
+      const allocationsCell = document.createElement("td");
+      campaign.scenario_allocations.forEach((allocation) => {
+        const item = element("span", "allocation");
+        item.appendChild(element("strong", "", allocation.scenario_name));
+        item.appendChild(element("span", "", "بودجه: " + displayAmount(allocation.planned_budget_amount, allocation.planned_budget_currency)));
+        const actual = allocation.actual_spend_in_allocation_currency;
+        let actualDescription = displayAmount(actual, allocation.planned_budget_currency);
+        if (actual === null || actual === undefined) {
+          actualDescription = currencies.length ? "هزینه با ارز همسان ثبت نشده" : "هزینهٔ دوره ثبت نشده";
+        }
+        item.appendChild(element("small", "", "هزینهٔ هم‌ارز: " + actualDescription + " · واریانس: " + displayAmount(allocation.variance_amount, allocation.planned_budget_currency)));
+        allocationsCell.appendChild(item);
+      });
+      row.append(title, spendCell, metricCell, allocationsCell);
+      body.appendChild(row);
+    });
+  }
+  async function loadScenarios() {
+    clearResults();
+    scenarioPanel.hidden = true;
+    try {
+      const fields = selectedRequestFields();
+      setStatus("در حال دریافت سناریوهای مجاز…", false);
+      byId("load-scenarios").disabled = true;
+      const scenarios = await loadAllScenarios(fields);
+      renderScenarioOptions(scenarios);
+      scenarioPanel.hidden = false;
+      setStatus(scenarios.length + " سناریو بارگذاری شد.", false);
+    } catch (error) {
+      setStatus(error.message || "دریافت سناریوها ناموفق بود.", true);
+    } finally {
+      byId("load-scenarios").disabled = false;
+    }
+  }
+  async function compareScenarios() {
+    clearResults();
+    try {
+      const fields = selectedRequestFields();
+      const ids = selectedIds();
+      if (ids.length < 2 || ids.length > 5) throw new Error("برای مقایسه ۲ تا ۵ سناریو را انتخاب کنید.");
+      const query = new URLSearchParams({ period_start: fields.start, period_end: fields.end });
+      ids.forEach((id) => query.append("scenario_ids", id));
+      setStatus("در حال محاسبهٔ مقایسه…", false);
+      byId("compare").disabled = true;
+      const result = await getJson("/api/v1/crm/budget-scenarios/compare/performance-context?" + query.toString(), fields.workspace);
+      renderScenarioSummaries(result.scenarios || []);
+      renderCampaignRows(result.campaigns || []);
+      resultsPanel.hidden = false;
+      setStatus("گزارش برای " + result.period_calendar_days + " روز تقویمی آماده شد.", false);
+    } catch (error) {
+      setStatus(error.message || "ساخت گزارش ناموفق بود.", true);
+    } finally {
+      updateSelectionCount();
+    }
+  }
+  byId("load-scenarios").addEventListener("click", loadScenarios);
+  byId("compare").addEventListener("click", compareScenarios);
+  [workspaceInput, organizationInput, byId("period-start"), byId("period-end")].forEach((input) => {
+    input.addEventListener("change", () => {
+      scenarioPanel.hidden = true;
+      clearResults();
+      setStatus("", false);
+    });
+  });
+  updateSelectionCount();
+})();"""
+
+_SECURITY_HEADERS = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": (
+        "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; "
+        "connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+}
+
+
+@router.get("/workspace/budget-scenario-comparison", response_class=HTMLResponse)
+async def budget_scenario_comparison_page() -> HTMLResponse:
+    """Serve a data-free shell; protected API calls still enforce user permissions."""
+    return HTMLResponse(_PAGE, headers=_SECURITY_HEADERS)
+
+
+@router.get("/assets/budget-scenario-comparison.js")
+async def budget_scenario_comparison_script() -> Response:
+    """Serve the same-origin client with a restrictive script policy."""
+    return Response(
+        _CLIENT_SCRIPT,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )

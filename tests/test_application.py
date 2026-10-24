@@ -34,3 +34,10 @@ def test_openapi_exposes_versioned_route_and_operations() -> None:
     assert "/api/v1/system" in schema["paths"]
     assert "/healthz" in schema["paths"]
     assert "/readyz" in schema["paths"]
+
+
+def test_budget_scenario_comparison_workspace_is_mounted() -> None:
+    response = client.get("/workspace/budget-scenario-comparison")
+
+    assert response.status_code == 200
+    assert "مقایسهٔ سناریوهای بودجه" in response.text
