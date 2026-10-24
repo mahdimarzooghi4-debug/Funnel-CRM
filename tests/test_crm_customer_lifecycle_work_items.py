@@ -1,0 +1,166 @@
+from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
+
+import httpx
+import pytest
+from fastapi import FastAPI, Request
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from funnel_crm.api.v1.crm_work_items import router
+from funnel_crm.platform.models import (
+    CRMCustomerActivity,
+    CRMProfile,
+    Role,
+    RoleAssignment,
+    RolePermission,
+    TenantRecord,
+)
+from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
+
+
+def make_app(
+    session_factory: async_sessionmaker[AsyncSession], identity: AuthenticatedIdentity
+) -> FastAPI:
+    app = FastAPI()
+    app.state.session_factory = session_factory
+
+    @app.middleware("http")
+    async def add_test_identity(request: Request, call_next):
+        request.state.authenticated_identity = identity
+        return await call_next(request)
+
+    app.include_router(router, prefix="/api/v1")
+    return app
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
+    runtime_session_factory: async_sessionmaker[AsyncSession],
+    tenant_case: dict[str, object],
+) -> None:
+    tenant_id, root_id = tenant_case["workspace_a"], tenant_case["root_a"]
+    identity = tenant_case["identity"]
+    assert isinstance(tenant_id, UUID)
+    assert isinstance(root_id, UUID)
+    assert isinstance(identity, AuthenticatedIdentity)
+
+    stale_id, recent_id, untracked_id = uuid4(), uuid4(), uuid4()
+    profile_ids = (stale_id, recent_id, untracked_id)
+    tenant_case["lifecycle_cleanup_profile_ids"] = profile_ids
+    now = datetime.now(timezone.utc)
+
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        context.session.add_all([
+            TenantRecord(
+                id=profile_id,
+                tenant_id=tenant_id,
+                organization_unit_id=root_id,
+                record_type="crm_profile",
+            )
+            for profile_id in profile_ids
+        ])
+        await context.session.flush()
+        context.session.add_all([
+            CRMProfile(
+                id=profile_id,
+                tenant_id=tenant_id,
+                organization_unit_id=root_id,
+                profile_kind="person",
+                display_name=name,
+                lifecycle_stage="customer",
+            )
+            for profile_id, name in (
+                (stale_id, "Lifecycle stale work item"),
+                (recent_id, "Lifecycle recently active"),
+                (untracked_id, "Lifecycle untracked work item"),
+            )
+        ])
+        await context.session.flush()
+        context.session.add_all([
+            CRMCustomerActivity(
+                id=uuid4(), tenant_id=tenant_id, profile_id=stale_id,
+                source_product="funnel.store", source_event_id=uuid4(), campaign_id=None,
+                activity_type="order.completed", channel="store",
+                occurred_at=now - timedelta(days=45),
+            ),
+            CRMCustomerActivity(
+                id=uuid4(), tenant_id=tenant_id, profile_id=recent_id,
+                source_product="funnel.web", source_event_id=uuid4(), campaign_id=None,
+                activity_type="form.submitted", channel="online",
+                occurred_at=now - timedelta(days=2),
+            ),
+        ])
+        role = Role(tenant_id=tenant_id, name=f"Lifecycle executor {uuid4().hex[:8]}")
+        context.session.add(role)
+        await context.session.flush()
+        context.session.add_all([
+            RoleAssignment(
+                tenant_id=tenant_id,
+                membership_id=context.access.membership_id,
+                role_id=role.id,
+                organization_unit_id=root_id,
+            ),
+            *[
+                RolePermission(
+                    tenant_id=tenant_id,
+                    role_id=role.id,
+                    permission_key=permission,
+                )
+                for permission in ("crm.profile:view", "crm.work_item:create")
+            ],
+        ])
+        await context.session.flush()
+
+    app = make_app(runtime_session_factory, identity)
+    endpoint = "/api/v1/crm/work-items/from-lifecycle-review"
+    headers = {"X-Workspace-ID": str(tenant_id)}
+    base_payload = {
+        "organization_unit_id": str(root_id),
+        "inactive_for_days": 30,
+        "lifecycle_stage": "customer",
+        "profile_kind": "person",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        stale_selection = await client.post(
+            endpoint,
+            headers=headers,
+            json={**base_payload, "profile_ids": [str(stale_id), str(recent_id)]},
+        )
+        assert stale_selection.status_code == 409
+
+        created = await client.post(
+            endpoint,
+            headers=headers,
+            json={**base_payload, "profile_ids": [str(stale_id), str(untracked_id)]},
+        )
+        assert created.status_code == 201, created.text
+        result = created.json()
+        assert result["created_count"] == 2
+        by_profile = {item["profile_id"]: item for item in result["items"]}
+        stale_item = by_profile[str(stale_id)]
+        assert stale_item["title"].endswith("Lifecycle stale work item")
+        assert "Latest linked CRM activity" in stale_item["description"]
+        untracked_item = by_profile[str(untracked_id)]
+        assert "does not prove no interaction occurred" in untracked_item["description"]
+
+        duplicate_ids = await client.post(
+            endpoint,
+            headers=headers,
+            json={**base_payload, "profile_ids": [str(stale_id), str(stale_id)]},
+        )
+        assert duplicate_ids.status_code == 422
+
+        unauthorized = await client.post(
+            endpoint,
+            headers=headers,
+            json={
+                **base_payload,
+                "organization_unit_id": str(uuid4()),
+                "profile_ids": [str(stale_id)],
+            },
+        )
+        assert unauthorized.status_code == 403
