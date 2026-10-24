@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from funnel_crm.platform.models import (
-    CRMCustomerActivity,
     CRMCustomerSupportCase,
     CRMOpportunity,
     CRMProductCommerceEvent,
@@ -144,11 +143,6 @@ async def tenant_case() -> AsyncIterator[dict[str, object]]:
                         await session.execute(
                             delete(CRMProductCommerceEvent).where(
                                 CRMProductCommerceEvent.tenant_id == tenant_id
-                            )
-                        )
-                        await session.execute(
-                            delete(CRMCustomerActivity).where(
-                                CRMCustomerActivity.tenant_id == tenant_id
                             )
                         )
                         await session.execute(
