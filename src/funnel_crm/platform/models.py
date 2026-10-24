@@ -554,6 +554,76 @@ class CRMProfileCustomFieldValue(Base):
     )
 
 
+class IntegrationEventInbox(Base):
+    """Durable tenant-scoped receipt for an event from a verified product connection."""
+
+    __tablename__ = "integration_event_inbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "source_product",
+            "event_id",
+            name="uq_integration_event_inbox_idempotency",
+        ),
+        CheckConstraint(
+            "length(trim(source_product)) BETWEEN 2 AND 80",
+            name="ck_integration_event_inbox_source",
+        ),
+        CheckConstraint(
+            "length(trim(event_type)) BETWEEN 3 AND 120",
+            name="ck_integration_event_inbox_event_type",
+        ),
+        CheckConstraint(
+            "length(trim(contract_name)) BETWEEN 2 AND 80 AND contract_version > 0",
+            name="ck_integration_event_inbox_contract",
+        ),
+        CheckConstraint(
+            "octet_length(event_digest) = 32",
+            name="ck_integration_event_inbox_digest",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(payload) = 'object' AND octet_length(payload::text) <= 131072",
+            name="ck_integration_event_inbox_payload",
+        ),
+        CheckConstraint(
+            "processing_status IN ('received', 'processing', 'processed', 'failed')",
+            name="ck_integration_event_inbox_status",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_integration_event_inbox_workspace",
+            ondelete="CASCADE",
+        ),
+        Index("ix_integration_event_inbox_tenant_received", "tenant_id", "received_at"),
+        Index(
+            "ix_integration_event_inbox_received_pending",
+            "received_at",
+            postgresql_where=text("processing_status = 'received'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    connection_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_product: Mapped[str] = mapped_column(String(80), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    contract_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    contract_version: Mapped[int] = mapped_column(nullable=False)
+    correlation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    event_digest: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    processing_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="received", server_default="received"
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
 class CRMProfileSegment(Base):
     """Saved, tenant-owned live audience definition over customer profile fields."""
 
