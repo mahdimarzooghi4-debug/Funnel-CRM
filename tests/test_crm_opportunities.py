@@ -281,6 +281,42 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert proposal["probability_percent"] is None
         assert proposal["weighted_expected_amount_by_currency"] == {}
 
+
+        aging = await client.get(
+            "/api/v1/crm/opportunities/stage-aging",
+            headers=headers,
+            params={
+                "organization_unit_id": str(root_id),
+                "pipeline_id": pipeline_id,
+                "as_of": "2026-12-10",
+                "limit": 2,
+            },
+        )
+        assert aging.status_code == 200, aging.text
+        aging_report = aging.json()
+        assert aging_report["as_of"] == "2026-12-10"
+        assert aging_report["total"] == 4
+        assert len(aging_report["items"]) == 2
+        assert all(item["history_complete"] and item["days_in_stage"] is not None
+                   for item in aging_report["items"])
+        counts_by_stage = {item["stage_key"]: item["opportunity_count"]
+                           for item in aging_report["buckets"]}
+        assert counts_by_stage == {"proposal": 1, "qualified": 3}
+        assert all(item["unknown_duration_count"] == 0
+                   for item in aging_report["buckets"])
+        stale_only = await client.get(
+            "/api/v1/crm/opportunities/stage-aging",
+            headers=headers,
+            params={
+                "organization_unit_id": str(root_id),
+                "pipeline_id": pipeline_id,
+                "as_of": "2026-12-10",
+                "minimum_days": 999,
+            },
+        )
+        assert stale_only.status_code == 200, stale_only.text
+        assert stale_only.json()["total"] == 0
+
         invalid_stage = await client.patch(
             f"/api/v1/crm/opportunities/{opportunity_id}",
             headers=headers,
