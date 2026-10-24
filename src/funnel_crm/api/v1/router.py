@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from funnel_crm.api.v1.crm_opportunities import router as crm_opportunities_router
 from funnel_crm.api.v1.crm_sales_operations import router as crm_sales_operations_router
+from funnel_crm.api.v1.crm_campaign_influence import router as crm_campaign_influence_router
 from funnel_crm.api.v1.crm_sales_forecasting import router as crm_sales_forecasting_router
 from funnel_crm.api.v1.crm_work_items import router as crm_work_items_router
 from funnel_crm.api.v1.crm_marketing_learning import router as crm_marketing_learning_router
@@ -37,6 +38,7 @@ router.include_router(product_connections_router)
 router.include_router(crm_profiles_router)
 router.include_router(crm_opportunities_router)
 router.include_router(crm_sales_operations_router)
+router.include_router(crm_campaign_influence_router)
 router.include_router(crm_sales_forecasting_router)
 router.include_router(crm_work_items_router)
 router.include_router(crm_marketing_learning_router)
