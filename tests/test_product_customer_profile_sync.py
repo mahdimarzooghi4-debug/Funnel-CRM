@@ -17,6 +17,7 @@ from funnel_crm.platform.models import (
     AuditEvent,
     CRMCommunicationConsentEvent,
     CRMContactPoint,
+    CRMCustomerActivity,
     CRMProfile,
     ProductConnection,
     ProductCustomerIdentity,
@@ -59,6 +60,25 @@ def body(tenant_id: UUID, *, event_id: UUID, external_id: str, display_name: str
     }
 
 
+
+def activity_body(tenant_id: UUID, *, event_id: UUID, external_id: str) -> dict:
+    event = body(
+        tenant_id,
+        event_id=event_id,
+        external_id=external_id,
+        display_name="unused",
+    )
+    event["event_type"] = "customer.activity.recorded"
+    event["contract_name"] = "crm.customer.activity"
+    event["payload"] = {
+        "external_customer_id": external_id,
+        "activity_type": "order.completed",
+        "channel": "online",
+        "source_record_id": "order-71",
+    }
+    return event
+
+
 @pytest.mark.asyncio
 async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
     runtime_session_factory, tenant_case
@@ -71,8 +91,8 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
         connection_id=uuid4(),
         tenant_id=tenant_id,
         source_product="funnel.store",
-        allowed_event_types=frozenset({"customer.upserted"}),
-        supported_contract_versions=frozenset({("crm.customer", 1)}),
+        allowed_event_types=frozenset({"customer.upserted", "customer.activity.recorded"}),
+        supported_contract_versions=frozenset({("crm.customer", 1), ("crm.customer.activity", 1)}),
     )
     async with tenant_session(
         runtime_session_factory,
@@ -86,9 +106,10 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
                 credential_id=uuid4(),
                 credential_digest=b"d" * 32,
                 source_product="funnel.store",
-                allowed_event_types=["customer.upserted"],
+                allowed_event_types=["customer.upserted", "customer.activity.recorded"],
                 contract_grants=[
-                    {"contract_name": "crm.customer", "contract_version": 1}
+                    {"contract_name": "crm.customer", "contract_version": 1},
+                    {"contract_name": "crm.customer.activity", "contract_version": 1}
                 ],
             )
         )
@@ -134,6 +155,21 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
         second_result = await consumer.process_batch(tenant_id)
         assert second_result.processed == 1
 
+        activity_event = uuid4()
+        activity_response = await client.post(
+            "/api/v1/integrations/events",
+            json=activity_body(
+                tenant_id,
+                event_id=activity_event,
+                external_id="store-customer-71",
+            ),
+        )
+        assert activity_response.status_code == 202
+        activity_result = await consumer.process_batch(tenant_id)
+        assert activity_result.claimed == 1
+        assert activity_result.processed == 1
+        assert activity_result.failed == 0
+
     async with tenant_session(
         runtime_session_factory,
         requested_tenant_id=tenant_id,
@@ -165,6 +201,19 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
         assert len(contacts) == 1
         assert contacts[0].verification_status == "unverified"
         assert b"buyer@example.test" not in contacts[0].encrypted_value
+        activities = (
+            await context.session.scalars(
+                select(CRMCustomerActivity).where(
+                    CRMCustomerActivity.tenant_id == tenant_id,
+                    CRMCustomerActivity.profile_id == profile.id,
+                )
+            )
+        ).all()
+        assert len(activities) == 1
+        assert activities[0].activity_type == "order.completed"
+        assert activities[0].channel == "online"
+        assert activities[0].source_record_id == "order-71"
+        assert activities[0].source_event_id == activity_event
         consents = await context.session.scalar(
             select(func.count()).select_from(CRMCommunicationConsentEvent).where(
                 CRMCommunicationConsentEvent.tenant_id == tenant_id,
@@ -176,9 +225,9 @@ async def test_customer_upserts_update_one_profile_and_encrypt_contact_points(
             await context.session.scalars(
                 select(AuditEvent).where(
                     AuditEvent.tenant_id == tenant_id,
-                    AuditEvent.action_key == "integration.customer.upserted",
+                    AuditEvent.action_key.in_(["integration.customer.upserted", "integration.customer.activity_recorded"]),
                 )
             )
         ).all()
-        assert len(audits) == 2
+        assert len(audits) == 3
         assert all("contact" not in str(audit.after_state).lower() or "contact_count" in audit.after_state for audit in audits)
