@@ -158,3 +158,113 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert stored is not None
         assert stored.status == "archived"
         assert stored.channel == "store"
+
+
+@pytest.mark.asyncio
+async def test_campaign_portfolio_reports_only_proven_same_segment_schedule_conflicts(
+    runtime_session_factory: async_sessionmaker[AsyncSession],
+    tenant_case: dict[str, object],
+) -> None:
+    tenant_id = tenant_case["workspace_a"]
+    root_id = tenant_case["root_a"]
+    identity = tenant_case["identity"]
+    assert isinstance(tenant_id, UUID)
+    assert isinstance(root_id, UUID)
+    assert isinstance(identity, AuthenticatedIdentity)
+
+    first_segment_id, other_segment_id = uuid4(), uuid4()
+    now = datetime.now(timezone.utc)
+    window_start = now + timedelta(days=10)
+    window_end = window_start + timedelta(days=14)
+    campaigns = [
+        CRMMarketingCampaign(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            segment_id=first_segment_id, name="Email A", objective_key="retention",
+            channel="email", starts_at=window_start + timedelta(hours=2),
+            ends_at=window_start + timedelta(days=4), status="draft",
+        ),
+        CRMMarketingCampaign(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            segment_id=first_segment_id, name="Phone B", objective_key="retention",
+            channel="phone", starts_at=window_start + timedelta(days=2),
+            ends_at=window_start + timedelta(days=6), status="draft",
+        ),
+        CRMMarketingCampaign(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            segment_id=other_segment_id, name="Store C", objective_key="awareness",
+            channel="store", starts_at=window_start + timedelta(days=2),
+            ends_at=window_start + timedelta(days=6), status="draft",
+        ),
+        CRMMarketingCampaign(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            segment_id=first_segment_id, name="Outside window", objective_key="retention",
+            channel="email", starts_at=window_end + timedelta(days=2),
+            ends_at=window_end + timedelta(days=4), status="draft",
+        ),
+        CRMMarketingCampaign(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            segment_id=first_segment_id, name="Unscheduled", objective_key="retention",
+            channel="email", starts_at=None, ends_at=None, status="draft",
+        ),
+    ]
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        context.session.add_all(
+            [
+                CRMProfileSegment(
+                    id=first_segment_id, tenant_id=tenant_id,
+                    organization_unit_id=root_id, name=f"Portfolio A {uuid4().hex[:8]}",
+                    criteria={"profile_kinds": ["person"]}, is_active=True,
+                ),
+                CRMProfileSegment(
+                    id=other_segment_id, tenant_id=tenant_id,
+                    organization_unit_id=root_id, name=f"Portfolio B {uuid4().hex[:8]}",
+                    criteria={"profile_kinds": ["organization"]}, is_active=True,
+                ),
+            ]
+        )
+        role = Role(tenant_id=tenant_id, name=f"Portfolio viewer {uuid4().hex[:8]}")
+        context.session.add(role)
+        await context.session.flush()
+        context.session.add_all(campaigns)
+        context.session.add_all(
+            [
+                RoleAssignment(
+                    tenant_id=tenant_id, membership_id=context.access.membership_id,
+                    role_id=role.id, organization_unit_id=root_id,
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.campaign:view",
+                ),
+            ]
+        )
+        await context.session.flush()
+
+    app = make_app(runtime_session_factory, identity)
+    headers = {"X-Workspace-ID": str(tenant_id)}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/crm/campaigns/portfolio",
+            headers=headers,
+            params={
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+            },
+        )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["total_draft_campaigns"] == 5
+    assert result["scheduled_campaigns_in_window"] == 3
+    assert result["unscheduled_campaigns"] == 1
+    assert result["exact_same_segment_conflict_pairs"] == 1
+    assert result["overlap_basis"] == "same_segment_id_and_overlapping_schedule"
+    assert result["truncated"] is False
+    item_by_name = {item["name"]: item for item in result["items"]}
+    assert item_by_name["Email A"]["overlapping_campaign_ids"] == [
+        item_by_name["Phone B"]["id"]
+    ]
+    assert item_by_name["Store C"]["overlapping_campaign_ids"] == []

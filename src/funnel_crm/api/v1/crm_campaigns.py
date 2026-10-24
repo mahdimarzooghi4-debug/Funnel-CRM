@@ -264,3 +264,146 @@ async def archive_campaign(
         await context.session.flush()
         _audit(context, campaign, "crm_marketing_campaign.archived")
         await context.session.flush()
+
+
+class CampaignPortfolioItem(BaseModel):
+    id: UUID
+    name: str
+    segment_id: UUID
+    channel: str
+    objective_key: str
+    starts_at: datetime
+    ends_at: datetime
+    overlapping_campaign_ids: list[UUID]
+
+
+class CampaignPortfolioRead(BaseModel):
+    window_start: datetime
+    window_end: datetime
+    total_draft_campaigns: int
+    scheduled_campaigns_in_window: int
+    unscheduled_campaigns: int
+    exact_same_segment_conflict_pairs: int
+    overlap_basis: Literal["same_segment_id_and_overlapping_schedule"]
+    items: list[CampaignPortfolioItem]
+    truncated: bool
+
+
+@router.get(
+    "/portfolio",
+    response_model=CampaignPortfolioRead,
+    operation_id="reviewCRMMarketingCampaignPortfolio",
+    summary="Review scheduled campaign overlap for authorized organization scopes",
+)
+async def review_campaign_portfolio(
+    window_start: datetime,
+    window_end: datetime,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignPortfolioRead:
+    if (
+        window_start.tzinfo is None or window_start.utcoffset() is None
+        or window_end.tzinfo is None or window_end.utcoffset() is None
+    ):
+        raise HTTPException(status_code=422, detail="Portfolio window timestamps must include a timezone")
+    if window_start >= window_end:
+        raise HTTPException(status_code=422, detail="window_start must be earlier than window_end")
+
+    base_filters = [
+        CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+        CRMMarketingCampaign.organization_unit_id.in_(
+            crm_scope_ids(context, permission_key="crm.campaign:view")
+        ),
+        CRMMarketingCampaign.status == "draft",
+    ]
+    total = int(await context.session.scalar(
+        select(func.count()).select_from(CRMMarketingCampaign).where(*base_filters)
+    ) or 0)
+    unscheduled = int(await context.session.scalar(
+        select(func.count()).select_from(CRMMarketingCampaign).where(
+            *base_filters,
+            (CRMMarketingCampaign.starts_at.is_(None) | CRMMarketingCampaign.ends_at.is_(None)),
+        )
+    ) or 0)
+    rows = (await context.session.scalars(
+        select(CRMMarketingCampaign).where(
+            *base_filters,
+            CRMMarketingCampaign.starts_at.is_not(None),
+            CRMMarketingCampaign.ends_at.is_not(None),
+            CRMMarketingCampaign.starts_at < window_end,
+            CRMMarketingCampaign.ends_at > window_start,
+        ).order_by(CRMMarketingCampaign.starts_at, CRMMarketingCampaign.id).limit(1001)
+    )).all()
+    truncated = len(rows) > 1000
+    campaigns = rows[:1000]
+    overlapping: dict[UUID, list[UUID]] = {campaign.id: [] for campaign in campaigns}
+    pairs: set[tuple[UUID, UUID]] = set()
+    for index, first in enumerate(campaigns):
+        for second in campaigns[index + 1:]:
+            if first.segment_id != second.segment_id:
+                continue
+            if first.starts_at < second.ends_at and second.starts_at < first.ends_at:
+                overlapping[first.id].append(second.id)
+                overlapping[second.id].append(first.id)
+                pairs.add(tuple(sorted((first.id, second.id), key=str)))
+
+    _audit_portfolio_read(
+        context,
+        window_start=window_start,
+        window_end=window_end,
+        total=total,
+        scheduled=len(campaigns),
+    )
+    await context.session.flush()
+    return CampaignPortfolioRead(
+        window_start=window_start,
+        window_end=window_end,
+        total_draft_campaigns=total,
+        scheduled_campaigns_in_window=len(campaigns),
+        unscheduled_campaigns=unscheduled,
+        exact_same_segment_conflict_pairs=len(pairs),
+        overlap_basis="same_segment_id_and_overlapping_schedule",
+        items=[
+            CampaignPortfolioItem(
+                id=campaign.id,
+                name=campaign.name,
+                segment_id=campaign.segment_id,
+                channel=campaign.channel,
+                objective_key=campaign.objective_key,
+                starts_at=campaign.starts_at,
+                ends_at=campaign.ends_at,
+                overlapping_campaign_ids=sorted(overlapping[campaign.id], key=str),
+            )
+            for campaign in campaigns
+        ],
+        truncated=truncated,
+    )
+
+
+def _audit_portfolio_read(
+    context: TenantSessionContext,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+    total: int,
+    scheduled: int,
+) -> None:
+    context.session.add(
+        AuditEvent(
+            tenant_id=context.access.tenant_id,
+            actor_kind="user",
+            actor_identity_id=context.access.identity_id,
+            actor_membership_id=context.access.membership_id,
+            action_key="crm_marketing_campaign.portfolio_reviewed",
+            target_type="crm_marketing_campaign_portfolio",
+            target_key="organization_scope",
+            organization_unit_id=None,
+            before_state=None,
+            after_state={
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+                "draft_campaigns": total,
+                "scheduled_campaigns_in_window": scheduled,
+            },
+            correlation_id=None,
+        )
+    )
