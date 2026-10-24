@@ -120,6 +120,19 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert initial.json()["baseline"]["metrics"]["conversions"]["status"] == "not_met"
         assert initial.json()["follow_up"] is None
 
+        portfolio = await client.get(
+            f"{base}/portfolio",
+            headers=headers,
+            params={"period_start": "2026-10-16", "period_end": "2026-10-17"},
+        )
+        assert portfolio.status_code == 200, portfolio.text
+        portfolio_body = portfolio.json()
+        assert portfolio_body["total_count"] == 1
+        assert portfolio_body["planned_count"] == 1
+        assert portfolio_body["evaluated_count"] == 0
+        assert portfolio_body["items"][0]["review"]["id"] == review_id
+        assert portfolio_body["items"][0]["learning_state"] == "awaiting_follow_up"
+
         missing_data = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
             "follow_up_target_plan_id": str(empty_follow_up_id),
             "follow_up_effectiveness": "We expect improvement after the change.",
@@ -141,6 +154,19 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert body["follow_up"]["metrics"]["conversions"]["actual"] == 3
         assert body["follow_up"]["metrics"]["conversions"]["status"] == "met"
 
+        evaluated_portfolio = await client.get(
+            f"{base}/portfolio",
+            headers=headers,
+            params={"status": "evaluated", "organization_unit_id": str(root_id)},
+        )
+        assert evaluated_portfolio.status_code == 200, evaluated_portfolio.text
+        evaluated_body = evaluated_portfolio.json()
+        assert evaluated_body["total_count"] == 1
+        assert evaluated_body["planned_count"] == 0
+        assert evaluated_body["evaluated_count"] == 1
+        assert evaluated_body["items"][0]["learning_state"] == "follow_up_evaluated"
+        assert evaluated_body["items"][0]["follow_up_period_start"] == "2026-10-18"
+
         repeated = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
             "follow_up_target_plan_id": str(follow_up_id),
             "follow_up_effectiveness": "Updated note.",
@@ -159,13 +185,17 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         events = (await context.session.scalars(
             select(AuditEvent).where(
                 AuditEvent.tenant_id == tenant_id,
-                AuditEvent.target_type == "crm_marketing_learning_review",
+                AuditEvent.target_type.in_([
+                    "crm_marketing_learning_review",
+                    "crm_marketing_learning_portfolio",
+                ]),
             )
         )).all()
         assert {event.action_key for event in events} >= {
             "crm_marketing_learning_review.created",
             "crm_marketing_learning_review.viewed",
             "crm_marketing_learning_review.evaluated",
+            "crm_marketing_learning.portfolio_viewed",
         }
 
 
