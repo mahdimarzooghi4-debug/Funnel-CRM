@@ -744,6 +744,7 @@ async def sales_target_campaign_influence(
                 "won_amount": Decimal("0"),
                 "open_gross_amount": Decimal("0"),
                 "open_weighted_amount": Decimal("0"),
+                "lost_amount": Decimal("0"),
                 "unpriced_opportunity_count": 0,
                 "unknown_probability_count": 0,
             })
@@ -766,6 +767,8 @@ async def sales_target_campaign_influence(
                 continue
             if outcome == "won":
                 campaign["won_amount"] += row.amount
+            elif outcome == "lost":
+                campaign["lost_amount"] += row.amount
             elif outcome == "open":
                 campaign["open_gross_amount"] += row.amount
                 probability = config.get("probability_percent")
@@ -776,6 +779,7 @@ async def sales_target_campaign_influence(
                 else:
                     campaign["unknown_probability_count"] += 1
         unique_won = Decimal("0")
+        unique_lost = Decimal("0")
         unique_weighted_open = Decimal("0")
         unique_open_gross = Decimal("0")
         unique_unpriced = 0
@@ -792,6 +796,8 @@ async def sales_target_campaign_influence(
                 continue
             if outcome == "won":
                 unique_won += opportunity["amount"]
+            elif outcome == "lost":
+                unique_lost += opportunity["amount"]
             elif outcome == "open":
                 unique_open_gross += opportunity["amount"]
                 probability = config.get("probability_percent")
@@ -814,6 +820,7 @@ async def sales_target_campaign_influence(
                 "associated_profile_count": len(campaign["profiles"]),
                 "prior_touch_count": campaign["prior_touch_count"],
                 "current_won_amount": campaign["won_amount"].quantize(Decimal("0.01")),
+                "current_lost_amount": campaign["lost_amount"].quantize(Decimal("0.01")),
                 "open_pipeline_gross_amount": campaign["open_gross_amount"].quantize(Decimal("0.01")),
                 "open_pipeline_weighted_amount": campaign["open_weighted_amount"].quantize(Decimal("0.01")),
                 "unpriced_opportunity_count": campaign["unpriced_opportunity_count"],
@@ -835,6 +842,7 @@ async def sales_target_campaign_influence(
             "campaign_opportunity_association_count": len(rows),
             "multi_campaign_opportunity_count": overlapping,
             "unique_current_won_amount": unique_won.quantize(Decimal("0.01")),
+            "unique_current_lost_amount": unique_lost.quantize(Decimal("0.01")),
             "unique_open_pipeline_gross_amount": unique_open_gross.quantize(Decimal("0.01")),
             "unique_open_pipeline_weighted_amount": unique_weighted_open.quantize(Decimal("0.01")),
             "unique_unpriced_opportunity_count": unique_unpriced,
@@ -847,4 +855,22 @@ async def sales_target_campaign_influence(
             "campaign_amounts_are_non_additive": True,
             "association_rows_truncated": len(rows) == 10000,
         })
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_sales_target.campaign_influence_viewed",
+        target_type="crm_sales_target_campaign_influence",
+        target_key=str(target_id or organization_unit_id or context.access.tenant_id),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "target_id": str(target_id) if target_id else None,
+            "organization_unit_id": str(organization_unit_id) if organization_unit_id else None,
+            "returned_target_count": len(items),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
     return {"items": items}
