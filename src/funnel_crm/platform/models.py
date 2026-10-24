@@ -1904,6 +1904,11 @@ class CRMWorkItem(Base):
         ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
             ["workspace_memberships.tenant_id", "workspace_memberships.id"],
             name="fk_crm_work_items_creator_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "source_learning_review_id"],
+            ["crm_marketing_learning_reviews.tenant_id", "crm_marketing_learning_reviews.id"],
+            name="fk_crm_work_items_learning_review_same_tenant", ondelete="RESTRICT"),
+        UniqueConstraint("tenant_id", "source_learning_review_id",
+                         name="uq_crm_work_items_source_learning_review"),
         Index(
             "ix_crm_work_items_tenant_org_status_due",
             "tenant_id", "organization_unit_id", "status", "due_at",
@@ -1932,6 +1937,7 @@ class CRMWorkItem(Base):
         String(16), nullable=False, default="open", server_default="open"
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_learning_review_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),

@@ -8,11 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_marketing_learning import router
+from funnel_crm.api.v1.crm_work_items import router as work_items_router
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
     CRMMarketingCampaignTargetPlan,
+    CRMWorkItem,
     CRMProfileSegment,
     Role,
     RoleAssignment,
@@ -31,6 +33,7 @@ def make_app(session_factory: async_sessionmaker[AsyncSession], identity: Authen
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(work_items_router, prefix="/api/v1")
     return app
 
 
@@ -96,6 +99,8 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
             ),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:create"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:view"),
         ])
         await context.session.flush()
 
@@ -113,6 +118,31 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         review_id = created.json()["id"]
         assert created.json()["status"] == "planned"
         assert created.json()["lesson_learned"] is None
+
+        task_response = await client.post(
+            f"{base}/{review_id}/work-item", headers=headers,
+            json={"priority": "high", "due_at": "2026-10-28T12:00:00Z"},
+        )
+        assert task_response.status_code == 200, task_response.text
+        task_body = task_response.json()
+        assert task_body["created"] is True
+        task_id = task_body["work_item"]["id"]
+        assert task_body["work_item"]["source_learning_review_id"] == review_id
+        assert task_body["work_item"]["campaign_id"] == str(campaign_id)
+        assert task_body["work_item"]["priority"] == "high"
+        assert "Revise the landing page" in task_body["work_item"]["description"]
+        duplicate_task = await client.post(
+            f"{base}/{review_id}/work-item", headers=headers, json={},
+        )
+        assert duplicate_task.status_code == 200, duplicate_task.text
+        assert duplicate_task.json()["created"] is False
+        assert duplicate_task.json()["work_item"]["id"] == task_id
+        task_list = await client.get(
+            "/api/v1/crm/work-items", headers=headers,
+            params={"organization_unit_id": str(root_id)},
+        )
+        assert task_list.status_code == 200, task_list.text
+        assert [row["id"] for row in task_list.json()] == [task_id]
 
         initial = await client.get(f"{base}/{review_id}", headers=headers)
         assert initial.status_code == 200, initial.text
@@ -188,6 +218,7 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
                 AuditEvent.target_type.in_([
                     "crm_marketing_learning_review",
                     "crm_marketing_learning_portfolio",
+                        "crm_work_item",
                 ]),
             )
         )).all()
@@ -196,7 +227,13 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
             "crm_marketing_learning_review.viewed",
             "crm_marketing_learning_review.evaluated",
             "crm_marketing_learning.portfolio_viewed",
+            "crm_work_item.created_from_marketing_learning_review",
         }
+        tasks = (await context.session.scalars(select(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == tenant_id,
+            CRMWorkItem.source_learning_review_id == UUID(review_id),
+        ))).all()
+        assert len(tasks) == 1
 
 
 @pytest.mark.asyncio

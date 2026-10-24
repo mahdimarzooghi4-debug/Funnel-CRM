@@ -11,6 +11,7 @@ from sqlalchemy.orm import aliased
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_campaign_targets import evaluate_plan_metrics
+from funnel_crm.api.v1.crm_work_items import WorkItemRead
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
     AuditEvent,
@@ -19,6 +20,8 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaignMeasurement,
     CRMMarketingCampaignTargetPlan,
     CRMMarketingLearningReview,
+    CRMWorkItem,
+    WorkspaceMembership,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -112,6 +115,26 @@ class LearningPortfolioReport(BaseModel):
     has_more: bool
     items: list[LearningPortfolioItem]
     basis: str
+
+
+class LearningReviewWorkItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    assigned_membership_id: UUID | None = None
+    due_at: datetime | None = None
+    priority: Literal["low", "normal", "high", "urgent"] = "normal"
+
+    @field_validator("due_at")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("due_at must include a timezone")
+        return value
+
+
+class LearningReviewWorkItemResult(BaseModel):
+    work_item: WorkItemRead
+    created: bool
 
 
 async def _campaign(
@@ -415,6 +438,95 @@ async def get_learning_review(
     })
     await context.session.flush()
     return detail
+
+
+@router.post("/{review_id}/work-item", response_model=LearningReviewWorkItemResult,
+             operation_id="createCRMMarketingLearningReviewWorkItem")
+async def create_learning_review_work_item(
+    review_id: UUID,
+    payload: LearningReviewWorkItemRequest,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> LearningReviewWorkItemResult:
+    review = await context.session.scalar(
+        select(CRMMarketingLearningReview).where(
+            CRMMarketingLearningReview.tenant_id == context.access.tenant_id,
+            CRMMarketingLearningReview.id == review_id,
+        ).with_for_update()
+    )
+    if review is None:
+        raise HTTPException(status_code=404, detail="Marketing learning review not found")
+    campaign = await _campaign(context, review.campaign_id, "crm.campaign:manage")
+    await _target_plan(context, campaign=campaign, target_plan_id=review.target_plan_id)
+    if not await has_crm_permission(
+        context, permission_key="crm.work_item:create",
+        organization_unit_id=campaign.organization_unit_id,
+    ):
+        raise HTTPException(status_code=403, detail="Creating a CRM work item is not authorized")
+    existing = await context.session.scalar(
+        select(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == context.access.tenant_id,
+            CRMWorkItem.source_learning_review_id == review.id,
+        )
+    )
+    if existing is not None:
+        return LearningReviewWorkItemResult(
+            work_item=WorkItemRead.model_validate(existing), created=False
+        )
+    if payload.assigned_membership_id is not None:
+        active_member = await context.session.scalar(
+            select(WorkspaceMembership.id).where(
+                WorkspaceMembership.tenant_id == context.access.tenant_id,
+                WorkspaceMembership.id == payload.assigned_membership_id,
+                WorkspaceMembership.status == "active",
+            )
+        )
+        if active_member is None:
+            raise HTTPException(status_code=422, detail="Assignee must be an active member of this workspace")
+    title = f"Marketing follow-up: {review.corrective_action}"
+    if len(title) > 200:
+        title = title[:197].rstrip() + "..."
+    work_item = CRMWorkItem(
+        id=uuid4(),
+        tenant_id=context.access.tenant_id,
+        organization_unit_id=campaign.organization_unit_id,
+        profile_id=None,
+        opportunity_id=None,
+        campaign_id=campaign.id,
+        assigned_membership_id=payload.assigned_membership_id,
+        created_by_membership_id=context.access.membership_id,
+        source_learning_review_id=review.id,
+        title=title,
+        description=(f"Corrective action: {review.corrective_action}\n"
+                     f"Assessment: {review.assessment}")[:2000],
+        due_at=payload.due_at,
+        priority=payload.priority,
+        status="open",
+        completed_at=None,
+    )
+    context.session.add(work_item)
+    await context.session.flush()
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_work_item.created_from_marketing_learning_review",
+        target_type="crm_work_item",
+        target_key=str(work_item.id),
+        organization_unit_id=campaign.organization_unit_id,
+        before_state=None,
+        after_state={"source_learning_review_id": str(review.id),
+                     "campaign_id": str(campaign.id), "assigned_membership_id":
+                     str(payload.assigned_membership_id) if payload.assigned_membership_id else None,
+                     "priority": payload.priority},
+        correlation_id=None,
+    ))
+    _audit(context, review, "crm_marketing_learning_review.work_item_created",
+           before=None, after={"work_item_id": str(work_item.id)})
+    await context.session.flush()
+    return LearningReviewWorkItemResult(
+        work_item=WorkItemRead.model_validate(work_item), created=True
+    )
 
 
 @router.patch("/{review_id}/evaluation", response_model=LearningReviewDetail,
