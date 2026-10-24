@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select, tuple_
 
@@ -15,7 +15,7 @@ from funnel_crm.api.v1.crm_campaign_targets import (
     CampaignTargetRead,
     evaluate_plan_metrics,
 )
-from funnel_crm.platform.crm_authorization import has_crm_permission
+from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingCampaign,
@@ -87,6 +87,32 @@ class CampaignDecisionWorkspace(BaseModel):
     automatic_recommendation_issued: bool
 
 
+class CampaignPortfolioDecisionItem(BaseModel):
+    campaign_id: UUID
+    campaign_name: str
+    organization_unit_id: UUID
+    target_plan_id: UUID
+    period_start: date
+    period_end: date
+    status: str
+    attention_reasons: list[str]
+    missed_metric_count: int
+    no_data_metric_count: int
+    recorded_day_coverage_percent: Decimal
+    measurement_record_count: int
+
+
+class CampaignPortfolioDecisionQueue(BaseModel):
+    generated_at: datetime
+    period_start: date
+    period_end: date
+    items: list[CampaignPortfolioDecisionItem]
+    total_count: int
+    has_more: bool
+    basis: str
+    automatic_recommendation_issued: bool
+
+
 def _coverage_percent(observed_days: int, period_days: int) -> Decimal:
     return (
         (Decimal(observed_days) * Decimal("100") / Decimal(period_days)).quantize(
@@ -101,6 +127,125 @@ def _status(target: Decimal, actual: Decimal | None, *, at_least: bool) -> Liter
     if actual is None:
         return "no_data"
     return "met" if (actual >= target if at_least else actual <= target) else "not_met"
+
+
+@router.get(
+    "/decision-queue",
+    response_model=CampaignPortfolioDecisionQueue,
+    operation_id="getCRMCampaignPortfolioDecisionQueue",
+)
+async def get_campaign_portfolio_decision_queue(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    organization_unit_id: UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignPortfolioDecisionQueue:
+    """Rank target plans that need a marketing manager's review."""
+    if period_start > period_end:
+        raise HTTPException(status_code=422, detail="period_start must not be after period_end")
+    if (period_end - period_start).days > 365:
+        raise HTTPException(status_code=422, detail="Reports are limited to 366 calendar days")
+    allowed_units = sorted(set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.campaign:view")
+    )).all()), key=str)
+    if organization_unit_id is not None:
+        if organization_unit_id not in allowed_units:
+            raise HTTPException(status_code=403, detail="Campaign decision queue is not authorized")
+        allowed_units = [organization_unit_id]
+
+    filters = [
+        CRMMarketingCampaignTargetPlan.tenant_id == context.access.tenant_id,
+        CRMMarketingCampaignTargetPlan.organization_unit_id.in_(allowed_units),
+        CRMMarketingCampaignTargetPlan.period_start <= period_end,
+        CRMMarketingCampaignTargetPlan.period_end >= period_start,
+    ]
+    total = int(await context.session.scalar(
+        select(func.count(CRMMarketingCampaignTargetPlan.id)).where(*filters)
+    ) or 0)
+    rows = (await context.session.execute(
+        select(CRMMarketingCampaignTargetPlan, CRMMarketingCampaign.name)
+        .join(CRMMarketingCampaign,
+              (CRMMarketingCampaign.tenant_id == CRMMarketingCampaignTargetPlan.tenant_id)
+              & (CRMMarketingCampaign.id == CRMMarketingCampaignTargetPlan.campaign_id)
+              & (CRMMarketingCampaign.organization_unit_id == CRMMarketingCampaignTargetPlan.organization_unit_id))
+        .where(*filters)
+        .order_by(CRMMarketingCampaignTargetPlan.period_end, CRMMarketingCampaign.name,
+                  CRMMarketingCampaignTargetPlan.id)
+        .limit(limit).offset(offset)
+    )).all()
+    items = []
+    for plan, campaign_name in rows:
+        measurements = list((await context.session.scalars(
+            select(CRMMarketingCampaignMeasurement).where(
+                CRMMarketingCampaignMeasurement.tenant_id == context.access.tenant_id,
+                CRMMarketingCampaignMeasurement.organization_unit_id == plan.organization_unit_id,
+                CRMMarketingCampaignMeasurement.campaign_id == plan.campaign_id,
+                CRMMarketingCampaignMeasurement.measured_on >= plan.period_start,
+                CRMMarketingCampaignMeasurement.measured_on <= plan.period_end,
+            )
+        )).all())
+        evaluated = evaluate_plan_metrics(plan, measurements)
+        metric_results = [value for key, value in evaluated.items() if key != "roas"]
+        # ROAS is omitted here because it requires commerce joins; the per-campaign
+        # decision workspace remains the authoritative source for that metric.
+        missed = sum(1 for metric in metric_results if metric.status == "not_met")
+        no_data = sum(1 for metric in metric_results if metric.status == "no_data")
+        period_days = (plan.period_end - plan.period_start).days + 1
+        observed_days = len({row.measured_on for row in measurements})
+        coverage = _coverage_percent(observed_days, period_days)
+        reasons = []
+        if missed:
+            reasons.append("target_missed")
+        if no_data:
+            reasons.append("target_metrics_without_data")
+        if coverage < Decimal("80"):
+            reasons.append("low_recorded_day_coverage")
+        items.append(CampaignPortfolioDecisionItem(
+            campaign_id=plan.campaign_id,
+            campaign_name=campaign_name,
+            organization_unit_id=plan.organization_unit_id,
+            target_plan_id=plan.id,
+            period_start=plan.period_start,
+            period_end=plan.period_end,
+            status="review_required" if reasons else "on_track_or_insufficient_signal",
+            attention_reasons=reasons,
+            missed_metric_count=missed,
+            no_data_metric_count=no_data,
+            recorded_day_coverage_percent=coverage,
+            measurement_record_count=len(measurements),
+        ))
+    items.sort(key=lambda item: (
+        not bool(item.attention_reasons), -len(item.attention_reasons),
+        item.period_end, item.campaign_name, str(item.target_plan_id),
+    ))
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_campaign.decision_queue_viewed",
+        target_type="crm_campaign_decision_queue",
+        target_key=str(organization_unit_id or context.access.tenant_id),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                     "total_count": total, "returned_count": len(items), "offset": offset, "limit": limit},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignPortfolioDecisionQueue(
+        generated_at=datetime.now(timezone.utc),
+        period_start=period_start,
+        period_end=period_end,
+        items=items,
+        total_count=total,
+        has_more=offset + len(items) < total,
+        basis=("Target plan metric evaluations and recorded-day coverage only; no causal attribution, "
+               "budget recommendation, or automatic action is applied."),
+        automatic_recommendation_issued=False,
+    )
 
 
 @router.get(
