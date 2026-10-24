@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
+from funnel_crm.api.v1.crm_metric_catalog import MetricDefinition, get_metric_definition
 from funnel_crm.api.v1.crm_campaign_targets import (
     TargetMetricEvaluation,
     evaluate_plan_metrics,
@@ -59,6 +60,9 @@ class CampaignTargetPortfolioRead(BaseModel):
     campaign_count: int
     campaign_list_truncated: bool
     metric_outcomes: dict[str, TargetOutcomeCounts]
+    metric_definitions: dict[str, MetricDefinition]
+    period_calendar_days: int
+    coverage_basis: str
     groups: list[CampaignTargetPortfolioGroup]
     campaigns: list[CampaignTargetPortfolioItem]
 
@@ -185,6 +189,13 @@ async def review_campaign_target_portfolio(
     ))
     await context.session.flush()
 
+    metric_outcomes = _outcomes(items)
+    metric_definitions = {
+        key: definition
+        for key in metric_outcomes
+        if (definition := get_metric_definition(key)) is not None
+    }
+
     return CampaignTargetPortfolioRead(
         period_start=period_start,
         period_end=period_end,
@@ -192,7 +203,13 @@ async def review_campaign_target_portfolio(
         grouped_by=grouped_by,
         campaign_count=len(items),
         campaign_list_truncated=truncated,
-        metric_outcomes=_outcomes(items),
+        metric_outcomes=metric_outcomes,
+        metric_definitions=metric_definitions,
+        period_calendar_days=(period_end - period_start).days + 1,
+        coverage_basis=(
+            "For each evaluated metric, observed days divided by calendar days in the plan period. "
+            "Paired metrics count only days with compatible recorded inputs; missing days are not zero."
+        ),
         groups=groups,
         campaigns=items,
     )
