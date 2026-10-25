@@ -1681,7 +1681,7 @@ _CLIENT_SCRIPT = r"""(() => {
       panel.appendChild(element("p", "muted", `مبنا: ${detail.baseline.period_start} تا ${detail.baseline.period_end} · پیگیری: ${detail.follow_up ? `${detail.follow_up.period_start} تا ${detail.follow_up.period_end}` : "ثبت نشده"}`));
       const table = document.createElement("table");
       const head = document.createElement("tr");
-      ["شاخص", "هدف مبنا", "واقعی مبنا", "هدف پیگیری", "واقعی پیگیری"].forEach((label) => head.appendChild(element("th", "", label)));
+      ["شاخص", "هدف مبنا", "واقعی مبنا", "هدف پیگیری", "واقعی پیگیری", "تغییر واقعی", "درصد تغییر", "پوشش داده"].forEach((label) => head.appendChild(element("th", "", label)));
       const thead = document.createElement("thead"); thead.appendChild(head); table.appendChild(thead);
       const tbody = document.createElement("tbody");
       const metricKeys = new Set([...Object.keys(detail.baseline.metrics || {}), ...Object.keys(detail.follow_up?.metrics || {})]);
@@ -1689,11 +1689,28 @@ _CLIENT_SCRIPT = r"""(() => {
         const baseline = detail.baseline.metrics?.[key];
         const followUp = detail.follow_up?.metrics?.[key];
         const row = document.createElement("tr");
+        const canCompare = baseline?.actual !== null && baseline?.actual !== undefined
+          && followUp?.actual !== null && followUp?.actual !== undefined
+          && (baseline.currency || null) === (followUp.currency || null);
+        const delta = canCompare ? Number(followUp.actual) - Number(baseline.actual) : null;
+        const percentDelta = canCompare && Number(baseline.actual) !== 0
+          ? delta * 100 / Number(baseline.actual) : null;
+        const deltaLabel = delta === null ? "قابل مقایسه نیست"
+          : `${delta > 0 ? "+" : ""}${baseline.currency ? displayAmount(delta, baseline.currency) : formatNumber.format(delta)}`;
+        const percentLabel = percentDelta === null
+          ? (canCompare ? "مبنای صفر؛ محاسبه‌نشده" : "قابل محاسبه نیست")
+          : `${percentDelta > 0 ? "+" : ""}${formatNumber.format(percentDelta)}٪`;
+        const coverageLabel = (metric) => metric
+          ? `${metric.observed_days ?? "—"} از ${metric.period_days ?? "—"} روز · ${metric.recorded_day_coverage_percent ?? "—"}٪`
+          : "بدون داده";
         row.append(element("td", "", targetMetricLabel(key)),
           element("td", "", targetValue(baseline?.target, baseline?.currency)),
           element("td", "", targetValue(baseline?.actual, baseline?.currency)),
           element("td", "", targetValue(followUp?.target, followUp?.currency)),
-          element("td", "", targetValue(followUp?.actual, followUp?.currency)));
+          element("td", "", targetValue(followUp?.actual, followUp?.currency)),
+          element("td", "", deltaLabel),
+          element("td", "", percentLabel),
+          element("td", "", `${coverageLabel(baseline)} / ${coverageLabel(followUp)}`));
         tbody.appendChild(row);
       });
       table.appendChild(tbody);
