@@ -16,7 +16,6 @@ from funnel_crm.platform.models import (
     Role,
     RoleAssignment,
     RolePermission,
-    UserIdentity,
     WorkspaceMembership,
 )
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
@@ -65,11 +64,20 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
 ) -> None:
     tenant_id, org_id = tenant_case["workspace_a"], tenant_case["root_a"]
     identity = tenant_case["identity"]
+    identity_b = tenant_case["identity_b"]
     assert isinstance(tenant_id, UUID)
     assert isinstance(org_id, UUID)
     assert isinstance(identity, AuthenticatedIdentity)
+    assert isinstance(identity_b, AuthenticatedIdentity)
     period_date = datetime.now(timezone.utc).date()
     event_time = datetime.combine(period_date, datetime.min.time(), tzinfo=timezone.utc).replace(hour=12)
+
+    async with tenant_session(
+        runtime_session_factory,
+        requested_tenant_id=tenant_case["workspace_b"],
+        identity=identity_b,
+    ) as other_context:
+        other_identity_id = other_context.access.identity_id
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
@@ -92,13 +100,8 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
                 permission_key="crm.commission:view",
             ),
         ])
-        other_identity = UserIdentity(
-            issuer=identity.issuer, subject=f"commission-seller-{uuid4()}",
-        )
-        context.session.add(other_identity)
-        await context.session.flush()
         other_membership = WorkspaceMembership(
-            tenant_id=tenant_id, identity_id=other_identity.id, status="active",
+            tenant_id=tenant_id, identity_id=other_identity_id, status="active",
         )
         context.session.add(other_membership)
         await context.session.flush()
