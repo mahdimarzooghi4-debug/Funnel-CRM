@@ -289,6 +289,11 @@ _PAGE = """<!doctype html>
         فقط بررسی‌های دارای کار موعدگذشته
       </label>
       <div id="learning-portfolio-counts" class="cards" aria-live="polite"></div>
+      <h4>خلاصه به تفکیک کمپین</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th scope="col">کمپین</th><th scope="col">کل بررسی‌ها</th><th scope="col">در انتظار پیگیری</th><th scope="col">ارزیابی‌شده</th></tr></thead>
+        <tbody id="learning-campaign-summary"></tbody>
+      </table></div>
       <div class="table-wrap">
         <table>
           <thead><tr><th scope="col">کمپین</th><th scope="col">دورهٔ مبنا</th><th scope="col">وضعیت بررسی</th><th scope="col">ارزیابی ثبت‌شده</th><th scope="col">اقدام ثبت‌شده</th><th scope="col">وضعیت کار CRM</th><th scope="col">واگذاری</th><th scope="col">موعد</th><th scope="col">به‌روزرسانی کار</th></tr></thead>
@@ -1803,8 +1808,10 @@ _CLIENT_SCRIPT = r"""(() => {
   function renderLearningPortfolio(result) {
     const note = byId("learning-portfolio-note");
     const counts = byId("learning-portfolio-counts");
+    const campaignSummary = byId("learning-campaign-summary");
     const body = byId("learning-portfolio-items");
     counts.replaceChildren();
+    campaignSummary.replaceChildren();
     body.replaceChildren();
     latestLearningPortfolio = result?.report || null;
     if (!latestLearningPortfolio) {
@@ -1841,6 +1848,14 @@ _CLIENT_SCRIPT = r"""(() => {
       card.className = "scenario-card";
       card.append(element("strong", "", formatNumber.format(value)), element("span", "muted", label));
       counts.appendChild(card);
+    });
+    (report.campaign_summaries || []).forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.campaign_name),
+        element("td", "", formatNumber.format(item.review_count)),
+        element("td", "", formatNumber.format(item.planned_count)),
+        element("td", "", formatNumber.format(item.evaluated_count)));
+      campaignSummary.appendChild(row);
     });
     note.textContent = result.workItemsVisible
       ? "وضعیت بررسی‌ها و کارهای پیوندخورده بر اساس دادهٔ ثبت‌شده است؛ تغییر وضعیت فقط با ثبت صریح شما انجام می‌شود."

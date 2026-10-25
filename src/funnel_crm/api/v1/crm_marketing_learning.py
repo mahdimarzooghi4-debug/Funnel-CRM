@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import aliased
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
@@ -105,6 +105,14 @@ class LearningPortfolioItem(BaseModel):
     work_item: WorkItemRead | None = None
 
 
+class LearningCampaignSummary(BaseModel):
+    campaign_id: UUID
+    campaign_name: str
+    review_count: int
+    planned_count: int
+    evaluated_count: int
+
+
 class LearningPortfolioReport(BaseModel):
     generated_at: datetime
     period_start: date | None
@@ -118,6 +126,7 @@ class LearningPortfolioReport(BaseModel):
     planned_count: int
     evaluated_count: int
     work_item_counts: dict[str, int] | None
+    campaign_summaries: list[LearningCampaignSummary]
     can_update_work_items: bool
     can_manage_marketing_reviews: bool
     has_more: bool
@@ -449,6 +458,34 @@ async def get_learning_portfolio(
               & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
         .where(*review_filters).group_by(CRMMarketingLearningReview.status)
     )).all()
+    campaign_summary_rows = (await context.session.execute(
+        select(
+            CRMMarketingCampaign.id,
+            CRMMarketingCampaign.name,
+            func.count(CRMMarketingLearningReview.id),
+            func.sum(case((CRMMarketingLearningReview.status == "planned", 1), else_=0)),
+            func.sum(case((CRMMarketingLearningReview.status == "evaluated", 1), else_=0)),
+        )
+        .join(CRMMarketingLearningReview,
+              (CRMMarketingCampaign.tenant_id == CRMMarketingLearningReview.tenant_id)
+              & (CRMMarketingCampaign.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+              & (CRMMarketingCampaign.id == CRMMarketingLearningReview.campaign_id))
+        .join(CRMMarketingCampaignTargetPlan,
+              (CRMMarketingCampaignTargetPlan.tenant_id == CRMMarketingLearningReview.tenant_id)
+              & (CRMMarketingCampaignTargetPlan.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+              & (CRMMarketingCampaignTargetPlan.campaign_id == CRMMarketingLearningReview.campaign_id)
+              & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
+        .where(*filters)
+        .group_by(CRMMarketingCampaign.id, CRMMarketingCampaign.name)
+        .order_by(func.count(CRMMarketingLearningReview.id).desc(), CRMMarketingCampaign.name)
+    )).all()
+    campaign_summaries = [LearningCampaignSummary(
+        campaign_id=campaign_id,
+        campaign_name=campaign_name,
+        review_count=int(review_count or 0),
+        planned_count=int(planned_count or 0),
+        evaluated_count=int(evaluated_count or 0),
+    ) for campaign_id, campaign_name, review_count, planned_count, evaluated_count in campaign_summary_rows]
     work_item_counts: dict[str, int] | None = None
     if include_work_items:
         task_status_rows = (await context.session.execute(
@@ -535,6 +572,7 @@ async def get_learning_portfolio(
         limit=limit, offset=offset,
         planned_count=counts.get("planned", 0), evaluated_count=counts.get("evaluated", 0),
         work_item_counts=work_item_counts,
+        campaign_summaries=campaign_summaries,
         can_update_work_items=can_update_work_items,
         can_manage_marketing_reviews=can_manage_marketing_reviews,
         has_more=offset + len(items) < total, items=items,

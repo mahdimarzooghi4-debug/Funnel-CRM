@@ -170,6 +170,13 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert portfolio_body["limit"] == 50
         assert portfolio_body["planned_count"] == 1
         assert portfolio_body["evaluated_count"] == 0
+        assert portfolio_body["campaign_summaries"] == [{
+            "campaign_id": str(campaign_id),
+            "campaign_name": "Learning campaign",
+            "review_count": 1,
+            "planned_count": 1,
+            "evaluated_count": 0,
+        }]
         assert portfolio_body["items"][0]["review"]["id"] == review_id
         assert portfolio_body["items"][0]["learning_state"] == "awaiting_follow_up"
         assert portfolio_body["items"][0]["work_item"]["status"] == "in_progress"
@@ -250,6 +257,8 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert evaluated_body["total_count"] == 1
         assert evaluated_body["planned_count"] == 0
         assert evaluated_body["evaluated_count"] == 1
+        assert evaluated_body["campaign_summaries"][0]["evaluated_count"] == 1
+        assert evaluated_body["campaign_summaries"][0]["planned_count"] == 0
         assert evaluated_body["items"][0]["learning_state"] == "follow_up_evaluated"
         assert evaluated_body["items"][0]["follow_up_period_start"] == "2026-10-18"
         assert evaluated_body["items"][0]["work_item"]["status"] == "completed"
