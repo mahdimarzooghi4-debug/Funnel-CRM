@@ -148,6 +148,7 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         )
         assert calculation_response.status_code == 201, calculation_response.text
         calculation = calculation_response.json()
+        assert calculation["plan_version"] == 1
         assert calculation["status"] == "calculation_only"
         assert calculation["timezone"] == "UTC"
         assert calculation["money_transfer_or_payroll_instruction_created"] is False
@@ -171,11 +172,38 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         other_seller_row = by_currency_seller[(str(other_seller_id), "USD")]
         assert Decimal(other_seller_row["commission_amount"]) == Decimal("20.000000")
 
+        updated_plan = await client.patch(
+            f"/api/v1/crm/commission-plans/{plan_id}", headers=headers,
+            json={"expected_version": 1, "rate_percent": "12"},
+        )
+        assert updated_plan.status_code == 200, updated_plan.text
+        assert updated_plan.json()["version"] == 2
+        stale_update = await client.patch(
+            f"/api/v1/crm/commission-plans/{plan_id}", headers=headers,
+            json={"expected_version": 1, "rate_percent": "15"},
+        )
+        assert stale_update.status_code == 409
+        revised_calculation_response = await client.post(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations",
+            headers=headers,
+            json={"period_start": period_date.isoformat(), "period_end": period_date.isoformat()},
+        )
+        assert revised_calculation_response.status_code == 201, revised_calculation_response.text
+        revised_calculation = revised_calculation_response.json()
+        assert revised_calculation["plan_version"] == 2
+        revised_by_currency = {
+            (row["seller_membership_id"], row["currency"]): row
+            for row in revised_calculation["rows"]
+        }
+        assert Decimal(revised_by_currency[(str(seller_id), "USD")] ["commission_amount"]) == Decimal("10.200000")
+
         history = await client.get(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations", headers=headers
         )
         assert history.status_code == 200, history.text
-        assert len(history.json()["items"]) == 1
+        assert len(history.json()["items"]) == 2
+        historical_versions = {item["plan_version"] for item in history.json()["items"]}
+        assert historical_versions == {1, 2}
         assert len(history.json()["items"][0]["rows"]) == 4
 
         seller_plan_response = await client.post(
@@ -224,9 +252,11 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         audit_actions = list(await context.session.scalars(select(AuditEvent.action_key).where(
             AuditEvent.tenant_id == tenant_id,
             AuditEvent.action_key.in_({
-                "crm_commission.plan_created", "crm_commission.calculation_created",
+                "crm_commission.plan_created", "crm_commission.plan_updated",
+                "crm_commission.calculation_created",
             }),
         )))
         assert set(audit_actions) == {
-            "crm_commission.plan_created", "crm_commission.calculation_created",
+            "crm_commission.plan_created", "crm_commission.plan_updated",
+            "crm_commission.calculation_created",
         }

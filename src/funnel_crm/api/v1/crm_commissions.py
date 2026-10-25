@@ -38,6 +38,14 @@ class CommissionCalculationCreate(BaseModel):
     period_end: date
 
 
+class CommissionPlanUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    rate_percent: Decimal | None = Field(default=None, gt=0, le=100, max_digits=7, decimal_places=4)
+    is_active: bool | None = None
+
+
 async def _authorized(context: TenantSessionContext, action: str, org_id: UUID) -> None:
     if not await has_crm_permission(context, permission_key=action, organization_unit_id=org_id):
         raise HTTPException(status_code=403, detail="Commission action is not authorized")
@@ -50,6 +58,7 @@ def _plan_json(row: CRMCommissionPlan) -> dict:
         "seller_membership_id": row.seller_membership_id,
         "name": row.name,
         "rate_percent": row.rate_percent,
+        "version": row.version,
         "is_active": row.is_active,
         "created_at": row.created_at,
     }
@@ -84,6 +93,54 @@ async def create_plan(payload: CommissionPlanCreate, context: TenantSessionConte
         organization_unit_id=plan.organization_unit_id, before_state=None,
         after_state={"name": plan.name, "seller_membership_id": str(plan.seller_membership_id) if plan.seller_membership_id else None,
                      "rate_percent": str(plan.rate_percent)},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return _plan_json(plan)
+
+
+@router.patch("/{plan_id}", operation_id="updateCRMCommissionPlan")
+async def update_plan(
+    plan_id: UUID,
+    payload: CommissionPlanUpdate,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    plan = await context.session.scalar(select(CRMCommissionPlan).where(
+        CRMCommissionPlan.tenant_id == context.access.tenant_id,
+        CRMCommissionPlan.id == plan_id,
+    ).with_for_update())
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Commission plan not found")
+    await _authorized(context, "crm.commission:manage", plan.organization_unit_id)
+    if payload.expected_version != plan.version:
+        raise HTTPException(status_code=409, detail="Commission plan version is stale")
+    changes = {
+        key: value
+        for key, value in payload.model_dump(
+            exclude_unset=True, exclude={"expected_version"}
+        ).items()
+        if value is not None
+    }
+    if not changes:
+        raise HTTPException(status_code=422, detail="At least one plan field must change")
+    if "name" in changes:
+        changes["name"] = changes["name"].strip()
+        if not changes["name"]:
+            raise HTTPException(status_code=422, detail="Plan name cannot be blank")
+    before = {key: (str(getattr(plan, key)) if key == "rate_percent" else getattr(plan, key))
+              for key in changes}
+    for key, value in changes.items():
+        setattr(plan, key, value)
+    plan.version += 1
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id, actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_commission.plan_updated",
+        target_type="crm_commission_plan", target_key=str(plan.id),
+        organization_unit_id=plan.organization_unit_id, before_state=before,
+        after_state={**{key: (str(getattr(plan, key)) if key == "rate_percent" else getattr(plan, key))
+                        for key in changes}, "version": plan.version},
         correlation_id=None,
     ))
     await context.session.flush()
@@ -131,7 +188,8 @@ async def calculate_commission(
     calculation = CRMCommissionCalculation(
         id=uuid4(), tenant_id=context.access.tenant_id, plan_id=plan.id,
         period_start=payload.period_start, period_end=payload.period_end,
-        rate_percent=plan.rate_percent, created_by_membership_id=context.access.membership_id,
+        rate_percent=plan.rate_percent, plan_version=plan.version,
+        created_by_membership_id=context.access.membership_id,
     )
     context.session.add(calculation)
     await context.session.flush()
@@ -174,6 +232,7 @@ async def calculate_commission(
         "id": calculation.id, "plan_id": plan.id,
         "period_start": payload.period_start, "period_end": payload.period_end,
         "timezone": "UTC", "rate_percent": plan.rate_percent,
+        "plan_version": plan.version,
         "rows": output_rows,
             "unattributed_events_excluded_from_commission": True,
         "status": "calculation_only",
@@ -203,6 +262,7 @@ async def list_calculations(plan_id: UUID, context: TenantSessionContext = Depen
         items.append({
             "id": calculation.id, "period_start": calculation.period_start,
             "period_end": calculation.period_end, "rate_percent": calculation.rate_percent,
+            "plan_version": calculation.plan_version,
             "created_at": calculation.created_at,
             "rows": [{"seller_membership_id": row.seller_membership_id,
                       "unattributed": row.seller_membership_id is None,
