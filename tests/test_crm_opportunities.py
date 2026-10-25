@@ -9,6 +9,7 @@ from funnel_crm.api.v1.crm_opportunities import router
 from funnel_crm.api.v1.crm_sales_forecasting import router as forecast_router
 from funnel_crm.api.v1.crm_catalog import router as catalog_router
 from funnel_crm.api.v1.crm_opportunity_catalog import router as opportunity_catalog_router
+from funnel_crm.api.v1.crm_opportunity_offers import router as opportunity_offers_router
 from funnel_crm.platform.models import Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -26,6 +27,7 @@ def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
     app.include_router(forecast_router, prefix="/api/v1")
     app.include_router(catalog_router, prefix="/api/v1")
     app.include_router(opportunity_catalog_router, prefix="/api/v1")
+    app.include_router(opportunity_offers_router, prefix="/api/v1")
     return app
 
 
@@ -66,6 +68,8 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
                     "crm.opportunity:update",
                     "crm.catalog:view",
                     "crm.catalog:manage",
+                    "crm.offer:view",
+                    "crm.offer:create",
                 )
             ],
         ])
@@ -148,6 +152,46 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
             json={"catalog_item_id": catalog_item.json()["id"], "expected_catalog_version": 1},
         )
         assert duplicate_link.status_code == 409
+        price = await client.post(
+            f"/api/v1/crm/catalog/items/{catalog_item.json()['id']}/prices",
+            headers=headers, json={"amount": "250.00", "currency": "USD"},
+        )
+        assert price.status_code == 201, price.text
+        offer = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts", headers=headers,
+            json={"lines": [{"catalog_item_id": catalog_item.json()["id"],
+                             "expected_catalog_version": 1,
+                             "price_version": price.json()["version"], "quantity": "2"}]},
+        )
+        assert offer.status_code == 201, offer.text
+        assert offer.json()["status"] == "draft"
+        assert offer.json()["lines"][0]["unit_amount"] == "250.000000"
+        assert offer.json()["totals_by_currency"] == {"USD": "500.000000"}
+        revised_offer = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts/{offer.json()['id']}/revisions",
+            headers=headers,
+            json={"lines": [{"catalog_item_id": catalog_item.json()["id"],
+                             "expected_catalog_version": 1,
+                             "price_version": price.json()["version"], "quantity": "3"}]},
+        )
+        assert revised_offer.status_code == 201, revised_offer.text
+        assert revised_offer.json()["revision_number"] == 2
+        assert revised_offer.json()["previous_revision_id"] == offer.json()["id"]
+        assert revised_offer.json()["totals_by_currency"] == {"USD": "750.000000"}
+        stale_revision = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts/{offer.json()['id']}/revisions",
+            headers=headers,
+            json={"lines": [{"catalog_item_id": catalog_item.json()["id"],
+                             "expected_catalog_version": 1,
+                             "price_version": price.json()["version"], "quantity": "4"}]},
+        )
+        assert stale_revision.status_code == 409
+        offer_list = await client.get(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts", headers=headers,
+        )
+        assert {entry["id"] for entry in offer_list.json()["items"]} == {
+            offer.json()["id"], revised_offer.json()["id"],
+        }
 
         board = await client.get(
             "/api/v1/crm/opportunities",
