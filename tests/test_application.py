@@ -32,6 +32,7 @@ def test_openapi_exposes_versioned_route_and_operations() -> None:
     assert schema["info"]["title"] == "Funnel CRM API"
     assert schema["info"]["version"] == "0.1.0"
     assert "/api/v1/system" in schema["paths"]
+    assert "/api/v1/crm/catalog/items" in schema["paths"]
     assert "/healthz" in schema["paths"]
     assert "/readyz" in schema["paths"]
 

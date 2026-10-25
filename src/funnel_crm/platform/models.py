@@ -2267,3 +2267,67 @@ class CRMCommissionCalculationRow(Base):
     net_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     commission_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     source_event_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+
+
+class CRMProductCatalogItem(Base):
+    """Workspace-owned product or service available for commercial offers."""
+
+    __tablename__ = "crm_product_catalog_items"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_product_catalog_items_tenant_id"),
+        UniqueConstraint("tenant_id", "organization_unit_id", "code", name="uq_crm_product_catalog_items_code"),
+        CheckConstraint("item_type IN ('product', 'service')", name="ck_crm_product_catalog_items_type"),
+        CheckConstraint("length(trim(code)) BETWEEN 1 AND 80", name="ck_crm_product_catalog_items_code"),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 200", name="ck_crm_product_catalog_items_name"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_product_catalog_items_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_product_catalog_items_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_product_catalog_items_creator_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_product_catalog_items_tenant_org", "tenant_id", "organization_unit_id", "is_active"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    code: Mapped[str] = mapped_column(String(80), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    item_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMProductCatalogPriceVersion(Base):
+    """Append-only currency price version for a catalog item."""
+
+    __tablename__ = "crm_product_catalog_price_versions"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_crm_product_catalog_price_versions_version"),
+        CheckConstraint("amount >= 0", name="ck_crm_product_catalog_price_versions_amount"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_product_catalog_price_versions_currency"),
+        CheckConstraint("effective_start IS NULL OR effective_end IS NULL OR effective_start <= effective_end", name="ck_crm_product_catalog_price_versions_window"),
+        ForeignKeyConstraint(["tenant_id", "item_id"],
+            ["crm_product_catalog_items.tenant_id", "crm_product_catalog_items.id"],
+            name="fk_crm_product_catalog_prices_item_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_product_catalog_prices_creator_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_product_catalog_prices_tenant_item", "tenant_id", "item_id", "version"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    item_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    effective_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
