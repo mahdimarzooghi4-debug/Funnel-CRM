@@ -2279,6 +2279,7 @@ class CRMProductCatalogItem(Base):
         CheckConstraint("item_type IN ('product', 'service')", name="ck_crm_product_catalog_items_type"),
         CheckConstraint("length(trim(code)) BETWEEN 1 AND 80", name="ck_crm_product_catalog_items_code"),
         CheckConstraint("length(trim(name)) BETWEEN 1 AND 200", name="ck_crm_product_catalog_items_name"),
+        CheckConstraint("category IS NULL OR length(trim(category)) BETWEEN 1 AND 120", name="ck_crm_product_catalog_items_category"),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
             name="fk_crm_product_catalog_items_workspace", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
@@ -2296,6 +2297,7 @@ class CRMProductCatalogItem(Base):
     code: Mapped[str] = mapped_column(String(80), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(120), nullable=True)
     item_type: Mapped[str] = mapped_column(String(16), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
