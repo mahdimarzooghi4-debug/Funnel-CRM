@@ -174,6 +174,19 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
             "linked": 1, "without_work_item": 0, "open": 0,
             "in_progress": 1, "completed": 0, "cancelled": 0, "overdue": 1,
         }
+        overdue_portfolio = await client.get(
+            f"{base}/portfolio", headers=headers,
+            params={"period_start": "2026-10-16", "period_end": "2026-10-17",
+                    "include_work_items": "true", "overdue_only": "true"},
+        )
+        assert overdue_portfolio.status_code == 200, overdue_portfolio.text
+        assert overdue_portfolio.json()["total_count"] == 1
+        assert overdue_portfolio.json()["items"][0]["work_item"]["status"] == "in_progress"
+        missing_work_item_scope = await client.get(
+            f"{base}/portfolio", headers=headers,
+            params={"overdue_only": "true"},
+        )
+        assert missing_work_item_scope.status_code == 422
 
         missing_data = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
             "follow_up_target_plan_id": str(empty_follow_up_id),
@@ -217,6 +230,12 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert evaluated_body["items"][0]["work_item"]["status"] == "completed"
         assert evaluated_body["work_item_counts"]["completed"] == 1
         assert evaluated_body["work_item_counts"]["overdue"] == 0
+        completed_overdue_filter = await client.get(
+            f"{base}/portfolio", headers=headers,
+            params={"include_work_items": "true", "overdue_only": "true"},
+        )
+        assert completed_overdue_filter.status_code == 200, completed_overdue_filter.text
+        assert completed_overdue_filter.json()["total_count"] == 0
 
         repeated = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
             "follow_up_target_plan_id": str(follow_up_id),
