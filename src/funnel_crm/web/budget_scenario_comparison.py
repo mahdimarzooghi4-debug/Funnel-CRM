@@ -232,6 +232,14 @@ _PAGE = """<!doctype html>
           <tbody id="target-variance-summary"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">فاصلهٔ هدف در سطح کمپین</h3>
+      <p id="campaign-target-variance-note" class="muted">کمپین‌ها و شاخص‌های دارای هدف در این بازه.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کمپین</th><th scope="col">گروه</th><th scope="col">شاخص</th><th scope="col">هدف</th><th scope="col">عملکرد</th><th scope="col">فاصله</th><th scope="col">پوشش روزانه</th></tr></thead>
+          <tbody id="campaign-target-variance"></tbody>
+        </table>
+      </div>
       <h3 style="margin-top:22px">نسبت تبدیل ثبت‌شده به سرنخ</h3>
       <p class="muted">نسبت مجموع تبدیل‌های ثبت‌شده به سرنخ‌های ثبت‌شده است؛ فقط کمپین‌هایی با هر دو مقدار و سرنخ مثبت وارد می‌شوند. این شاخص، نرخ تبدیل یکتای افراد یا انتساب علّی را اثبات نمی‌کند.</p>
       <div class="table-wrap">
@@ -1339,6 +1347,53 @@ _CLIENT_SCRIPT = r"""(() => {
       body.appendChild(row);
     });
   }
+  function campaignTargetVarianceRows(portfolio) {
+    if (!portfolio || portfolio.campaign_list_truncated) return [];
+    const rows = [];
+    (portfolio.campaigns || []).forEach((campaign) => {
+      Object.entries(campaign.metrics || {}).forEach(([key, metric]) => {
+        if (!metric || !["impressions", "clicks", "leads", "conversions"].includes(key)) return;
+        const complete = metric.observed_days >= metric.period_days;
+        rows.push({
+          campaign: campaign.name, group: campaign.group_key, key,
+          target: metric.target, actual: metric.actual,
+          variance: complete && metric.actual !== null ? metric.actual - metric.target : null,
+          coverage: metric.recorded_day_coverage_percent,
+          complete,
+        });
+      });
+    });
+    return rows.sort((a, b) => Number(a.variance === null) - Number(b.variance === null)
+      || (a.variance ?? 0) - (b.variance ?? 0)
+      || a.campaign.localeCompare(b.campaign, "fa") || a.key.localeCompare(b.key));
+  }
+  function renderCampaignTargetVariance(portfolio) {
+    const body = byId("campaign-target-variance");
+    const note = byId("campaign-target-variance-note");
+    body.replaceChildren();
+    if (!portfolio || portfolio.campaign_list_truncated) {
+      note.textContent = "به‌دلیل نبود گزارش یا کامل نبودن فهرست کمپین‌ها، جزئیات نمایش داده نمی‌شود.";
+      return;
+    }
+    note.textContent = "فاصله فقط برای کمپین‌های دارای پوشش کامل دوره محاسبه شده است؛ در دورهٔ ناقص، عملکرد و درصد پوشش صرفاً دادهٔ ثبت‌شده را نشان می‌دهند.";
+    const rows = campaignTargetVarianceRows(portfolio);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      row.appendChild(element("td", "muted", "شاخص تعدادیِ هدف‌دار برای نمایش پیدا نشد."));
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.campaign), element("td", "", item.group),
+        element("td", "", targetMetricLabel(item.key)),
+        element("td", "", formatNumber.format(item.target)),
+        element("td", "", item.actual === null ? "ثبت نشده" : formatNumber.format(item.actual)),
+        element("td", "", item.variance === null ? "نامشخص" : formatNumber.format(item.variance)),
+        element("td", "", `${item.coverage}%${item.complete ? " · کامل" : " · ناقص"}`));
+      body.appendChild(row);
+    });
+  }
   function renderTargetPeriodComparison(report, current, previous) {
     const body = byId("target-period-comparison");
     const note = byId("target-period-comparison-note");
@@ -1599,6 +1654,13 @@ _CLIENT_SCRIPT = r"""(() => {
           + "؛ عملکرد ناقص ثبت‌شده: " + item.partial_actual_total
           + "؛ اختلاف عددی است و علت را ثابت نمی‌کند",
       ]));
+      campaignTargetVarianceRows(latestTargetPortfolio).forEach((item) => rows.push([
+        "فاصله هدف در سطح کمپین", fields.start, fields.end, "", item.campaign, item.group, "",
+        targetMetricLabel(item.key) + " · فاصلهٔ دورهٔ کامل", item.variance ?? "",
+        "هدف: " + item.target + "؛ عملکرد ثبت‌شده: " + (item.actual ?? "ثبت نشده")
+          + "؛ پوشش روزانه: " + item.coverage + "٪؛ " + (item.complete ? "دوره کامل" : "دوره ناقص؛ فاصله محاسبه نشده")
+          + "؛ اختلاف عددی است و علت را ثابت نمی‌کند",
+      ]));
       compareLeadConversionRates(result, latestPreviousComparison).forEach((item) => rows.push([
         "نسبت تبدیل به سرنخ", fields.start, fields.end, "", "", item.channel, "",
         "تبدیل ثبت‌شده به سرنخ ثبت‌شده (درصد)", item.current?.rate ?? "",
@@ -1808,6 +1870,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderCampaignTargetOutcomes(result, targetPortfolio);
       renderChannelTargetSummary(result, targetPortfolio);
       renderTargetVarianceSummary(targetPortfolio);
+      renderCampaignTargetVariance(targetPortfolio);
       renderTargetPeriodComparison(result, targetPortfolio, previousTargetPortfolio);
       updateReportUrl(fields, ids);
       latestComparison = result;

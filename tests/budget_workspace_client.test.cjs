@@ -67,6 +67,7 @@ const ids = [
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
   "target-variance-summary-note", "target-variance-summary",
+  "campaign-target-variance-note", "campaign-target-variance",
   "target-period-comparison-note", "target-period-comparison",
   "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
 ];
@@ -360,13 +361,21 @@ async function main() {
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
   assert.ok(csv.includes('"خلاصه هدف کانال"'));
   assert.ok(csv.includes('"فاصله هدف و عملکرد"'));
+  assert.ok(csv.includes('"فاصله هدف در سطح کمپین"'));
   assert.ok(csv.includes('هدف دوره ناقص: 10؛ عملکرد ناقص ثبت‌شده: 12'));
+  assert.ok(csv.includes('دوره ناقص؛ فاصله محاسبه نشده'));
   assert.ok(csv.includes('"محقق‌شده: 1؛ محقق‌نشده: 0؛ داده ناکافی: 0؛ نامشخص: 0"'));
   assert.ok(csv.includes('"تغییر وضعیت هدف"'));
   assert.ok(csv.includes('هدف محقق‌نشده ← هدف محقق‌شده'));
   assert.ok(csv.includes('"شکاف شواهد"'));
   assert.ok(csv.includes('"دادهٔ تبدیل"'));
   assert.ok(csv.includes('"Spring launch"'));
+  const campaignVariance = elements.get("campaign-target-variance").children;
+  assert.equal(campaignVariance.length, 2);
+  assert.deepEqual(campaignVariance[0].children.map((cell) => cell.textContent),
+    ["Spring launch", "email", "تبدیل", "۴", "ثبت نشده", "نامشخص", "0% · ناقص"]);
+  assert.deepEqual(campaignVariance[1].children.map((cell) => cell.textContent),
+    ["Spring launch", "email", "سرنخ", "۱۰", "۱۲", "نامشخص", "7.14% · ناقص"]);
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
     "formula-like labels must be neutralized and CSV-escaped");
 
