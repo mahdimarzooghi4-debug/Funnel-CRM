@@ -47,6 +47,8 @@ _PAGE = """<!doctype html>
       <form id="create-form"><div class="grid">
         <label for="plan-name">نام پلن<input id="plan-name" maxlength="160" required></label>
         <label for="plan-rate">درصد کمیسیون<input id="plan-rate" type="number" min="0.0001" max="100" step="0.0001" required></label>
+        <label for="plan-effective-start">شروع اعتبار (اختیاری)<input id="plan-effective-start" type="date"></label>
+        <label for="plan-effective-end">پایان اعتبار (اختیاری)<input id="plan-effective-end" type="date"></label>
         <label for="seller-id">شناسهٔ عضویت فروشنده (اختیاری)<input id="seller-id" pattern="[0-9a-fA-F-]{36}" placeholder="خالی = پلن سازمانی"></label>
       </div><div class="actions"><button type="submit">ثبت پلن</button></div></form>
     </section>
@@ -55,6 +57,8 @@ _PAGE = """<!doctype html>
       <form id="update-form"><div class="grid">
         <label for="update-name">نام جدید<input id="update-name" maxlength="160" required></label>
         <label for="update-rate">درصد جدید<input id="update-rate" type="number" min="0.0001" max="100" step="0.0001" required></label>
+        <label for="update-effective-start">شروع اعتبار<input id="update-effective-start" type="date"></label>
+        <label for="update-effective-end">پایان اعتبار<input id="update-effective-end" type="date"></label>
         <label for="update-active">وضعیت<select id="update-active"><option value="true">فعال</option><option value="false">غیرفعال</option></select></label>
       </div><div class="actions"><button type="submit">ثبت نسخهٔ جدید</button></div></form>
       <div class="actions"><button id="show-versions" type="button">تاریخچهٔ نسخه‌ها</button><button id="show-calculations" type="button">محاسبه‌های قبلی</button></div>
@@ -112,7 +116,7 @@ _SCRIPT = r"""(() => {
       const card = document.createElement("article"); card.className = "plan";
       const title = document.createElement("strong"); title.textContent = plan.name;
       const details = document.createElement("p"); details.className = "muted";
-      details.textContent = `${plan.rate_percent}% · نسخه ${plan.version} · ${plan.seller_membership_id || "پلن سازمانی"}`;
+      details.textContent = `${plan.rate_percent}% · نسخه ${plan.version} · اعتبار ${plan.effective_start || "بدون شروع"} تا ${plan.effective_end || "بدون پایان"} · ${plan.seller_membership_id || "پلن سازمانی"}`;
       const state = document.createElement("span"); state.className = `tag${plan.is_active ? "" : " off"}`; state.textContent = plan.is_active ? "فعال" : "غیرفعال";
       const button = document.createElement("button"); button.type = "button"; button.textContent = "مدیریت پلن";
       button.addEventListener("click", () => selectPlan(plan)); card.append(title, details, state, button); plansNode.appendChild(card);
@@ -123,8 +127,9 @@ _SCRIPT = r"""(() => {
     selectedPlan = plan; selectedPanel.hidden = false; calculationPanel.hidden = false;
     const summary = $("plan-summary"); clear(summary);
     const p = document.createElement("p"); p.className = "muted";
-    p.textContent = `${plan.name} · ${plan.rate_percent}% · نسخه ${plan.version} · ${plan.is_active ? "فعال" : "غیرفعال"}`; summary.appendChild(p);
+    p.textContent = `${plan.name} · ${plan.rate_percent}% · نسخه ${plan.version} · اعتبار ${plan.effective_start || "بدون شروع"} تا ${plan.effective_end || "بدون پایان"} · ${plan.is_active ? "فعال" : "غیرفعال"}`; summary.appendChild(p);
     $("update-name").value = plan.name; $("update-rate").value = plan.rate_percent; $("update-active").value = String(plan.is_active);
+    $("update-effective-start").value = plan.effective_start || ""; $("update-effective-end").value = plan.effective_end || "";
     historyNode.replaceChildren(); resultNode.replaceChildren();
   }
   function renderHistory(items, type) {
@@ -134,7 +139,7 @@ _SCRIPT = r"""(() => {
       const card = document.createElement("article"); card.className = "card";
       const title = document.createElement("strong"); title.textContent = type === "versions" ? `نسخه ${item.version}` : `${item.period_start} تا ${item.period_end}`;
       const body = document.createElement("p"); body.className = "muted";
-      body.textContent = type === "versions" ? `${item.name} · ${item.rate_percent}% · ${item.is_active ? "فعال" : "غیرفعال"}` : `نسخه پلن ${item.plan_version} · نرخ ${item.rate_percent}% · ${item.rows.length} ردیف`;
+      body.textContent = type === "versions" ? `${item.name} · ${item.rate_percent}% · اعتبار ${item.effective_start || "بدون شروع"} تا ${item.effective_end || "بدون پایان"} · ${item.is_active ? "فعال" : "غیرفعال"}` : `نسخه پلن ${item.plan_version} · نرخ ${item.rate_percent}% · ${item.rows.length} ردیف`;
       card.append(title, body);
       if (type === "calculations") {
         item.rows.forEach((row) => { const line = document.createElement("p"); line.className = "muted"; line.textContent = `${row.seller_membership_id || "بدون انتساب فروشنده"} · ${row.currency} · خالص ${row.net_amount} · کمیسیون ${row.commission_amount}`; card.appendChild(line); });
@@ -161,14 +166,14 @@ _SCRIPT = r"""(() => {
   $("create-form").addEventListener("submit", async (event) => {
     event.preventDefault(); if (!organization.value) return message("واحد سازمانی را انتخاب کنید.", true);
     try {
-      const data = await api("/api/v1/crm/commission-plans", "POST", { organization_unit_id: organization.value, name: $("plan-name").value, rate_percent: $("plan-rate").value, seller_membership_id: $("seller-id").value.trim() || null });
+      const data = await api("/api/v1/crm/commission-plans", "POST", { organization_unit_id: organization.value, name: $("plan-name").value, rate_percent: $("plan-rate").value, effective_start: $("plan-effective-start").value || null, effective_end: $("plan-effective-end").value || null, seller_membership_id: $("seller-id").value.trim() || null });
       event.currentTarget.reset(); await loadPlans(); selectPlan(data); message("پلن با موفقیت ساخته شد.");
     } catch (error) { message(error.message, true); }
   });
   $("update-form").addEventListener("submit", async (event) => {
     event.preventDefault(); if (!selectedPlan) return;
     try {
-      const data = await api(`/api/v1/crm/commission-plans/${encodeURIComponent(selectedPlan.id)}`, "PATCH", { expected_version: selectedPlan.version, name: $("update-name").value, rate_percent: $("update-rate").value, is_active: $("update-active").value === "true" });
+      const data = await api(`/api/v1/crm/commission-plans/${encodeURIComponent(selectedPlan.id)}`, "PATCH", { expected_version: selectedPlan.version, name: $("update-name").value, rate_percent: $("update-rate").value, effective_start: $("update-effective-start").value || null, effective_end: $("update-effective-end").value || null, is_active: $("update-active").value === "true" });
       selectedPlan = data; await loadPlans(); selectPlan(data); message("نسخهٔ جدید پلن ثبت شد.");
     } catch (error) { message(error.message, true); }
   });

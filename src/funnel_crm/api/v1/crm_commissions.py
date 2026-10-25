@@ -31,6 +31,8 @@ class CommissionPlanCreate(BaseModel):
     seller_membership_id: UUID | None = None
     name: str = Field(min_length=1, max_length=160)
     rate_percent: Decimal = Field(gt=0, le=100, max_digits=7, decimal_places=4)
+    effective_start: date | None = None
+    effective_end: date | None = None
 
 
 class CommissionCalculationCreate(BaseModel):
@@ -46,6 +48,8 @@ class CommissionPlanUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     rate_percent: Decimal | None = Field(default=None, gt=0, le=100, max_digits=7, decimal_places=4)
     is_active: bool | None = None
+    effective_start: date | None = None
+    effective_end: date | None = None
 
 
 async def _authorized(context: TenantSessionContext, action: str, org_id: UUID) -> None:
@@ -60,6 +64,8 @@ def _plan_json(row: CRMCommissionPlan) -> dict:
         "seller_membership_id": row.seller_membership_id,
         "name": row.name,
         "rate_percent": row.rate_percent,
+        "effective_start": row.effective_start,
+        "effective_end": row.effective_end,
         "version": row.version,
         "is_active": row.is_active,
         "created_at": row.created_at,
@@ -112,9 +118,22 @@ def _validate_period(period_start: date, period_end: date) -> None:
         raise HTTPException(status_code=422, detail="Calculation period must be ordered and no longer than 366 days")
 
 
+def _validate_plan_window(start: date | None, end: date | None) -> None:
+    if start is not None and end is not None and start > end:
+        raise HTTPException(status_code=422, detail="Commission plan effective start must not be after its end")
+
+
+def _validate_calculation_window(plan: CRMCommissionPlan, period_start: date, period_end: date) -> None:
+    if plan.effective_start is not None and period_start < plan.effective_start:
+        raise HTTPException(status_code=422, detail="Calculation period starts before the commission plan is effective")
+    if plan.effective_end is not None and period_end > plan.effective_end:
+        raise HTTPException(status_code=422, detail="Calculation period ends after the commission plan expires")
+
+
 @router.post("", status_code=201, operation_id="createCRMCommissionPlan")
 async def create_plan(payload: CommissionPlanCreate, context: TenantSessionContext = Depends(require_tenant_session)) -> dict:
     await _authorized(context, "crm.commission:manage", payload.organization_unit_id)
+    _validate_plan_window(payload.effective_start, payload.effective_end)
     if not payload.name.strip():
         raise HTTPException(status_code=422, detail="Plan name cannot be blank")
     if payload.seller_membership_id is not None:
@@ -130,6 +149,7 @@ async def create_plan(payload: CommissionPlanCreate, context: TenantSessionConte
         organization_unit_id=payload.organization_unit_id,
         seller_membership_id=payload.seller_membership_id,
         name=payload.name.strip(), rate_percent=payload.rate_percent,
+        effective_start=payload.effective_start, effective_end=payload.effective_end,
         is_active=True, created_by_membership_id=context.access.membership_id,
     )
     context.session.add(plan)
@@ -137,6 +157,7 @@ async def create_plan(payload: CommissionPlanCreate, context: TenantSessionConte
         tenant_id=context.access.tenant_id, plan_id=plan.id, version=1,
         seller_membership_id=plan.seller_membership_id, name=plan.name,
         rate_percent=plan.rate_percent, is_active=plan.is_active,
+        effective_start=plan.effective_start, effective_end=plan.effective_end,
         changed_by_membership_id=context.access.membership_id,
     ))
     context.session.add(AuditEvent(
@@ -147,7 +168,9 @@ async def create_plan(payload: CommissionPlanCreate, context: TenantSessionConte
         target_type="crm_commission_plan", target_key=str(plan.id),
         organization_unit_id=plan.organization_unit_id, before_state=None,
         after_state={"name": plan.name, "seller_membership_id": str(plan.seller_membership_id) if plan.seller_membership_id else None,
-                     "rate_percent": str(plan.rate_percent)},
+                     "rate_percent": str(plan.rate_percent),
+                     "effective_start": plan.effective_start.isoformat() if plan.effective_start else None,
+                     "effective_end": plan.effective_end.isoformat() if plan.effective_end else None},
         correlation_id=None,
     ))
     await context.session.flush()
@@ -174,7 +197,7 @@ async def update_plan(
         for key, value in payload.model_dump(
             exclude_unset=True, exclude={"expected_version"}
         ).items()
-        if value is not None
+        if value is not None or key in {"effective_start", "effective_end"}
     }
     if not changes:
         raise HTTPException(status_code=422, detail="At least one plan field must change")
@@ -182,7 +205,11 @@ async def update_plan(
         changes["name"] = changes["name"].strip()
         if not changes["name"]:
             raise HTTPException(status_code=422, detail="Plan name cannot be blank")
-    before = {key: (str(getattr(plan, key)) if key == "rate_percent" else getattr(plan, key))
+    _validate_plan_window(
+        changes.get("effective_start", plan.effective_start),
+        changes.get("effective_end", plan.effective_end),
+    )
+    before = {key: (str(getattr(plan, key)) if key == "rate_percent" else getattr(plan, key).isoformat() if key.startswith("effective_") and getattr(plan, key) else getattr(plan, key))
               for key in changes}
     for key, value in changes.items():
         setattr(plan, key, value)
@@ -191,6 +218,7 @@ async def update_plan(
         tenant_id=context.access.tenant_id, plan_id=plan.id, version=plan.version,
         seller_membership_id=plan.seller_membership_id, name=plan.name,
         rate_percent=plan.rate_percent, is_active=plan.is_active,
+        effective_start=plan.effective_start, effective_end=plan.effective_end,
         changed_by_membership_id=context.access.membership_id,
     ))
     context.session.add(AuditEvent(
@@ -200,7 +228,7 @@ async def update_plan(
         action_key="crm_commission.plan_updated",
         target_type="crm_commission_plan", target_key=str(plan.id),
         organization_unit_id=plan.organization_unit_id, before_state=before,
-        after_state={**{key: (str(getattr(plan, key)) if key == "rate_percent" else getattr(plan, key))
+        after_state={**{key: (str(getattr(plan, key)) if key == "rate_percent" else getattr(plan, key).isoformat() if key.startswith("effective_") and getattr(plan, key) else getattr(plan, key))
                         for key in changes}, "version": plan.version},
         correlation_id=None,
     ))
@@ -228,6 +256,7 @@ async def list_plan_versions(
         "plan_id": item.plan_id, "version": item.version,
         "seller_membership_id": item.seller_membership_id,
         "name": item.name, "rate_percent": item.rate_percent,
+        "effective_start": item.effective_start, "effective_end": item.effective_end,
         "is_active": item.is_active,
         "changed_by_membership_id": item.changed_by_membership_id,
         "created_at": item.created_at,
@@ -259,6 +288,7 @@ async def preview_commission(
     if plan is None:
         raise HTTPException(status_code=404, detail="Active commission plan not found")
     await _authorized(context, "crm.commission:view", plan.organization_unit_id)
+    _validate_calculation_window(plan, payload.period_start, payload.period_end)
     events = await _events_for_period(context, plan, payload.period_start, payload.period_end)
     return {
         "plan_id": plan.id,
@@ -327,6 +357,7 @@ async def calculate_commission(
             }
     if not plan.is_active:
         raise HTTPException(status_code=404, detail="Active commission plan not found")
+    _validate_calculation_window(plan, payload.period_start, payload.period_end)
     events = await _events_for_period(context, plan, payload.period_start, payload.period_end)
     calculation = CRMCommissionCalculation(
         id=uuid4(), tenant_id=context.access.tenant_id, plan_id=plan.id,

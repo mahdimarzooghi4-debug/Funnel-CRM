@@ -2145,6 +2145,7 @@ class CRMCommissionPlan(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_crm_commission_plans_tenant_id"),
         CheckConstraint("rate_percent > 0 AND rate_percent <= 100", name="ck_crm_commission_plans_rate"),
+        CheckConstraint("effective_start IS NULL OR effective_end IS NULL OR effective_start <= effective_end", name="ck_crm_commission_plans_effective_window"),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
             name="fk_crm_commission_plans_workspace", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
@@ -2165,6 +2166,8 @@ class CRMCommissionPlan(Base):
     seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    effective_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -2178,6 +2181,7 @@ class CRMCommissionPlanVersion(Base):
     __table_args__ = (
         CheckConstraint("version >= 1", name="ck_crm_commission_plan_versions_version_positive"),
         CheckConstraint("rate_percent > 0 AND rate_percent <= 100", name="ck_crm_commission_plan_versions_rate"),
+        CheckConstraint("effective_start IS NULL OR effective_end IS NULL OR effective_start <= effective_end", name="ck_crm_commission_plan_versions_effective_window"),
         ForeignKeyConstraint(["tenant_id", "plan_id"],
             ["crm_commission_plans.tenant_id", "crm_commission_plans.id"],
             name="fk_crm_commission_plan_versions_plan_same_tenant", ondelete="CASCADE"),
@@ -2196,6 +2200,8 @@ class CRMCommissionPlanVersion(Base):
     seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    effective_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
     changed_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

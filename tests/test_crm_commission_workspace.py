@@ -22,6 +22,8 @@ def test_commission_workspace_is_rtl_data_free_shell_with_security_headers() -> 
     assert "مدیریت پلن‌های کمیسیون فروش" in response.text
     assert "دستور پرداخت یا حقوق صادر نمی‌کند" in response.text
     assert 'id="preview-calculation"' in response.text
+    assert 'id="plan-effective-start"' in response.text
+    assert 'id="plan-effective-end"' in response.text
 
 
 def test_commission_workspace_client_uses_authorized_apis_and_safe_dom_updates() -> None:
