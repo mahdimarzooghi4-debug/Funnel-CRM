@@ -52,12 +52,15 @@ def _line_json(line: CRMOpportunityOfferDraftLine) -> dict:
 
 
 async def _authorized_opportunity(
-    context: TenantSessionContext, opportunity_id: UUID, permission: str,
+    context: TenantSessionContext, opportunity_id: UUID, permission: str, *, lock: bool = False,
 ) -> CRMOpportunity:
-    opportunity = await context.session.scalar(select(CRMOpportunity).where(
+    statement = select(CRMOpportunity).where(
         CRMOpportunity.tenant_id == context.access.tenant_id,
         CRMOpportunity.id == opportunity_id,
-    ).with_for_update())
+    )
+    if lock:
+        statement = statement.with_for_update()
+    opportunity = await context.session.scalar(statement)
     if opportunity is None or not await has_crm_permission(
         context, permission_key=permission,
         organization_unit_id=opportunity.organization_unit_id,
@@ -88,7 +91,9 @@ async def create_offer_draft(
     payload: OfferDraftCreate,
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> dict:
-    opportunity = await _authorized_opportunity(context, opportunity_id, "crm.offer:create")
+    opportunity = await _authorized_opportunity(
+        context, opportunity_id, "crm.offer:create", lock=True,
+    )
     if not await has_crm_permission(
         context, permission_key="crm.catalog:view",
         organization_unit_id=opportunity.organization_unit_id,
