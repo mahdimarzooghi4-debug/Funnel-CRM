@@ -72,7 +72,7 @@ const ids = [
   "save-variance-review", "cancel-variance-review", "variance-review-next-step",
   "variance-review-created-note", "create-variance-review-work-item",
   "assign-follow-up-to-me", "follow-up-due-at",
-  "learning-portfolio-note", "learning-lesson-query", "search-learning-lessons",
+  "learning-portfolio-note", "learning-lesson-query", "search-learning-lessons", "export-learning-csv",
   "learning-campaign-query", "learning-review-status",
   "learning-overdue-only", "learning-portfolio-counts", "learning-portfolio-items",
   "learning-portfolio-pagination", "learning-page-previous", "learning-page-range", "learning-page-next",
@@ -86,6 +86,7 @@ elements.get("save-variance-review").tagName = "BUTTON";
 elements.get("cancel-variance-review").tagName = "BUTTON";
 elements.get("create-variance-review-work-item").tagName = "BUTTON";
 elements.get("search-learning-lessons").tagName = "BUTTON";
+elements.get("export-learning-csv").tagName = "BUTTON";
 elements.get("learning-page-previous").tagName = "BUTTON";
 elements.get("learning-page-next").tagName = "BUTTON";
 elements.get("learning-review-status").tagName = "SELECT";
@@ -209,7 +210,11 @@ const fetch = async (path, options = {}) => {
     assert.equal(query.get("period_start"), "2026-10-01");
     assert.equal(query.get("period_end"), "2026-10-14");
     const offset = Number(query.get("offset") || 0);
-    payload = { ...learningPortfolio, total_count: 101, offset, limit: Number(query.get("limit") || 50), has_more: offset === 0,
+    const pageItems = offset === 0 ? learningPortfolio.items : [{
+      ...learningPortfolio.items[0], campaign_name: "Spring follow-up",
+      review: { ...learningPortfolio.items[0].review, id: "review-portfolio-2", lesson_learned: "=SUM(A1:A2)" },
+    }];
+    payload = { ...learningPortfolio, items: pageItems, total_count: 101, offset, limit: Number(query.get("limit") || 50), has_more: offset === 0,
       lesson_query: query.get("lesson_query"), campaign_query: query.get("campaign_query"), status_filter: query.get("status") };
   } else if (path === "/api/v1/crm/marketing-learning/reviews" && options.method === "POST") {
     payload = { id: "review-1", status: "planned" };
@@ -456,6 +461,21 @@ async function main() {
   await elements.get("learning-page-previous").dispatch("click");
   const previousPageCall = calls.filter((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?")).at(-1);
   assert.equal(new URLSearchParams(previousPageCall.path.split("?")[1]).get("offset"), "0");
+  await elements.get("export-learning-csv").dispatch("click");
+  const learningCsvBlob = downloads.filter((item) => item instanceof Blob).at(-1);
+  const learningCsv = new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(await learningCsvBlob.arrayBuffer()));
+  assert.ok(learningCsv.includes('"Spring launch"'));
+  assert.ok(learningCsv.includes('"Spring follow-up"'));
+  assert.ok(learningCsv.includes("'=SUM(A1:A2)"));
+  const exportCalls = calls.filter((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?")).slice(-2);
+  assert.deepEqual(exportCalls.map((call) => new URLSearchParams(call.path.split("?")[1]).get("offset")), ["0", "100"]);
+  exportCalls.forEach((call) => {
+    const query = new URLSearchParams(call.path.split("?")[1]);
+    assert.equal(query.get("campaign_query"), "Spring");
+    assert.equal(query.get("status"), "evaluated");
+    assert.equal(query.get("lesson_query"), "زمان‌بندی پیگیری");
+    assert.equal(call.options.headers["X-Workspace-ID"], workspace.id);
+  });
   const learningPortfolioCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?"));
   assert.ok(learningPortfolioCall);
   assert.equal(learningPortfolioCall.options.headers["X-Workspace-ID"], workspace.id);
@@ -484,10 +504,10 @@ async function main() {
     "<img src=x onerror=alert(1)>");
   await elements.get("export-csv").dispatch("click");
   assert.equal(elements.get("status").textContent, "فایل CSV گزارش آماده شد.");
-  const anchor = downloads.find((item) => item instanceof Element);
+  const anchor = downloads.find((item) => item instanceof Element && item.download.startsWith("budget-comparison-"));
   assert.ok(anchor && anchor.clicked && anchor.removed);
   assert.equal(anchor.download, "budget-comparison-2026-10-01-2026-10-14.csv");
-  const blob = downloads.find((item) => item instanceof Blob);
+  const blob = downloads.filter((item) => item instanceof Blob)[1];
   assert.ok(blob);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   assert.deepEqual(Array.from(bytes.slice(0, 3)), [0xef, 0xbb, 0xbf]);
