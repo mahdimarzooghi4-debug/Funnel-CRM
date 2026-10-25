@@ -35,6 +35,7 @@ def test_openapi_exposes_versioned_route_and_operations() -> None:
     assert "/api/v1/crm/catalog/items" in schema["paths"]
     assert "/api/v1/crm/opportunities/{opportunity_id}/catalog-items" in schema["paths"]
     assert "/api/v1/crm/opportunities/{opportunity_id}/offer-drafts" in schema["paths"]
+    assert "/api/v1/crm/opportunities/{opportunity_id}/offer-drafts/{offer_id}/revisions" in schema["paths"]
     assert "/healthz" in schema["paths"]
     assert "/readyz" in schema["paths"]
 
@@ -83,6 +84,7 @@ def test_offer_workspace_is_mounted_with_safe_api_client() -> None:
     assert "پیش‌نویس پیشنهاد فروش" in page.text
     assert "/api/v1/system/opportunity-organization-units" in script.text
     assert "/offer-drafts" in script.text
+    assert "ساخت نسخهٔ اصلاح‌شده" in script.text
     assert "credentials:" in script.text and '"same-origin"' in script.text
     assert "X-Workspace-ID" in script.text
     assert "innerHTML" not in script.text
