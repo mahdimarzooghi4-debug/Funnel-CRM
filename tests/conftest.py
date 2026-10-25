@@ -15,6 +15,7 @@ from funnel_crm.platform.models import (
     CRMOpportunity,
     CRMProductCommerceEvent,
     CRMProfile,
+    CRMWorkItem,
     UserIdentity,
     Workspace,
     WorkspaceMembership,
@@ -139,6 +140,12 @@ async def tenant_case() -> AsyncIterator[dict[str, object]]:
                         )
                         cleanup_profile_ids = values.get("lifecycle_cleanup_profile_ids", ())
                         if cleanup_profile_ids:
+                            await session.execute(
+                                delete(CRMWorkItem).where(
+                                    CRMWorkItem.tenant_id == tenant_id,
+                                    CRMWorkItem.profile_id.in_(cleanup_profile_ids),
+                                )
+                            )
                             await session.execute(
                                 delete(CRMOpportunity).where(
                                     CRMOpportunity.tenant_id == tenant_id,
