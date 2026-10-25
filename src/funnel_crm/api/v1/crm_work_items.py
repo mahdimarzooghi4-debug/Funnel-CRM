@@ -809,6 +809,18 @@ async def list_lifecycle_follow_up_action_queue(
         .correlate(follow_up_task)
         .scalar_subquery()
     )
+    latest_task_outcome_id = (
+        select(latest_task_outcome.id)
+        .where(
+            latest_task_outcome.tenant_id == tenant_id,
+            latest_task_outcome.work_item_id == follow_up_task.id,
+        )
+        .order_by(latest_task_outcome.occurred_at.desc(), latest_task_outcome.id.desc())
+        .limit(1)
+        .correlate(follow_up_task)
+        .scalar_subquery()
+    )
+    follow_up_next_task = aliased(CRMWorkItem)
     latest_task_outcome_at = (
         select(latest_task_outcome.occurred_at)
         .where(
@@ -845,6 +857,10 @@ async def list_lifecycle_follow_up_action_queue(
             follow_up_task.priority.label("follow_up_priority"),
             latest_task_outcome_code.label("follow_up_latest_outcome_code"),
             latest_task_outcome_at.label("follow_up_latest_outcome_at"),
+            follow_up_next_task.id.label("follow_up_next_task_id"),
+            follow_up_next_task.status.label("follow_up_next_task_status"),
+            follow_up_next_task.assigned_membership_id.label("follow_up_next_task_assigned_membership_id"),
+            follow_up_next_task.due_at.label("follow_up_next_task_due_at"),
         )
         .join(
             CRMWorkItem,
@@ -856,6 +872,12 @@ async def list_lifecycle_follow_up_action_queue(
             (follow_up_task.tenant_id == CRMWorkItemOutcome.tenant_id)
             & (follow_up_task.source_outcome_id == CRMWorkItemOutcome.id)
             & (follow_up_task.organization_unit_id == organization_unit_id),
+        )
+        .outerjoin(
+            follow_up_next_task,
+            (follow_up_next_task.tenant_id == tenant_id)
+            & (follow_up_next_task.organization_unit_id == organization_unit_id)
+            & (follow_up_next_task.source_outcome_id == latest_task_outcome_id),
         )
         .join(
             CRMProfile,
@@ -906,6 +928,16 @@ async def list_lifecycle_follow_up_action_queue(
             "follow_up_latest_outcome_at": (
                 row.follow_up_latest_outcome_at.isoformat()
                 if row.follow_up_latest_outcome_at else None
+            ),
+            "follow_up_next_task_id": str(row.follow_up_next_task_id) if row.follow_up_next_task_id else None,
+            "follow_up_next_task_status": row.follow_up_next_task_status,
+            "follow_up_next_task_assigned_membership_id": (
+                str(row.follow_up_next_task_assigned_membership_id)
+                if row.follow_up_next_task_assigned_membership_id else None
+            ),
+            "follow_up_next_task_due_at": (
+                row.follow_up_next_task_due_at.isoformat()
+                if row.follow_up_next_task_due_at else None
             ),
         }
         for row in rows

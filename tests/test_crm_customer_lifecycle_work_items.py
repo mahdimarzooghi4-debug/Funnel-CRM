@@ -283,9 +283,9 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
             headers=headers,
             json={
                 "request_id": str(uuid4()),
-                "outcome_code": "contact_made",
+                "outcome_code": "callback_requested",
                 "channel": "phone",
-                "notes": "Callback completed",
+                "notes": "Customer requested another call",
             },
         )
         assert next_task_outcome.status_code == 201, next_task_outcome.text
@@ -295,6 +295,12 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         )
         assert next_task_outcomes.status_code == 200, next_task_outcomes.text
         assert [item["id"] for item in next_task_outcomes.json()] == [next_task_outcome.json()["id"]]
+        second_task = await client.post(
+            f"/api/v1/crm/work-items/outcomes/{next_task_outcome.json()['id']}/follow-up",
+            headers=headers,
+            json={},
+        )
+        assert second_task.status_code == 201, second_task.text
 
         untracked_outcome = await client.post(
             f"/api/v1/crm/work-items/{untracked_item['id']}/outcomes",
@@ -332,15 +338,17 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
             params={"organization_unit_id": str(root_id), "include_created": True},
         )
         assert visible_queue.status_code == 200, visible_queue.text
-        assert visible_queue.json()["total"] == 2
+        assert visible_queue.json()["total"] == 3
         visible_items = {item["outcome_id"]: item for item in visible_queue.json()["items"]}
         visible_item = visible_items[untracked_outcome.json()["id"]]
         assert visible_item["follow_up_task_id"] == untracked_task.json()["id"]
         assert visible_item["follow_up_task_status"] == "open"
         callback_queue_item = visible_items[callback.json()["id"]]
         assert callback_queue_item["follow_up_task_id"] == next_task_data["id"]
-        assert callback_queue_item["follow_up_latest_outcome_code"] == "contact_made"
+        assert callback_queue_item["follow_up_latest_outcome_code"] == "callback_requested"
         assert callback_queue_item["follow_up_latest_outcome_at"] is not None
+        assert callback_queue_item["follow_up_next_task_id"] == second_task.json()["id"]
+        assert callback_queue_item["follow_up_next_task_status"] == "open"
 
         empty_queue = await client.get(
             queue_url,
