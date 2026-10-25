@@ -68,12 +68,17 @@ const ids = [
   "channel-target-summary-note", "channel-target-summary",
   "target-variance-summary-note", "target-variance-summary",
   "campaign-target-variance-note", "campaign-target-variance",
+  "variance-review-panel", "variance-review-assessment", "variance-review-action",
+  "save-variance-review", "cancel-variance-review",
   "target-period-comparison-note", "target-period-comparison",
   "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
 ];
 const elements = new Map(ids.map((id) => [id, new Element(id.includes("id") ? "select" : "div")]));
 elements.get("load-scenarios").tagName = "BUTTON";
 elements.get("compare").tagName = "BUTTON";
+elements.get("save-variance-review").tagName = "BUTTON";
+elements.get("cancel-variance-review").tagName = "BUTTON";
+elements.get("variance-review-panel").hidden = true;
 elements.get("period-start").value = "2026-10-01";
 elements.get("period-end").value = "2026-10-14";
 
@@ -151,6 +156,8 @@ const fetch = async (path, options = {}) => {
   } else if (path.startsWith("/api/v1/crm/analytics/campaign-target-performance/portfolio?")) {
     const query = new URLSearchParams(path.split("?")[1]);
     payload = query.get("period_start") === "2026-09-17" ? previousTargetPortfolio : targetPortfolio;
+  } else if (path === "/api/v1/crm/marketing-learning/reviews" && options.method === "POST") {
+    payload = { id: "review-1", status: "planned" };
   } else if (path.startsWith("/api/v1/crm/budget-scenarios/compare/performance-context?")) {
     const query = new URLSearchParams(path.split("?")[1]);
     if (query.get("period_start") === "2026-09-17") {
@@ -372,10 +379,29 @@ async function main() {
   assert.ok(csv.includes('"Spring launch"'));
   const campaignVariance = elements.get("campaign-target-variance").children;
   assert.equal(campaignVariance.length, 2);
-  assert.deepEqual(campaignVariance[0].children.map((cell) => cell.textContent),
+  assert.deepEqual(campaignVariance[0].children.slice(0, 7).map((cell) => cell.textContent),
     ["Spring launch", "email", "تبدیل", "۴", "ثبت نشده", "نامشخص", "0% · ناقص"]);
-  assert.deepEqual(campaignVariance[1].children.map((cell) => cell.textContent),
+  assert.deepEqual(campaignVariance[1].children.slice(0, 7).map((cell) => cell.textContent),
     ["Spring launch", "email", "سرنخ", "۱۰", "۱۲", "نامشخص", "7.14% · ناقص"]);
+  const reviewButton = campaignVariance[1].children[7].children[0];
+  await reviewButton.dispatch("click");
+  assert.equal(elements.get("variance-review-panel").hidden, false);
+  assert.ok(elements.get("variance-review-assessment").value.includes("فاصله: محاسبه نشده"));
+  elements.get("variance-review-action").value = "بررسی منبع دادهٔ سرنخ";
+  await elements.get("save-variance-review").dispatch("click");
+  assert.equal(elements.get("variance-review-panel").hidden, true);
+  assert.equal(elements.get("status").textContent,
+    "بررسی مدیریتی ثبت شد؛ هیچ بودجه یا اقدامی به‌صورت خودکار تغییر نکرد.");
+  const reviewCall = calls.find((call) => call.path === "/api/v1/crm/marketing-learning/reviews");
+  assert.ok(reviewCall);
+  assert.equal(reviewCall.options.method, "POST");
+  assert.equal(reviewCall.options.credentials, "same-origin");
+  assert.equal(reviewCall.options.headers["X-Workspace-ID"], workspace.id);
+  assert.deepEqual(JSON.parse(reviewCall.options.body), {
+    campaign_id: "campaign-1", target_plan_id: "target-plan-1", experiment_id: null,
+    assessment: elements.get("variance-review-assessment").value,
+    corrective_action: "بررسی منبع دادهٔ سرنخ",
+  });
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
     "formula-like labels must be neutralized and CSV-escaped");
 
