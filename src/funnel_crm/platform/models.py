@@ -2362,3 +2362,52 @@ class CRMOpportunityCatalogItem(Base):
     category_snapshot: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMOpportunityOfferDraft(Base):
+    """A non-binding draft offer assembled from catalog price snapshots."""
+
+    __tablename__ = "crm_opportunity_offer_drafts"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_opportunity_offer_drafts_tenant_id"),
+        CheckConstraint("status = 'draft'", name="ck_crm_opportunity_offer_drafts_status"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_opportunity_offer_drafts_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "opportunity_id"], ["crm_opportunities.tenant_id", "crm_opportunities.id"], name="fk_crm_opportunity_offer_drafts_opportunity", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_opportunity_offer_drafts_creator", ondelete="CASCADE"),
+        Index("ix_crm_opportunity_offer_drafts_tenant_opportunity", "tenant_id", "opportunity_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    opportunity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default=text("'draft'"))
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMOpportunityOfferDraftLine(Base):
+    """Immutable-in-practice line snapshots for an offer draft."""
+
+    __tablename__ = "crm_opportunity_offer_draft_lines"
+    __table_args__ = (
+        CheckConstraint("line_number >= 1", name="ck_crm_opportunity_offer_draft_lines_number"),
+        CheckConstraint("quantity > 0", name="ck_crm_opportunity_offer_draft_lines_quantity"),
+        CheckConstraint("unit_amount >= 0", name="ck_crm_opportunity_offer_draft_lines_amount"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_opportunity_offer_draft_lines_currency"),
+        ForeignKeyConstraint(["tenant_id", "offer_id"], ["crm_opportunity_offer_drafts.tenant_id", "crm_opportunity_offer_drafts.id"], name="fk_crm_opportunity_offer_draft_lines_offer", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "catalog_item_id"], ["crm_product_catalog_items.tenant_id", "crm_product_catalog_items.id"], name="fk_crm_opportunity_offer_draft_lines_catalog", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "catalog_item_id", "catalog_price_version"], ["crm_product_catalog_price_versions.tenant_id", "crm_product_catalog_price_versions.item_id", "crm_product_catalog_price_versions.version"], name="fk_crm_opportunity_offer_draft_lines_price", ondelete="RESTRICT"),
+        Index("ix_crm_opportunity_offer_draft_lines_tenant_offer", "tenant_id", "offer_id", "line_number"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    offer_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    line_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    catalog_item_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    catalog_item_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    catalog_price_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_code_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
+    item_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    unit_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
