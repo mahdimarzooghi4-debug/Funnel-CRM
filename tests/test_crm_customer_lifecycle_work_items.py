@@ -4,12 +4,14 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_work_items import router
 from funnel_crm.platform.models import (
     CRMCustomerActivity,
     CRMProfile,
+    CRMWorkItem,
     Role,
     RoleAssignment,
     RolePermission,
@@ -271,6 +273,7 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         assert next_task_data["profile_id"] == str(stale_id)
         assert next_task_data["status"] == "open"
         assert next_task_data["title"] == "Lifecycle follow-up: callback requested"
+        assert next_task_data["source_outcome_id"] == callback.json()["id"]
         repeated_task = await client.post(callback_url, headers=headers, json={})
         assert repeated_task.status_code == 201
         assert repeated_task.json()["id"] == next_task_data["id"]
@@ -349,6 +352,7 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         assert {item["profile_id"] for item in batch.json()["items"]} == {
             str(stale_id), str(untracked_id)
         }
+        assert {item["source_outcome_id"] for item in batch.json()["items"]} == set(pending_outcome_ids)
         after_batch = await client.get(
             queue_url,
             headers=headers,
@@ -357,6 +361,25 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         assert after_batch.json()["total"] == 0
         repeated_batch = await client.post(batch_url, headers=headers, json=batch_payload)
         assert repeated_batch.status_code == 409
+
+        with pytest.raises(IntegrityError):
+            async with tenant_session(
+                runtime_session_factory,
+                requested_tenant_id=tenant_id,
+                identity=identity,
+            ) as context:
+                async with context.session.begin_nested():
+                    context.session.add(CRMWorkItem(
+                        id=uuid4(), tenant_id=tenant_id,
+                        organization_unit_id=root_id, profile_id=stale_id,
+                        opportunity_id=None, campaign_id=None,
+                        assigned_membership_id=None,
+                        created_by_membership_id=context.access.membership_id,
+                        title="Duplicate outcome lineage", description=None,
+                        due_at=None, priority="normal", status="open", completed_at=None,
+                        source_outcome_id=UUID(pending_outcome_ids[0]),
+                    ))
+                    await context.session.flush()
 
         duplicate_ids = await client.post(
             endpoint,
