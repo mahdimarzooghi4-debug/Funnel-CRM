@@ -278,6 +278,24 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         assert repeated_task.status_code == 201
         assert repeated_task.json()["id"] == next_task_data["id"]
 
+        next_task_outcome = await client.post(
+            f"/api/v1/crm/work-items/{next_task_data['id']}/outcomes",
+            headers=headers,
+            json={
+                "request_id": str(uuid4()),
+                "outcome_code": "contact_made",
+                "channel": "phone",
+                "notes": "Callback completed",
+            },
+        )
+        assert next_task_outcome.status_code == 201, next_task_outcome.text
+        next_task_outcomes = await client.get(
+            f"/api/v1/crm/work-items/{next_task_data['id']}/outcomes",
+            headers=headers,
+        )
+        assert next_task_outcomes.status_code == 200, next_task_outcomes.text
+        assert [item["id"] for item in next_task_outcomes.json()] == [next_task_outcome.json()["id"]]
+
         untracked_outcome = await client.post(
             f"/api/v1/crm/work-items/{untracked_item['id']}/outcomes",
             headers=headers,
