@@ -242,6 +242,39 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         )
         assert invalid_window.status_code == 422
 
+        contact_follow_up = await client.post(
+            f"/api/v1/crm/work-items/outcomes/{outcome['id']}/follow-up",
+            headers=headers,
+            json={},
+        )
+        assert contact_follow_up.status_code == 409
+
+        callback = await client.post(
+            outcome_url,
+            headers=headers,
+            json={
+                "request_id": str(uuid4()),
+                "outcome_code": "callback_requested",
+                "channel": "phone",
+                "notes": "Call next week",
+            },
+        )
+        assert callback.status_code == 201, callback.text
+        callback_url = f"/api/v1/crm/work-items/outcomes/{callback.json()['id']}/follow-up"
+        next_task = await client.post(
+            callback_url,
+            headers=headers,
+            json={"due_at": (occurred_at + timedelta(days=7)).isoformat()},
+        )
+        assert next_task.status_code == 201, next_task.text
+        next_task_data = next_task.json()
+        assert next_task_data["profile_id"] == str(stale_id)
+        assert next_task_data["status"] == "open"
+        assert next_task_data["title"] == "Lifecycle follow-up: callback requested"
+        repeated_task = await client.post(callback_url, headers=headers, json={})
+        assert repeated_task.status_code == 201
+        assert repeated_task.json()["id"] == next_task_data["id"]
+
         duplicate_ids = await client.post(
             endpoint,
             headers=headers,
