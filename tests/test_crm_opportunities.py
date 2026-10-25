@@ -175,7 +175,7 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert history.status_code == 200, history.text
         history_page = history.json()
         assert history_page["opportunity_id"] == opportunity_id
-        assert history_page["total"] == 2
+        assert history_page["total"] == 3
         assert len(history_page["items"]) == 1
         latest_event = history_page["items"][0]
         assert latest_event["action_key"] == "crm_opportunity.updated"
