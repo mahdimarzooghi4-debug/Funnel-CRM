@@ -72,3 +72,17 @@ def test_catalog_workspace_script_is_mounted() -> None:
     page = client.get("/workspace/crm-catalog")
     assert "item-category" in page.text
     assert "item-search" in page.text
+
+
+def test_offer_workspace_is_mounted_with_safe_api_client() -> None:
+    page = client.get("/workspace/crm-offers")
+    script = client.get("/assets/crm-offer-workspace.js")
+    assert page.status_code == script.status_code == 200
+    assert 'lang="fa" dir="rtl"' in page.text
+    assert page.headers["cache-control"] == "no-store"
+    assert "پیش‌نویس پیشنهاد فروش" in page.text
+    assert "/api/v1/system/opportunity-organization-units" in script.text
+    assert "/offer-drafts" in script.text
+    assert "credentials:" in script.text and '"same-origin"' in script.text
+    assert "X-Workspace-ID" in script.text
+    assert "innerHTML" not in script.text
