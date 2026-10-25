@@ -46,6 +46,7 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.work_item:view",
         "crm.work_item:create",
         "crm.work_item:update",
+        "crm.work_item:record_outcome",
         "crm.support_case:view",
         "crm.support_case:create",
         "crm.support_case:update",
