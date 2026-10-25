@@ -253,6 +253,10 @@ _PAGE = """<!doctype html>
           <button id="save-variance-review" type="button">ثبت بررسی</button>
           <button id="cancel-variance-review" type="button">بستن</button>
         </div>
+        <div id="variance-review-next-step" hidden>
+          <p id="variance-review-created-note" class="muted"></p>
+          <button id="create-variance-review-work-item" type="button">ایجاد کار پیگیری در صف CRM</button>
+        </div>
       </section>
       <h3 style="margin-top:22px">نسبت تبدیل ثبت‌شده به سرنخ</h3>
       <p class="muted">نسبت مجموع تبدیل‌های ثبت‌شده به سرنخ‌های ثبت‌شده است؛ فقط کمپین‌هایی با هر دو مقدار و سرنخ مثبت وارد می‌شوند. این شاخص، نرخ تبدیل یکتای افراد یا انتساب علّی را اثبات نمی‌کند.</p>
@@ -292,6 +296,7 @@ _CLIENT_SCRIPT = r"""(() => {
   let latestPreviousTargetPortfolio = null;
   let latestFields = null;
   let selectedVarianceReview = null;
+  let selectedVarianceReviewId = null;
 
   const params = new URLSearchParams(window.location.search);
   const requestedWorkspaceId = params.get("workspace_id") || "";
@@ -1416,6 +1421,8 @@ _CLIENT_SCRIPT = r"""(() => {
         selectedVarianceReview = item;
         const panel = byId("variance-review-panel");
         panel.hidden = false;
+        byId("variance-review-next-step").hidden = true;
+        selectedVarianceReviewId = null;
         byId("variance-review-assessment").value = [
           `کمپین: ${item.campaign}`,
           `شاخص: ${targetMetricLabel(item.key)}`,
@@ -1463,11 +1470,40 @@ _CLIENT_SCRIPT = r"""(() => {
         if (response.status === 403) throw new Error("مجوز ثبت بررسی برای این کمپین را ندارید.");
         throw new Error(payload.detail || "ثبت بررسی ناموفق بود.");
       }
-      byId("variance-review-panel").hidden = true;
+      selectedVarianceReviewId = payload.id;
+      byId("variance-review-next-step").hidden = false;
+      byId("variance-review-created-note").textContent = "بررسی ثبت شد. در صورت نیاز، می‌توانید یک کار پیگیری CRM بسازید؛ این کار با کلیک جداگانه انجام می‌شود.";
       setStatus("بررسی مدیریتی ثبت شد؛ هیچ بودجه یا اقدامی به‌صورت خودکار تغییر نکرد.", false);
     } catch (error) {
       setStatus(error.message || "ثبت بررسی ناموفق بود.", true);
     } finally {
+      button.disabled = false;
+    }
+  }
+  async function createVarianceReviewWorkItem() {
+    if (!selectedVarianceReviewId || !latestFields) return;
+    const button = byId("create-variance-review-work-item");
+    button.disabled = true;
+    try {
+      const response = await fetch(`/api/v1/crm/marketing-learning/reviews/${encodeURIComponent(selectedVarianceReviewId)}/work-item`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Workspace-ID": latestFields.workspace },
+        body: JSON.stringify({ assigned_membership_id: null, due_at: null, priority: "normal" }),
+      });
+      let payload = {};
+      try { payload = await response.json(); } catch (_) {}
+      if (!response.ok) {
+        if (response.status === 401) throw new Error("برای ایجاد کار پیگیری ابتدا وارد حساب کاربری شوید.");
+        if (response.status === 403) throw new Error("مجوز ایجاد کار پیگیری برای این محدوده را ندارید.");
+        throw new Error(payload.detail || "ایجاد کار پیگیری ناموفق بود.");
+      }
+      byId("variance-review-created-note").textContent = payload.created
+        ? "کار پیگیری در صف CRM ایجاد شد؛ مسئول و موعد هنوز تعیین نشده‌اند."
+        : "کار پیگیری این بررسی از قبل وجود داشت و همان مورد بازگردانده شد.";
+      setStatus("کار پیگیری CRM آمادهٔ واگذاری است.", false);
+    } catch (error) {
+      setStatus(error.message || "ایجاد کار پیگیری ناموفق بود.", true);
       button.disabled = false;
     }
   }
@@ -1966,8 +2002,10 @@ _CLIENT_SCRIPT = r"""(() => {
   byId("load-scenarios").addEventListener("click", loadScenarios);
   byId("compare").addEventListener("click", compareScenarios);
   byId("save-variance-review").addEventListener("click", saveVarianceReview);
+  byId("create-variance-review-work-item").addEventListener("click", createVarianceReviewWorkItem);
   byId("cancel-variance-review").addEventListener("click", () => {
     selectedVarianceReview = null;
+    selectedVarianceReviewId = null;
     byId("variance-review-panel").hidden = true;
   });
   workspaceInput.addEventListener("change", async () => {
