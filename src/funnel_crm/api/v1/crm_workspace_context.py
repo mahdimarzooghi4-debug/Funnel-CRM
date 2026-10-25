@@ -137,3 +137,34 @@ async def list_commission_organization_units(
         )
         for row in rows
     ]
+
+
+@router.get("/catalog-organization-units", response_model=list[OrganizationUnitChoice])
+async def list_catalog_organization_units(
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> list[OrganizationUnitChoice]:
+    """Return organization units where this user may view the product catalog."""
+    scopes = crm_scope_ids(
+        context,
+        permission_key="crm.catalog:view",
+        cte_name="crm_catalog_selector_scope",
+    )
+    rows = (
+        await context.session.scalars(
+            select(OrganizationUnit)
+            .where(
+                OrganizationUnit.tenant_id == context.access.tenant_id,
+                OrganizationUnit.id.in_(scopes),
+            )
+            .order_by(OrganizationUnit.name, OrganizationUnit.id)
+        )
+    ).all()
+    return [
+        OrganizationUnitChoice(
+            id=row.id,
+            name=row.name,
+            parent_id=row.parent_id,
+            unit_type=row.unit_type,
+        )
+        for row in rows
+    ]
