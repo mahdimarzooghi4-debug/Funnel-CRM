@@ -264,6 +264,28 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         )
         assert seller_plan_response.status_code == 201, seller_plan_response.text
         seller_plan_id = seller_plan_response.json()["id"]
+        async with tenant_session(
+            runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+        ) as context:
+            inactive_seller = await context.session.get(WorkspaceMembership, other_seller_id)
+            assert inactive_seller is not None
+            inactive_seller.status = "suspended"
+        inactive_plan_response = await client.post(
+            "/api/v1/crm/commission-plans", headers=headers,
+            json={
+                "organization_unit_id": str(org_id),
+                "seller_membership_id": str(other_seller_id),
+                "name": "Inactive seller plan",
+                "rate_percent": "10",
+            },
+        )
+        assert inactive_plan_response.status_code == 422
+        async with tenant_session(
+            runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+        ) as context:
+            inactive_seller = await context.session.get(WorkspaceMembership, other_seller_id)
+            assert inactive_seller is not None
+            inactive_seller.status = "active"
         seller_calculation_response = await client.post(
             f"/api/v1/crm/commission-plans/{seller_plan_id}/calculations",
             headers=headers,

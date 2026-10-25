@@ -75,9 +75,10 @@ async def create_plan(payload: CommissionPlanCreate, context: TenantSessionConte
         membership = await context.session.scalar(select(WorkspaceMembership.id).where(
             WorkspaceMembership.tenant_id == context.access.tenant_id,
             WorkspaceMembership.id == payload.seller_membership_id,
+            WorkspaceMembership.status == "active",
         ))
         if membership is None:
-            raise HTTPException(status_code=422, detail="Seller membership is outside this workspace")
+            raise HTTPException(status_code=422, detail="Seller must be an active membership in this workspace")
     plan = CRMCommissionPlan(
         id=uuid4(), tenant_id=context.access.tenant_id,
         organization_unit_id=payload.organization_unit_id,
