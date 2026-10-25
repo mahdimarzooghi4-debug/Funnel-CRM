@@ -166,6 +166,8 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert portfolio.status_code == 200, portfolio.text
         portfolio_body = portfolio.json()
         assert portfolio_body["total_count"] == 1
+        assert portfolio_body["offset"] == 0
+        assert portfolio_body["limit"] == 50
         assert portfolio_body["planned_count"] == 1
         assert portfolio_body["evaluated_count"] == 0
         assert portfolio_body["items"][0]["review"]["id"] == review_id
@@ -177,6 +179,16 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         }
         assert portfolio_body["can_update_work_items"] is True
         assert portfolio_body["can_manage_marketing_reviews"] is True
+        empty_page = await client.get(
+            f"{base}/portfolio", headers=headers,
+            params={"period_start": "2026-10-16", "period_end": "2026-10-17",
+                    "organization_unit_id": str(root_id), "limit": 1, "offset": 1},
+        )
+        assert empty_page.status_code == 200, empty_page.text
+        assert empty_page.json()["items"] == []
+        assert empty_page.json()["offset"] == 1
+        assert empty_page.json()["limit"] == 1
+        assert empty_page.json()["has_more"] is False
         overdue_portfolio = await client.get(
             f"{base}/portfolio", headers=headers,
             params={"period_start": "2026-10-16", "period_end": "2026-10-17",

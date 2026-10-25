@@ -285,6 +285,11 @@ _PAGE = """<!doctype html>
           <tbody id="learning-portfolio-items"></tbody>
         </table>
       </div>
+      <div id="learning-portfolio-pagination" class="actions" aria-live="polite">
+        <button id="learning-page-previous" type="button" disabled>صفحهٔ قبل</button>
+        <span id="learning-page-range" class="hint">۰ نتیجه</span>
+        <button id="learning-page-next" type="button" disabled>صفحهٔ بعد</button>
+      </div>
       <h3 style="margin-top:22px">نسبت تبدیل ثبت‌شده به سرنخ</h3>
       <p class="muted">نسبت مجموع تبدیل‌های ثبت‌شده به سرنخ‌های ثبت‌شده است؛ فقط کمپین‌هایی با هر دو مقدار و سرنخ مثبت وارد می‌شوند. این شاخص، نرخ تبدیل یکتای افراد یا انتساب علّی را اثبات نمی‌کند.</p>
       <div class="table-wrap">
@@ -325,6 +330,8 @@ _CLIENT_SCRIPT = r"""(() => {
   let selectedVarianceReview = null;
   let selectedVarianceReviewId = null;
   let latestLearningPortfolio = null;
+  let learningPortfolioOffset = 0;
+  const learningPortfolioPageSize = 100;
   const workspaceMemberships = new Map();
 
   const params = new URLSearchParams(window.location.search);
@@ -1548,13 +1555,14 @@ _CLIENT_SCRIPT = r"""(() => {
       button.disabled = false;
     }
   }
-  async function loadLearningPortfolio(fields) {
+  async function loadLearningPortfolio(fields, offset = learningPortfolioOffset) {
     const query = new URLSearchParams({
       period_start: fields.start,
       period_end: fields.end,
       organization_unit_id: fields.organization,
       include_work_items: "true",
-      limit: "100",
+      limit: String(learningPortfolioPageSize),
+      offset: String(offset),
     });
     const lessonQuery = byId("learning-lesson-query").value.trim();
     if (lessonQuery) query.set("lesson_query", lessonQuery);
@@ -1740,6 +1748,9 @@ _CLIENT_SCRIPT = r"""(() => {
     latestLearningPortfolio = result?.report || null;
     if (!latestLearningPortfolio) {
       byId("learning-overdue-only").disabled = true;
+      byId("learning-page-previous").disabled = true;
+      byId("learning-page-next").disabled = true;
+      byId("learning-page-range").textContent = "فهرست در دسترس نیست";
       note.textContent = "فهرست بررسی‌ها در این محدوده در دسترس نیست یا مجوز مشاهده ثبت نشده است.";
       return;
     }
@@ -1748,6 +1759,15 @@ _CLIENT_SCRIPT = r"""(() => {
       byId("learning-overdue-only").checked = false;
     }
     const report = latestLearningPortfolio;
+    learningPortfolioOffset = Number(report.offset) || 0;
+    const items = report.items || [];
+    const rangeStart = report.total_count ? learningPortfolioOffset + 1 : 0;
+    const rangeEnd = Math.min(learningPortfolioOffset + items.length, report.total_count);
+    byId("learning-page-range").textContent = report.total_count
+      ? `${formatNumber.format(rangeStart)} تا ${formatNumber.format(rangeEnd)} از ${formatNumber.format(report.total_count)}`
+      : "۰ نتیجه";
+    byId("learning-page-previous").disabled = learningPortfolioOffset <= 0;
+    byId("learning-page-next").disabled = !report.has_more;
     const taskCounts = report.work_item_counts;
     const summary = [
       ["بررسی‌ها", report.total_count],
@@ -1767,7 +1787,6 @@ _CLIENT_SCRIPT = r"""(() => {
     if (report.lesson_query) {
       note.textContent += ` جست‌وجوی درس: «${report.lesson_query}»؛ ${formatNumber.format(report.total_count)} نتیجه.`;
     }
-    const items = report.items || [];
     if (!items.length) {
       const row = document.createElement("tr");
       const cell = element("td", "muted", "برای این واحد و بازه بررسی مدیریتی ثبت نشده است.");
@@ -2322,6 +2341,7 @@ _CLIENT_SCRIPT = r"""(() => {
       try {
         previousTargetPortfolio = await getJson("/api/v1/crm/analytics/campaign-target-performance/portfolio?" + previousTargetQuery.toString(), fields.workspace);
       } catch (_) {}
+      learningPortfolioOffset = 0;
       renderCampaignTargetOutcomes(result, targetPortfolio);
       renderChannelTargetSummary(result, targetPortfolio);
       renderTargetVarianceSummary(targetPortfolio);
@@ -2347,10 +2367,22 @@ _CLIENT_SCRIPT = r"""(() => {
   byId("save-variance-review").addEventListener("click", saveVarianceReview);
   byId("create-variance-review-work-item").addEventListener("click", createVarianceReviewWorkItem);
   byId("learning-overdue-only").addEventListener("change", async () => {
+    learningPortfolioOffset = 0;
     if (latestFields) renderLearningPortfolio(await loadLearningPortfolio(latestFields));
   });
   byId("search-learning-lessons").addEventListener("click", async () => {
+    learningPortfolioOffset = 0;
     if (latestFields) renderLearningPortfolio(await loadLearningPortfolio(latestFields));
+  });
+  byId("learning-page-previous").addEventListener("click", async () => {
+    if (latestFields && learningPortfolioOffset > 0) {
+      renderLearningPortfolio(await loadLearningPortfolio(latestFields, Math.max(0, learningPortfolioOffset - learningPortfolioPageSize)));
+    }
+  });
+  byId("learning-page-next").addEventListener("click", async () => {
+    if (latestFields && latestLearningPortfolio?.has_more) {
+      renderLearningPortfolio(await loadLearningPortfolio(latestFields, learningPortfolioOffset + learningPortfolioPageSize));
+    }
   });
   byId("cancel-variance-review").addEventListener("click", () => {
     selectedVarianceReview = null;
