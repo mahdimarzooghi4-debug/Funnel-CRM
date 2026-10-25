@@ -36,6 +36,8 @@ def test_openapi_exposes_versioned_route_and_operations() -> None:
     assert "/api/v1/crm/opportunities/{opportunity_id}/catalog-items" in schema["paths"]
     assert "/api/v1/crm/opportunities/{opportunity_id}/offer-drafts" in schema["paths"]
     assert "/api/v1/crm/opportunities/{opportunity_id}/offer-drafts/{offer_id}/revisions" in schema["paths"]
+    assert "/api/v1/crm/offer-plans" in schema["paths"]
+    assert "/api/v1/crm/offer-plans/{plan_id}" in schema["paths"]
     assert "/healthz" in schema["paths"]
     assert "/readyz" in schema["paths"]
 
@@ -87,4 +89,16 @@ def test_offer_workspace_is_mounted_with_safe_api_client() -> None:
     assert "ساخت نسخهٔ اصلاح‌شده" in script.text
     assert "credentials:" in script.text and '"same-origin"' in script.text
     assert "X-Workspace-ID" in script.text
+    assert "innerHTML" not in script.text
+
+
+def test_marketing_offer_plan_workspace_is_mounted() -> None:
+    page = client.get("/workspace/crm-offer-plans")
+    script = client.get("/assets/crm-offer-plan-workspace.js")
+    assert page.status_code == script.status_code == 200
+    assert 'lang="fa" dir="rtl"' in page.text
+    assert page.headers["cache-control"] == "no-store"
+    assert "برنامه‌ریزی پیشنهاد بازاریابی" in page.text
+    assert "/api/v1/system/offer-plan-organization-units" in script.text
+    assert "/api/v1/crm/offer-plans" in script.text
     assert "innerHTML" not in script.text

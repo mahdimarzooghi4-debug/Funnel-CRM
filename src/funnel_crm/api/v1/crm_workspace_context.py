@@ -188,3 +188,19 @@ async def list_opportunity_organization_units(
     )).all()
     return [OrganizationUnitChoice(id=row.id, name=row.name, parent_id=row.parent_id, unit_type=row.unit_type)
             for row in rows]
+
+
+@router.get("/offer-plan-organization-units", response_model=list[OrganizationUnitChoice])
+async def list_offer_plan_organization_units(
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> list[OrganizationUnitChoice]:
+    """Return units where the current user can view marketing offer plans."""
+    scopes = crm_scope_ids(
+        context, permission_key="crm.offer_plan:view", cte_name="crm_offer_plan_selector_scope",
+    )
+    rows = (await context.session.scalars(select(OrganizationUnit).where(
+        OrganizationUnit.tenant_id == context.access.tenant_id,
+        OrganizationUnit.id.in_(scopes),
+    ).order_by(OrganizationUnit.name, OrganizationUnit.id))).all()
+    return [OrganizationUnitChoice(id=row.id, name=row.name, parent_id=row.parent_id, unit_type=row.unit_type)
+            for row in rows]
