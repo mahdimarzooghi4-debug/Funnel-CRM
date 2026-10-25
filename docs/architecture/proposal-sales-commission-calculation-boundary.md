@@ -1,6 +1,6 @@
 # Proposal: Sales commission calculation boundary
 
-- Status: proposal; not approved
+- Status: approved for implementation on 2026-10-25
 - Related business decision: `docs/business/132-sales-incentive-and-commission-plans.md`
 - Purpose: resolve the data source and rule needed before commission amounts are calculated.
 
@@ -10,17 +10,17 @@
 - `CRMProductCommerceEvent` records paid and refunded order events, amount, currency, and event time. It has no seller membership, so the event cannot currently be attributed to an individual salesperson.
 - The CRM has no commission-plan, seller-attribution, or proposed-commission ledger yet.
 
-## Decisions required
+## Approved choices
 
-1. **Commission basis:** use a won opportunity, a paid order/refund event, or let each plan select one of these sources.
-2. **Seller attribution:** use the opportunity's owner, require the selling product to send the seller membership on each order event, or support explicit split attribution.
-3. **First calculation rule:** use a percentage of net paid sales (paid events less refunds, per currency, with no currency conversion), a fixed amount per paid order, or a manager-defined rule set.
+1. **Commission basis:** paid order and refund events from connected products.
+2. **Seller attribution:** the selling product sends the responsible CRM membership on each event. Split attribution is outside the first version.
+3. **First calculation rule:** a plan-defined percentage of net paid sales, grouped by currency without conversion.
 
-## Proposed starting point
+## Calculation semantics
 
-Use paid order/refund events as the commission basis, require each connected sales product to provide the responsible CRM membership for a paid event, and calculate a plan-specific percentage of net paid amount separately for each currency. Refunds reverse the corresponding basis when they occur. Keep proposal calculation separate from financial approval and payment; do not transfer funds or export a payroll instruction.
+For the selected period, calculate each seller's basis as paid events minus refunded events, separately for each currency. A refund is attributed to the seller named on that refund event and affects the period in which the refund occurred. Rates are supplied by the selected plan; missing or ambiguous plans produce no calculation. The stored proposal retains six decimal places, matching the source amount precision. This is a proposal amount, not an approved payable amount.
 
-This starting point is a recommendation, not a stored decision. It favors recorded transaction facts over pipeline estimates. Before implementing it, define how partial refunds, split sellers, event corrections, and commissions after a seller's access is removed are handled. If the selected source is opportunities instead, the team must define how a won stage is dated and attributed.
+Events without seller attribution remain valid commerce records but are excluded from seller totals and reported as unattributed. Plan-specific membership scope, when present, matches only that seller; otherwise the plan is organization-wide. Event times use UTC period boundaries until workspace timezone settings are implemented.
 
 ## Implementation boundary after approval
 
@@ -30,3 +30,4 @@ This starting point is a recommendation, not a stored decision. It favors record
 - Preserve currencies independently; never infer exchange rates.
 - Audit plan changes and proposal generation without claiming that a proposal was financially approved.
 - Do not add default rates or calculate when the selected plan lacks a rule.
+- Do not transfer funds, create payroll instructions, or mark a proposal as financially approved.
