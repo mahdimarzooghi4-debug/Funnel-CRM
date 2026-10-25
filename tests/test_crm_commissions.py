@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from sqlalchemy import select
 
 from funnel_crm.api.v1.crm_commissions import router as commissions_router
+from funnel_crm.api.v1.crm_workspace_context import router as workspace_context_router
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMCommissionCalculation,
@@ -31,6 +32,7 @@ def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
         return await call_next(request)
 
     app.include_router(commissions_router, prefix="/api/v1")
+    app.include_router(workspace_context_router, prefix="/api/v1")
     return app
 
 
@@ -141,6 +143,28 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         )
         assert plan_response.status_code == 201, plan_response.text
         plan_id = plan_response.json()["id"]
+        commission_units = await client.get(
+            "/api/v1/system/commission-organization-units", headers=headers
+        )
+        assert commission_units.status_code == 200, commission_units.text
+        assert {unit["id"] for unit in commission_units.json()} == {str(org_id)}
+
+        preview_response = await client.post(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations/preview",
+            headers=headers,
+            json={"period_start": period_date.isoformat(), "period_end": period_date.isoformat()},
+        )
+        assert preview_response.status_code == 200, preview_response.text
+        preview = preview_response.json()
+        assert preview["status"] == "preview"
+        assert preview["snapshot_created"] is False
+        assert preview["money_transfer_or_payroll_instruction_created"] is False
+        assert Decimal(next(row for row in preview["rows"] if row["currency"] == "USD" and row["seller_membership_id"] == str(seller_id))["commission_amount"]) == Decimal("8.500000")
+        empty_history = await client.get(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations", headers=headers
+        )
+        assert empty_history.status_code == 200, empty_history.text
+        assert empty_history.json()["items"] == []
 
         calculation_response = await client.post(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations",
@@ -154,6 +178,7 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         assert calculation["status"] == "calculation_only"
         assert calculation["timezone"] == "UTC"
         assert calculation["money_transfer_or_payroll_instruction_created"] is False
+        assert calculation["rows"] == preview["rows"]
         by_currency_seller = {
             (row["seller_membership_id"], row["currency"]): row
             for row in calculation["rows"]
@@ -257,6 +282,28 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         )
         assert seller_plan_response.status_code == 201, seller_plan_response.text
         seller_plan_id = seller_plan_response.json()["id"]
+        async with tenant_session(
+            runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+        ) as context:
+            inactive_seller = await context.session.get(WorkspaceMembership, other_seller_id)
+            assert inactive_seller is not None
+            inactive_seller.status = "suspended"
+        inactive_plan_response = await client.post(
+            "/api/v1/crm/commission-plans", headers=headers,
+            json={
+                "organization_unit_id": str(org_id),
+                "seller_membership_id": str(other_seller_id),
+                "name": "Inactive seller plan",
+                "rate_percent": "10",
+            },
+        )
+        assert inactive_plan_response.status_code == 422
+        async with tenant_session(
+            runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+        ) as context:
+            inactive_seller = await context.session.get(WorkspaceMembership, other_seller_id)
+            assert inactive_seller is not None
+            inactive_seller.status = "active"
         seller_calculation_response = await client.post(
             f"/api/v1/crm/commission-plans/{seller_plan_id}/calculations",
             headers=headers,

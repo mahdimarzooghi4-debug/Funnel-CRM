@@ -41,3 +41,10 @@ def test_budget_scenario_comparison_workspace_is_mounted() -> None:
 
     assert response.status_code == 200
     assert "مقایسهٔ سناریوهای بودجه" in response.text
+
+
+def test_commission_workspace_is_mounted() -> None:
+    response = client.get("/workspace/crm-commissions")
+
+    assert response.status_code == 200
+    assert "مدیریت پلن‌های کمیسیون فروش" in response.text
