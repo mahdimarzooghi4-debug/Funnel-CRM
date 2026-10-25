@@ -23,6 +23,7 @@ from funnel_crm.platform.models import (
     CRMProfile,
     IntegrationEventInbox,
     OrganizationUnit,
+    WorkspaceMembership,
 )
 
 
@@ -34,6 +35,7 @@ class CommerceOrderEventPayload(BaseModel):
     organization_unit_id: UUID
     campaign_id: UUID | None = None
     profile_id: UUID | None = None
+    seller_membership_id: UUID | None = None
     order_reference: str = Field(min_length=1, max_length=200)
     amount: Decimal = Field(ge=0, max_digits=20, decimal_places=6)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
@@ -153,12 +155,23 @@ class PostgresCommerceOrderEventConsumer:
                     if campaign is None:
                         raise CommerceOrderEventError("Campaign is outside the event organization")
 
+                if payload.seller_membership_id is not None:
+                    seller_exists = await session.scalar(
+                        select(WorkspaceMembership.id).where(
+                            WorkspaceMembership.tenant_id == claim.tenant_id,
+                            WorkspaceMembership.id == payload.seller_membership_id,
+                        )
+                    )
+                    if seller_exists is None:
+                        raise CommerceOrderEventError("Seller membership is outside the event tenant")
+
                 values = {
                     "id": uuid4(),
                     "tenant_id": claim.tenant_id,
                     "organization_unit_id": payload.organization_unit_id,
                     "campaign_id": payload.campaign_id,
                     "profile_id": payload.profile_id,
+                    "seller_membership_id": payload.seller_membership_id,
                     "source_product": claim.source_product,
                     "source_event_id": claim.event_id,
                     "event_type": claim.event_type,

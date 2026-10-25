@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import httpx
@@ -16,6 +17,7 @@ from funnel_crm.api.v1.integrations import (
 from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.integration_processing import PostgresProductEventProcessor
 from funnel_crm.platform.commerce_orders import PostgresCommerceOrderEventConsumer
+from funnel_crm.platform.commission_calculations import aggregate_commission_events
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingCampaign,
@@ -29,6 +31,25 @@ from funnel_crm.platform.models import (
     TenantRecord,
 )
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
+
+
+def test_commission_aggregation_separates_currency_and_reports_unattributed() -> None:
+    seller_id, other_seller = uuid4(), uuid4()
+    events = [
+        SimpleNamespace(seller_membership_id=seller_id, currency="USD", event_kind="paid", amount=Decimal("100"), source_event_id=uuid4()),
+        SimpleNamespace(seller_membership_id=seller_id, currency="USD", event_kind="refunded", amount=Decimal("15"), source_event_id=uuid4()),
+        SimpleNamespace(seller_membership_id=other_seller, currency="USD", event_kind="paid", amount=Decimal("200"), source_event_id=uuid4()),
+        SimpleNamespace(seller_membership_id=None, currency="EUR", event_kind="paid", amount=Decimal("50"), source_event_id=uuid4()),
+    ]
+
+    org_totals = aggregate_commission_events(events, seller_membership_id=None)
+    seller_totals = aggregate_commission_events(events, seller_membership_id=seller_id)
+
+    assert org_totals[(seller_id, "USD")]["paid"] - org_totals[(seller_id, "USD")]["refunded"] == Decimal("85")
+    assert (other_seller, "USD") in org_totals
+    assert org_totals[(None, "EUR")]["paid"] == Decimal("50")
+    assert (other_seller, "USD") not in seller_totals
+    assert seller_totals[(None, "EUR")]["paid"] == Decimal("50")
 
 
 def make_app(
@@ -127,6 +148,7 @@ async def test_paid_and_refund_events_are_deduplicated_scoped_and_reported_separ
             "organization_unit_id": str(root_id),
             "campaign_id": str(campaign_id),
             "profile_id": str(profile_id),
+            "seller_membership_id": str(context.access.membership_id),
             "order_reference": "ORDER-42",
             "amount": "125.50",
             "currency": "USD",
@@ -135,6 +157,7 @@ async def test_paid_and_refund_events_are_deduplicated_scoped_and_reported_separ
             "organization_unit_id": str(root_id),
             "campaign_id": str(campaign_id),
             "profile_id": str(profile_id),
+            "seller_membership_id": str(context.access.membership_id),
             "order_reference": "ORDER-42",
             "amount": "25.00",
             "currency": "USD",
@@ -214,6 +237,7 @@ async def test_paid_and_refund_events_are_deduplicated_scoped_and_reported_separ
             )
         )).all()
         assert len(facts) == 2
+        assert all(row.seller_membership_id == context.access.membership_id for row in facts)
         inbox_rows = (await context.session.scalars(
             select(IntegrationEventInbox).where(
                 IntegrationEventInbox.tenant_id == tenant_id,

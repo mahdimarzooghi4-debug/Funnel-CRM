@@ -2043,6 +2043,12 @@ class CRMProductCommerceEvent(Base):
             name="fk_crm_product_commerce_events_profile_same_tenant", ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["tenant_id", "seller_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_product_commerce_events_seller_same_tenant",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
             ["tenant_id", "organization_unit_id", "campaign_id"],
             ["crm_marketing_campaigns.tenant_id",
              "crm_marketing_campaigns.organization_unit_id",
@@ -2058,6 +2064,10 @@ class CRMProductCommerceEvent(Base):
             "ix_crm_product_commerce_events_tenant_campaign_time",
             "tenant_id", "campaign_id", "occurred_at",
         ),
+        Index(
+            "ix_crm_product_commerce_events_tenant_seller_time",
+            "tenant_id", "seller_membership_id", "occurred_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -2065,6 +2075,7 @@ class CRMProductCommerceEvent(Base):
     organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     campaign_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     profile_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     source_product: Mapped[str] = mapped_column(String(80), nullable=False)
     source_event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -2125,3 +2136,128 @@ class CRMSalesTarget(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
+
+
+class CRMCommissionPlan(Base):
+    """Percentage-of-net-sales rule scoped to an organization or one seller."""
+
+    __tablename__ = "crm_commission_plans"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_commission_plans_tenant_id"),
+        CheckConstraint("rate_percent > 0 AND rate_percent <= 100", name="ck_crm_commission_plans_rate"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_commission_plans_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_commission_plans_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "seller_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plans_seller_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plans_creator_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_commission_plans_tenant_org", "tenant_id", "organization_unit_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMCommissionPlanVersion(Base):
+    """Immutable rule values for one version of a commission plan."""
+
+    __tablename__ = "crm_commission_plan_versions"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_crm_commission_plan_versions_version_positive"),
+        CheckConstraint("rate_percent > 0 AND rate_percent <= 100", name="ck_crm_commission_plan_versions_rate"),
+        ForeignKeyConstraint(["tenant_id", "plan_id"],
+            ["crm_commission_plans.tenant_id", "crm_commission_plans.id"],
+            name="fk_crm_commission_plan_versions_plan_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "seller_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plan_versions_seller_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "changed_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plan_versions_actor_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_commission_plan_versions_tenant_plan", "tenant_id", "plan_id", "version"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    changed_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMCommissionCalculation(Base):
+    """Immutable calculation snapshot; it does not approve or pay commission."""
+
+    __tablename__ = "crm_commission_calculations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_commission_calculations_tenant_id"),
+        UniqueConstraint("tenant_id", "plan_id", "request_id", name="uq_crm_commission_calculations_request"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_commission_calculations_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "plan_id"],
+            ["crm_commission_plans.tenant_id", "crm_commission_plans.id"],
+            name="fk_crm_commission_calculations_plan_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "plan_id", "plan_version"],
+            ["crm_commission_plan_versions.tenant_id", "crm_commission_plan_versions.plan_id", "crm_commission_plan_versions.version"],
+            name="fk_crm_commission_calculations_plan_version_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_calculations_creator_same_tenant", ondelete="CASCADE"),
+        CheckConstraint("period_start <= period_end", name="ck_crm_commission_calculations_period"),
+        Index("ix_crm_commission_calculations_tenant_plan", "tenant_id", "plan_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMCommissionCalculationRow(Base):
+    """Currency-separated seller totals and exact source event lineage."""
+
+    __tablename__ = "crm_commission_calculation_rows"
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id", "calculation_id"],
+            ["crm_commission_calculations.tenant_id", "crm_commission_calculations.id"],
+            name="fk_crm_commission_rows_calculation_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "seller_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_rows_seller_same_tenant", ondelete="CASCADE"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_commission_rows_currency"),
+        UniqueConstraint("tenant_id", "calculation_id", "seller_membership_id", "currency",
+            name="uq_crm_commission_rows_seller_currency"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    calculation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    paid_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    refunded_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    commission_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    source_event_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
