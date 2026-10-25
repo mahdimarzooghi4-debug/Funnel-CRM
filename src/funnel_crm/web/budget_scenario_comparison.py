@@ -255,6 +255,14 @@ _PAGE = """<!doctype html>
         </div>
         <div id="variance-review-next-step" hidden>
           <p id="variance-review-created-note" class="muted"></p>
+          <div class="grid">
+            <label><span>مسئول کار پیگیری</span>
+              <span><input id="assign-follow-up-to-me" type="checkbox"> واگذاری به خودم</span>
+            </label>
+            <label for="follow-up-due-at">موعد کار (اختیاری)
+              <input id="follow-up-due-at" type="datetime-local">
+            </label>
+          </div>
           <button id="create-variance-review-work-item" type="button">ایجاد کار پیگیری در صف CRM</button>
         </div>
       </section>
@@ -307,6 +315,7 @@ _CLIENT_SCRIPT = r"""(() => {
   let selectedVarianceReview = null;
   let selectedVarianceReviewId = null;
   let latestLearningPortfolio = null;
+  const workspaceMemberships = new Map();
 
   const params = new URLSearchParams(window.location.search);
   const requestedWorkspaceId = params.get("workspace_id") || "";
@@ -416,9 +425,13 @@ _CLIENT_SCRIPT = r"""(() => {
   }
   async function loadContextChoices() {
     const workspaces = await getJson("/api/v1/system/workspaces");
+    workspaceMemberships.clear();
     workspaceInput.replaceChildren();
     appendChoice(workspaceInput, "", "فضای کاری را انتخاب کنید");
-    workspaces.forEach((workspace) => appendChoice(workspaceInput, workspace.id, workspace.name));
+    workspaces.forEach((workspace) => {
+      appendChoice(workspaceInput, workspace.id, workspace.name);
+      workspaceMemberships.set(workspace.id, workspace.membership_id);
+    });
     const requested = workspaces.find((workspace) => workspace.id === requestedWorkspaceId);
     if (requested) workspaceInput.value = requested.id;
     else if (workspaces.length === 1) workspaceInput.value = workspaces[0].id;
@@ -1484,6 +1497,7 @@ _CLIENT_SCRIPT = r"""(() => {
       byId("variance-review-next-step").hidden = false;
       byId("variance-review-created-note").textContent = "بررسی ثبت شد. در صورت نیاز، می‌توانید یک کار پیگیری CRM بسازید؛ این کار با کلیک جداگانه انجام می‌شود.";
       setStatus("بررسی مدیریتی ثبت شد؛ هیچ بودجه یا اقدامی به‌صورت خودکار تغییر نکرد.", false);
+      renderLearningPortfolio(await loadLearningPortfolio(latestFields));
     } catch (error) {
       setStatus(error.message || "ثبت بررسی ناموفق بود.", true);
     } finally {
@@ -1499,7 +1513,13 @@ _CLIENT_SCRIPT = r"""(() => {
         method: "POST",
         credentials: "same-origin",
         headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Workspace-ID": latestFields.workspace },
-        body: JSON.stringify({ assigned_membership_id: null, due_at: null, priority: "normal" }),
+        body: JSON.stringify({
+          assigned_membership_id: byId("assign-follow-up-to-me").checked
+            ? workspaceMemberships.get(latestFields.workspace) || null : null,
+          due_at: byId("follow-up-due-at").value
+            ? new Date(byId("follow-up-due-at").value).toISOString() : null,
+          priority: "normal",
+        }),
       });
       let payload = {};
       try { payload = await response.json(); } catch (_) {}
@@ -1509,9 +1529,10 @@ _CLIENT_SCRIPT = r"""(() => {
         throw new Error(payload.detail || "ایجاد کار پیگیری ناموفق بود.");
       }
       byId("variance-review-created-note").textContent = payload.created
-        ? "کار پیگیری در صف CRM ایجاد شد؛ مسئول و موعد هنوز تعیین نشده‌اند."
+        ? `کار پیگیری در صف CRM ایجاد شد؛ ${payload.work_item.assigned_membership_id ? "به خودتان واگذار شد" : "واگذارنشده ماند"} و ${payload.work_item.due_at ? "موعد آن ثبت شد" : "موعدی ندارد"}.`
         : "کار پیگیری این بررسی از قبل وجود داشت و همان مورد بازگردانده شد.";
       setStatus("کار پیگیری CRM آمادهٔ واگذاری است.", false);
+      renderLearningPortfolio(await loadLearningPortfolio(latestFields));
     } catch (error) {
       setStatus(error.message || "ایجاد کار پیگیری ناموفق بود.", true);
       button.disabled = false;

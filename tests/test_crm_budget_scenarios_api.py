@@ -130,11 +130,12 @@ async def test_budget_scenarios_compare_and_replace_without_changing_campaign_bu
     ) as client:
         workspace_response = await client.get("/api/v1/system/workspaces")
         assert workspace_response.status_code == 200, workspace_response.text
-        assert workspace_response.json() == [{
-            "id": str(tenant_id),
-            "name": "Tenant A",
-            "root_organization_id": str(root_id),
-        }]
+        workspace_choices = workspace_response.json()
+        assert len(workspace_choices) == 1
+        assert workspace_choices[0]["id"] == str(tenant_id)
+        assert workspace_choices[0]["name"] == "Tenant A"
+        assert workspace_choices[0]["root_organization_id"] == str(root_id)
+        assert UUID(workspace_choices[0]["membership_id"])
 
         organization_response = await client.get(
             "/api/v1/system/organization-units", headers=headers
