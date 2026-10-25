@@ -160,6 +160,7 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
             f"{base}/portfolio",
             headers=headers,
             params={"period_start": "2026-10-16", "period_end": "2026-10-17",
+                    "organization_unit_id": str(root_id),
                     "include_work_items": "true"},
         )
         assert portfolio.status_code == 200, portfolio.text
