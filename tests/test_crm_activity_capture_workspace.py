@@ -43,3 +43,17 @@ def test_budget_workspace_links_to_field_activity_capture() -> None:
     from funnel_crm.web.budget_scenario_comparison import _PAGE
 
     assert 'href="/workspace/crm-activity-capture"' in _PAGE
+
+
+def test_activity_service_worker_is_scoped_to_data_free_shell_routes() -> None:
+    response = make_client().get("/assets/crm-activity-capture-sw.js")
+    client = make_client().get("/assets/crm-activity-capture.js")
+
+    assert response.status_code == 200
+    assert response.headers["service-worker-allowed"] == "/"
+    assert response.headers["cache-control"] == "no-cache"
+    assert '"/workspace/crm-activity-capture"' in response.text
+    assert '"/assets/crm-activity-capture.js"' in response.text
+    assert "request.method !== \"GET\"" in response.text
+    assert "/api/v1/" not in response.text
+    assert 'navigator.serviceWorker.register("/assets/crm-activity-capture-sw.js", { scope: "/" })' in client.text
