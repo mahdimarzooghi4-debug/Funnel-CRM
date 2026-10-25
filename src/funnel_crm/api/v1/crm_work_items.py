@@ -19,6 +19,7 @@ from funnel_crm.platform.models import (
     CRMSalesTarget,
     CRMProfile,
     CRMWorkItem,
+    CRMWorkItemOutcome,
     WorkspaceMembership,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
@@ -26,6 +27,10 @@ from funnel_crm.platform.tenant_context import TenantSessionContext
 router = APIRouter(prefix="/crm/work-items", tags=["CRM work queue"])
 WorkItemStatus = Literal["open", "in_progress", "completed", "cancelled"]
 WorkItemPriority = Literal["low", "normal", "high", "urgent"]
+FollowUpOutcomeCode = Literal[
+    "contact_made", "no_contact", "callback_requested", "not_interested", "other"
+]
+ActivityChannel = Literal["online", "phone", "store", "field", "support", "campaign", "other"]
 
 
 class WorkItemCreate(BaseModel):
@@ -136,6 +141,46 @@ class WorkItemRead(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class WorkItemOutcomeCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    outcome_code: FollowUpOutcomeCode
+    channel: ActivityChannel
+    notes: str | None = Field(default=None, max_length=2000)
+    occurred_at: datetime | None = None
+
+    @field_validator("notes")
+    @classmethod
+    def normalize_notes(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @field_validator("occurred_at")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("occurred_at must include a timezone")
+        return value
+
+
+class WorkItemOutcomeRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    request_id: UUID
+    organization_unit_id: UUID
+    work_item_id: UUID
+    profile_id: UUID
+    recorded_by_membership_id: UUID
+    outcome_code: FollowUpOutcomeCode
+    channel: ActivityChannel
+    notes: str | None
+    occurred_at: datetime
+    created_at: datetime
 
 
 async def _require_permission(
@@ -358,6 +403,18 @@ async def get_lifecycle_review_readout(
         )
         .where(*filters, CRMWorkItem.profile_id.is_not(None))
     )).one()
+    outcome_rows = (await context.session.execute(
+        select(CRMWorkItemOutcome.outcome_code, func.count(CRMWorkItemOutcome.id))
+        .select_from(CRMWorkItemOutcome)
+        .join(
+            CRMWorkItem,
+            (CRMWorkItem.tenant_id == CRMWorkItemOutcome.tenant_id)
+            & (CRMWorkItem.id == CRMWorkItemOutcome.work_item_id),
+        )
+        .where(*filters)
+        .group_by(CRMWorkItemOutcome.outcome_code)
+    )).all()
+    outcome_counts = {code: count for code, count in outcome_rows}
     context.session.add(AuditEvent(
         tenant_id=tenant_id,
         actor_kind="user",
@@ -372,6 +429,7 @@ async def get_lifecycle_review_readout(
             "review_item_count": sum(status_counts.values()),
             "recorded_activities_after_task_count": activity_count,
             "profiles_with_recorded_activity_after_task_count": profile_count,
+            "follow_up_outcome_count_by_code": outcome_counts,
         },
         correlation_id=None,
     ))
@@ -384,6 +442,10 @@ async def get_lifecycle_review_readout(
         },
         "recorded_activities_after_task_count": activity_count,
         "profiles_with_recorded_activity_after_task_count": profile_count,
+        "follow_up_outcome_count_by_code": {
+            code: outcome_counts.get(code, 0)
+            for code in ("contact_made", "no_contact", "callback_requested", "not_interested", "other")
+        },
         "interpretation": (
             "Later recorded activity is descriptive timing evidence only; it does not establish "
             "that a work item caused the activity or a customer outcome."
@@ -408,6 +470,141 @@ async def get_work_item(
     _audit(context, item, "crm_work_item.viewed", None, _snapshot(item))
     await context.session.flush()
     return WorkItemRead.model_validate(item)
+
+
+async def _require_lifecycle_review_work_item(
+    context: TenantSessionContext, item: CRMWorkItem
+) -> None:
+    if item.profile_id is None:
+        raise HTTPException(status_code=422, detail="Lifecycle follow-up outcomes require a linked customer")
+    is_lifecycle_item = await context.session.scalar(
+        select(AuditEvent.event_id).where(
+            AuditEvent.tenant_id == context.access.tenant_id,
+            AuditEvent.target_type == "crm_work_item",
+            AuditEvent.target_key == str(item.id),
+            AuditEvent.action_key == "crm_work_item.created_from_lifecycle_review",
+        ).limit(1)
+    )
+    if is_lifecycle_item is None:
+        raise HTTPException(status_code=404, detail="Lifecycle review work item not found")
+
+
+@router.post(
+    "/{item_id}/outcomes",
+    response_model=WorkItemOutcomeRead,
+    status_code=201,
+    operation_id="recordCRMLifecycleFollowUpOutcome",
+)
+async def record_lifecycle_follow_up_outcome(
+    item_id: UUID,
+    payload: WorkItemOutcomeCreate,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> WorkItemOutcomeRead:
+    item = await context.session.scalar(
+        select(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == context.access.tenant_id,
+            CRMWorkItem.id == item_id,
+        ).with_for_update()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="CRM work item not found")
+    await _require_permission(context, "crm.work_item:record_outcome", item.organization_unit_id)
+    await _require_lifecycle_review_work_item(context, item)
+    if item.status == "cancelled":
+        raise HTTPException(status_code=409, detail="Cancelled follow-up work items cannot record outcomes")
+
+    existing = await context.session.scalar(
+        select(CRMWorkItemOutcome).where(
+            CRMWorkItemOutcome.tenant_id == context.access.tenant_id,
+            CRMWorkItemOutcome.request_id == payload.request_id,
+        )
+    )
+    if existing is not None:
+        matches = (
+            existing.work_item_id == item.id
+            and existing.outcome_code == payload.outcome_code
+            and existing.channel == payload.channel
+            and existing.notes == payload.notes
+            and (payload.occurred_at is None or existing.occurred_at == payload.occurred_at)
+        )
+        if not matches:
+            raise HTTPException(status_code=409, detail="Outcome request ID was already used for different data")
+        return WorkItemOutcomeRead.model_validate(existing)
+
+    outcome = CRMWorkItemOutcome(
+        id=uuid4(),
+        request_id=payload.request_id,
+        tenant_id=context.access.tenant_id,
+        organization_unit_id=item.organization_unit_id,
+        work_item_id=item.id,
+        profile_id=item.profile_id,
+        recorded_by_membership_id=context.access.membership_id,
+        outcome_code=payload.outcome_code,
+        channel=payload.channel,
+        notes=payload.notes,
+        occurred_at=payload.occurred_at or datetime.now(timezone.utc),
+    )
+    context.session.add(outcome)
+    await context.session.flush()
+    _audit(
+        context,
+        item,
+        "crm_work_item.outcome_recorded",
+        None,
+        {
+            "outcome_id": str(outcome.id),
+            "request_id": str(outcome.request_id),
+            "outcome_code": outcome.outcome_code,
+            "channel": outcome.channel,
+            "occurred_at": outcome.occurred_at.isoformat(),
+            "notes_present": outcome.notes is not None,
+        },
+    )
+    await context.session.flush()
+    return WorkItemOutcomeRead.model_validate(outcome)
+
+
+@router.get(
+    "/{item_id}/outcomes",
+    response_model=list[WorkItemOutcomeRead],
+    operation_id="listCRMLifecycleFollowUpOutcomes",
+)
+async def list_lifecycle_follow_up_outcomes(
+    item_id: UUID,
+    limit: int = Query(default=100, ge=1, le=200),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> list[WorkItemOutcomeRead]:
+    item = await context.session.scalar(
+        select(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == context.access.tenant_id,
+            CRMWorkItem.id == item_id,
+        )
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="CRM work item not found")
+    await _require_permission(context, "crm.work_item:view", item.organization_unit_id)
+    await _require_lifecycle_review_work_item(context, item)
+    outcomes = (await context.session.scalars(
+        select(CRMWorkItemOutcome).where(
+            CRMWorkItemOutcome.tenant_id == context.access.tenant_id,
+            CRMWorkItemOutcome.work_item_id == item.id,
+        ).order_by(CRMWorkItemOutcome.occurred_at.desc(), CRMWorkItemOutcome.created_at.desc()).limit(limit)
+    )).all()
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_work_item.outcomes_listed",
+        target_type="crm_work_item",
+        target_key=str(item.id),
+        organization_unit_id=item.organization_unit_id,
+        before_state=None,
+        after_state={"result_count": len(outcomes)},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return [WorkItemOutcomeRead.model_validate(outcome) for outcome in outcomes]
 
 
 @router.patch("/{item_id}", response_model=WorkItemRead,
