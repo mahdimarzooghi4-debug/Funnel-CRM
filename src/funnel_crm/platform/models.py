@@ -2046,7 +2046,7 @@ class CRMProductCommerceEvent(Base):
             ["tenant_id", "seller_membership_id"],
             ["workspace_memberships.tenant_id", "workspace_memberships.id"],
             name="fk_crm_product_commerce_events_seller_same_tenant",
-            ondelete="RESTRICT",
+            ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "organization_unit_id", "campaign_id"],
@@ -2152,10 +2152,10 @@ class CRMCommissionPlan(Base):
             name="fk_crm_commission_plans_org_same_tenant", ondelete="RESTRICT"),
         ForeignKeyConstraint(["tenant_id", "seller_membership_id"],
             ["workspace_memberships.tenant_id", "workspace_memberships.id"],
-            name="fk_crm_commission_plans_seller_same_tenant", ondelete="RESTRICT"),
+            name="fk_crm_commission_plans_seller_same_tenant", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
             ["workspace_memberships.tenant_id", "workspace_memberships.id"],
-            name="fk_crm_commission_plans_creator_same_tenant", ondelete="RESTRICT"),
+            name="fk_crm_commission_plans_creator_same_tenant", ondelete="CASCADE"),
         Index("ix_crm_commission_plans_tenant_org", "tenant_id", "organization_unit_id"),
     )
 
@@ -2183,7 +2183,7 @@ class CRMCommissionCalculation(Base):
             name="fk_crm_commission_calculations_plan_same_tenant", ondelete="RESTRICT"),
         ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
             ["workspace_memberships.tenant_id", "workspace_memberships.id"],
-            name="fk_crm_commission_calculations_creator_same_tenant", ondelete="RESTRICT"),
+            name="fk_crm_commission_calculations_creator_same_tenant", ondelete="CASCADE"),
         CheckConstraint("period_start <= period_end", name="ck_crm_commission_calculations_period"),
         Index("ix_crm_commission_calculations_tenant_plan", "tenant_id", "plan_id", "created_at"),
     )
@@ -2208,7 +2208,7 @@ class CRMCommissionCalculationRow(Base):
             name="fk_crm_commission_rows_calculation_same_tenant", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "seller_membership_id"],
             ["workspace_memberships.tenant_id", "workspace_memberships.id"],
-            name="fk_crm_commission_rows_seller_same_tenant", ondelete="RESTRICT"),
+            name="fk_crm_commission_rows_seller_same_tenant", ondelete="CASCADE"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_commission_rows_currency"),
         UniqueConstraint("tenant_id", "calculation_id", "seller_membership_id", "currency",
             name="uq_crm_commission_rows_seller_currency"),

@@ -18,7 +18,7 @@ def upgrade() -> None:
         "fk_crm_product_commerce_events_seller_same_tenant",
         "crm_product_commerce_events", "workspace_memberships",
         ["tenant_id", "seller_membership_id"], ["tenant_id", "id"],
-        ondelete="RESTRICT",
+        ondelete="CASCADE",
     )
     op.create_index(
         "ix_crm_product_commerce_events_tenant_seller_time",

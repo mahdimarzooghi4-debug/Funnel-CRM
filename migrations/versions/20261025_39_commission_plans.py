@@ -36,8 +36,8 @@ def upgrade() -> None:
         sa.CheckConstraint("rate_percent > 0 AND rate_percent <= 100", name="ck_crm_commission_plans_rate"),
         sa.ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_commission_plans_workspace", ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["tenant_id", "organization_unit_id"], ["organization_units.tenant_id", "organization_units.id"], name="fk_crm_commission_plans_org_same_tenant", ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["tenant_id", "seller_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_commission_plans_seller_same_tenant", ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_commission_plans_creator_same_tenant", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["tenant_id", "seller_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_commission_plans_seller_same_tenant", ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_commission_plans_creator_same_tenant", ondelete="CASCADE"),
     )
     op.create_index("ix_crm_commission_plans_tenant_org", "crm_commission_plans", ["tenant_id", "organization_unit_id"])
     op.create_table(
@@ -55,7 +55,7 @@ def upgrade() -> None:
         sa.CheckConstraint("period_start <= period_end", name="ck_crm_commission_calculations_period"),
         sa.ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_commission_calculations_workspace", ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["tenant_id", "plan_id"], ["crm_commission_plans.tenant_id", "crm_commission_plans.id"], name="fk_crm_commission_calculations_plan_same_tenant", ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_commission_calculations_creator_same_tenant", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_commission_calculations_creator_same_tenant", ondelete="CASCADE"),
     )
     op.create_index("ix_crm_commission_calculations_tenant_plan", "crm_commission_calculations", ["tenant_id", "plan_id", "created_at"])
     op.create_table(
@@ -74,7 +74,7 @@ def upgrade() -> None:
         sa.CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_commission_rows_currency"),
         sa.UniqueConstraint("tenant_id", "calculation_id", "seller_membership_id", "currency", name="uq_crm_commission_rows_seller_currency"),
         sa.ForeignKeyConstraint(["tenant_id", "calculation_id"], ["crm_commission_calculations.tenant_id", "crm_commission_calculations.id"], name="fk_crm_commission_rows_calculation_same_tenant", ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id", "seller_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_commission_rows_seller_same_tenant", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["tenant_id", "seller_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_commission_rows_seller_same_tenant", ondelete="CASCADE"),
     )
     for table in ("crm_commission_plans", "crm_commission_calculations", "crm_commission_calculation_rows"):
         _rls(table)
