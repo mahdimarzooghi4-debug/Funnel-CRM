@@ -74,7 +74,7 @@ const ids = [
   "assign-follow-up-to-me", "follow-up-due-at",
   "learning-portfolio-note", "learning-lesson-query", "search-learning-lessons", "export-learning-csv",
   "learning-campaign-query", "learning-review-status",
-  "learning-overdue-only", "learning-portfolio-counts", "learning-portfolio-items",
+  "learning-overdue-only", "learning-portfolio-counts", "learning-campaign-summary", "learning-portfolio-items",
   "learning-portfolio-pagination", "learning-page-previous", "learning-page-range", "learning-page-next",
   "target-period-comparison-note", "target-period-comparison",
   "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
@@ -160,6 +160,7 @@ const previousTargetPortfolio = {
 };
 const learningPortfolio = {
   total_count: 1, planned_count: 1, evaluated_count: 0,
+  campaign_summaries: [{ campaign_id: "campaign-portfolio-1", campaign_name: "Spring launch", review_count: 1, planned_count: 1, evaluated_count: 0 }],
   can_update_work_items: true,
   can_manage_marketing_reviews: true,
   work_item_counts: { linked: 1, without_work_item: 0, open: 1, in_progress: 0, completed: 0, cancelled: 0, overdue: 0 },
@@ -376,6 +377,7 @@ async function main() {
   assert.equal(elements.get("results").hidden, false);
   assert.equal(elements.get("status").textContent, "گزارش برای 14 روز تقویمی آماده شد.");
   assert.equal(elements.get("learning-portfolio-counts").children.length, 6);
+  assert.deepEqual(elements.get("learning-campaign-summary").children[0].children.map((cell) => cell.textContent), ["Spring launch", "۱", "۱", "۰"]);
   assert.equal(elements.get("learning-portfolio-items").children.length, 1);
   elements.get("learning-overdue-only").checked = true;
   await elements.get("learning-overdue-only").dispatch("change");
