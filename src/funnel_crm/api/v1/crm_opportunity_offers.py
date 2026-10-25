@@ -79,27 +79,21 @@ async def _offer_json(context: TenantSessionContext, offer: CRMOpportunityOfferD
         totals[line.currency] = totals.get(line.currency, Decimal(0)) + line.quantity * line.unit_amount
     return {
         "id": offer.id, "opportunity_id": offer.opportunity_id,
-        "status": offer.status, "created_at": offer.created_at,
+        "status": offer.status, "revision_number": offer.revision_number,
+        "previous_revision_id": offer.previous_revision_id, "created_at": offer.created_at,
         "lines": [_line_json(line) for line in lines],
         "totals_by_currency": {currency: str(amount) for currency, amount in sorted(totals.items())},
     }
 
 
-@router.post("", status_code=201, operation_id="createCRMOpportunityOfferDraft")
-async def create_offer_draft(
-    opportunity_id: UUID,
-    payload: OfferDraftCreate,
-    context: TenantSessionContext = Depends(require_tenant_session),
-) -> dict:
-    opportunity = await _authorized_opportunity(
-        context, opportunity_id, "crm.offer:create", lock=True,
-    )
+async def _create_snapshot_lines(
+    context: TenantSessionContext, opportunity: CRMOpportunity, payload: OfferDraftCreate, offer_id: UUID,
+) -> list[CRMOpportunityOfferDraftLine]:
     if not await has_crm_permission(
         context, permission_key="crm.catalog:view",
         organization_unit_id=opportunity.organization_unit_id,
     ):
         raise HTTPException(status_code=404, detail="CRM opportunity scope not found")
-    offer_id = uuid4()
     rows: list[CRMOpportunityOfferDraftLine] = []
     today = datetime.now(timezone.utc).date()
     for number, request_line in enumerate(payload.lines, start=1):
@@ -136,9 +130,23 @@ async def create_offer_draft(
             item_name_snapshot=item.name, quantity=request_line.quantity,
             unit_amount=price.amount, currency=price.currency,
         ))
+    return rows
+
+
+async def _record_offer(
+    context: TenantSessionContext,
+    opportunity: CRMOpportunity,
+    payload: OfferDraftCreate,
+    *,
+    previous: CRMOpportunityOfferDraft | None = None,
+) -> dict:
+    offer_id = uuid4()
+    rows = await _create_snapshot_lines(context, opportunity, payload, offer_id)
     offer = CRMOpportunityOfferDraft(
         id=offer_id, tenant_id=context.access.tenant_id,
         opportunity_id=opportunity.id, status="draft",
+        revision_number=(previous.revision_number + 1) if previous else 1,
+        previous_revision_id=previous.id if previous else None,
         created_by_membership_id=context.access.membership_id,
     )
     context.session.add(offer)
@@ -147,14 +155,50 @@ async def create_offer_draft(
         tenant_id=context.access.tenant_id, actor_kind="user",
         actor_identity_id=context.access.identity_id,
         actor_membership_id=context.access.membership_id,
-        action_key="crm_opportunity.offer_draft_created",
+        action_key="crm_opportunity.offer_draft_revised" if previous else "crm_opportunity.offer_draft_created",
         target_type="crm_opportunity_offer_draft", target_key=str(offer.id),
         organization_unit_id=opportunity.organization_unit_id, before_state=None,
-        after_state={"opportunity_id": str(opportunity.id), "line_count": len(rows), "status": "draft"},
+        after_state={"opportunity_id": str(opportunity.id), "line_count": len(rows),
+                     "status": "draft", "revision_number": offer.revision_number,
+                     "previous_revision_id": str(previous.id) if previous else None},
         correlation_id=None,
     ))
     await context.session.flush()
     return await _offer_json(context, offer)
+
+
+@router.post("", status_code=201, operation_id="createCRMOpportunityOfferDraft")
+async def create_offer_draft(
+    opportunity_id: UUID,
+    payload: OfferDraftCreate,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    opportunity = await _authorized_opportunity(context, opportunity_id, "crm.offer:create", lock=True)
+    return await _record_offer(context, opportunity, payload)
+
+
+@router.post("/{offer_id}/revisions", status_code=201, operation_id="createCRMOpportunityOfferDraftRevision")
+async def create_offer_draft_revision(
+    opportunity_id: UUID,
+    offer_id: UUID,
+    payload: OfferDraftCreate,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    opportunity = await _authorized_opportunity(context, opportunity_id, "crm.offer:create", lock=True)
+    previous = await context.session.scalar(select(CRMOpportunityOfferDraft).where(
+        CRMOpportunityOfferDraft.tenant_id == context.access.tenant_id,
+        CRMOpportunityOfferDraft.opportunity_id == opportunity.id,
+        CRMOpportunityOfferDraft.id == offer_id,
+    ))
+    if previous is None:
+        raise HTTPException(status_code=404, detail="Offer draft not found")
+    successor = await context.session.scalar(select(CRMOpportunityOfferDraft.id).where(
+        CRMOpportunityOfferDraft.tenant_id == context.access.tenant_id,
+        CRMOpportunityOfferDraft.previous_revision_id == previous.id,
+    ))
+    if successor is not None:
+        raise HTTPException(status_code=409, detail="Only the latest offer revision can be revised")
+    return await _record_offer(context, opportunity, payload, previous=previous)
 
 
 @router.get("", operation_id="listCRMOpportunityOfferDrafts")
