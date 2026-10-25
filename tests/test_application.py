@@ -38,6 +38,7 @@ def test_openapi_exposes_versioned_route_and_operations() -> None:
     assert "/api/v1/crm/opportunities/{opportunity_id}/offer-drafts/{offer_id}/revisions" in schema["paths"]
     assert "/api/v1/crm/offer-plans" in schema["paths"]
     assert "/api/v1/crm/offer-plans/{plan_id}" in schema["paths"]
+    assert "/api/v1/crm/offer-plans/{plan_id}/decision" in schema["paths"]
     assert "/healthz" in schema["paths"]
     assert "/readyz" in schema["paths"]
 
@@ -101,4 +102,5 @@ def test_marketing_offer_plan_workspace_is_mounted() -> None:
     assert "برنامه‌ریزی پیشنهاد بازاریابی" in page.text
     assert "/api/v1/system/offer-plan-organization-units" in script.text
     assert "/api/v1/crm/offer-plans" in script.text
+    assert "تأیید در CRM" in script.text
     assert "innerHTML" not in script.text
