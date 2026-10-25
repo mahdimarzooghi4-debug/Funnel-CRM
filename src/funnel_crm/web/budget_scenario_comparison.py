@@ -1574,11 +1574,26 @@ _CLIENT_SCRIPT = r"""(() => {
   async function updateLearningWorkItem(workItem, nextStatus, button) {
     button.disabled = true;
     try {
+      const changes = {};
+      if (nextStatus) changes.status = nextStatus;
+      if (workItem.assignmentControl.checked !== workItem.wasAssignedToMe) {
+        changes.assigned_membership_id = workItem.assignmentControl.checked
+          ? workspaceMemberships.get(latestFields.workspace) || null : null;
+      }
+      if (workItem.dueControl.value !== workItem.originalDueValue) {
+        changes.due_at = workItem.dueControl.value
+          ? new Date(workItem.dueControl.value).toISOString() : null;
+      }
+      if (!Object.keys(changes).length) {
+        setStatus("تغییری برای ثبت انتخاب نشده است.", true);
+        button.disabled = false;
+        return;
+      }
       const response = await fetch(`/api/v1/crm/work-items/${encodeURIComponent(workItem.id)}`, {
         method: "PATCH",
         credentials: "same-origin",
         headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Workspace-ID": latestFields.workspace },
-        body: JSON.stringify({ status: nextStatus }),
+        body: JSON.stringify(changes),
       });
       let payload = {};
       try { payload = await response.json(); } catch (_) {}
@@ -1649,6 +1664,10 @@ _CLIENT_SCRIPT = r"""(() => {
       const actionCell = document.createElement("td");
       if (workItem && report.can_update_work_items && ["open", "in_progress"].includes(workItem.status)) {
         const statusSelect = document.createElement("select");
+        const unchangedOption = document.createElement("option");
+        unchangedOption.value = "";
+        unchangedOption.textContent = "بدون تغییر وضعیت";
+        statusSelect.appendChild(unchangedOption);
         const allowedStatuses = workItem.status === "open"
           ? [["in_progress", "شروع کار"], ["completed", "ثبت انجام"]]
           : [["completed", "ثبت انجام"]];
@@ -1658,11 +1677,29 @@ _CLIENT_SCRIPT = r"""(() => {
           option.textContent = label;
           statusSelect.appendChild(option);
         });
+        const assignmentLabel = document.createElement("label");
+        const assignmentControl = document.createElement("input");
+        assignmentControl.type = "checkbox";
+        assignmentControl.checked = workItem.assigned_membership_id === workspaceMemberships.get(workspaceInput.value);
+        assignmentLabel.append(assignmentControl, element("span", "", "واگذاری به خودم"));
+        const dueControl = document.createElement("input");
+        dueControl.type = "datetime-local";
+        if (workItem.due_at) {
+          const dueDate = new Date(workItem.due_at);
+          dueControl.value = Number.isNaN(dueDate.getTime()) ? "" : new Date(dueDate.getTime() - dueDate.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        }
         const saveButton = document.createElement("button");
         saveButton.type = "button";
-        saveButton.textContent = "ثبت وضعیت";
-        saveButton.addEventListener("click", () => updateLearningWorkItem(workItem, statusSelect.value, saveButton));
-        actionCell.append(statusSelect, saveButton);
+        saveButton.textContent = "ثبت تغییرات";
+        const updateContext = {
+          id: workItem.id,
+          assignmentControl,
+          wasAssignedToMe: assignmentControl.checked,
+          dueControl,
+          originalDueValue: dueControl.value,
+        };
+        saveButton.addEventListener("click", () => updateLearningWorkItem(updateContext, statusSelect.value, saveButton));
+        actionCell.append(statusSelect, assignmentLabel, dueControl, saveButton);
       } else {
         actionCell.textContent = "—";
       }

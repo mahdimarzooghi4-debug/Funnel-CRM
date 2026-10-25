@@ -158,7 +158,7 @@ const learningPortfolio = {
     campaign_name: "Spring launch",
     baseline_period_start: "2026-10-01", baseline_period_end: "2026-10-14",
     review: { status: "planned", assessment: "بررسی افت سرنخ", corrective_action: "بررسی داده منبع" },
-    work_item: { id: "work-portfolio-1", status: "open", assigned_membership_id: null, due_at: null },
+    work_item: { id: "work-portfolio-1", status: "open", assigned_membership_id: "membership-other", due_at: null },
   }],
 };
 let reportCampaigns = null;
@@ -349,17 +349,29 @@ async function main() {
   assert.ok(overduePortfolioCall, "overdue filter must be applied by the portfolio API");
   const taskRow = elements.get("learning-portfolio-items").children[0];
   const statusSelect = taskRow.children[8].children[0];
-  const saveTaskStatus = taskRow.children[8].children[1];
-  assert.equal(statusSelect.children[0].value, "in_progress");
+  const selfAssignControl = taskRow.children[8].children[1].children[0];
+  const dueControl = taskRow.children[8].children[2];
+  const saveTaskStatus = taskRow.children[8].children[3];
+  assert.equal(statusSelect.children[1].value, "in_progress");
   statusSelect.value = "in_progress";
+  dueControl.value = "2026-10-26T12:00";
   await saveTaskStatus.dispatch("click");
   const taskStatusCall = calls.find((call) => call.path === "/api/v1/crm/work-items/work-portfolio-1");
   assert.ok(taskStatusCall);
   assert.equal(taskStatusCall.options.method, "PATCH");
-  assert.deepEqual(JSON.parse(taskStatusCall.options.body), { status: "in_progress" });
+  assert.deepEqual(JSON.parse(taskStatusCall.options.body), {
+    status: "in_progress",
+    due_at: new Date("2026-10-26T12:00").toISOString(),
+  });
+  const refreshedTaskRow = elements.get("learning-portfolio-items").children[0];
+  const assignmentCell = refreshedTaskRow.children[8];
+  assignmentCell.children[1].children[0].checked = true;
+  await assignmentCell.children[3].dispatch("click");
+  const assignmentCall = calls.filter((call) => call.path === "/api/v1/crm/work-items/work-portfolio-1")[1];
+  assert.deepEqual(JSON.parse(assignmentCall.options.body), { assigned_membership_id: "membership-1" });
   assert.deepEqual(elements.get("learning-portfolio-items").children[0].children.map((cell) => cell.textContent), [
     "Spring launch", "2026-10-01 تا 2026-10-14", "در انتظار پیگیری نتیجه",
-    "بررسی افت سرنخ", "بررسی داده منبع", "باز", "واگذارنشده", "—", "",
+    "بررسی افت سرنخ", "بررسی داده منبع", "باز", "دارای مسئول", "—", "",
   ]);
   const learningPortfolioCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?"));
   assert.ok(learningPortfolioCall);
