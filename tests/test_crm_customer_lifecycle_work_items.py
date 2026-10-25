@@ -203,6 +203,45 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         assert readout_data["follow_up_outcome_count_by_code"]["contact_made"] == 1
         assert "does not establish" in readout_data["interpretation"]
 
+        occurred_at = datetime.fromisoformat(outcome["occurred_at"])
+        performance = await client.get(
+            "/api/v1/crm/work-items/lifecycle-review-performance",
+            headers=headers,
+            params={
+                "organization_unit_id": str(root_id),
+                "start_at": (occurred_at - timedelta(minutes=1)).isoformat(),
+                "end_at": (occurred_at + timedelta(minutes=1)).isoformat(),
+            },
+        )
+        assert performance.status_code == 200, performance.text
+        performance_data = performance.json()
+        assert performance_data["totals"] == {
+            "outcome_count": 1,
+            "work_item_count": 1,
+            "profile_count": 1,
+        }
+        assert performance_data["breakdown"] == [{
+            "recorded_by_membership_id": outcome["recorded_by_membership_id"],
+            "channel": "phone",
+            "outcome_code": "contact_made",
+            "outcome_count": 1,
+            "work_item_count": 1,
+            "profile_count": 1,
+        }]
+        assert performance_data["window"]["end_at_is_exclusive"] is True
+        assert "causal effectiveness" in performance_data["interpretation"]
+
+        invalid_window = await client.get(
+            "/api/v1/crm/work-items/lifecycle-review-performance",
+            headers=headers,
+            params={
+                "organization_unit_id": str(root_id),
+                "start_at": occurred_at.isoformat(),
+                "end_at": occurred_at.isoformat(),
+            },
+        )
+        assert invalid_window.status_code == 422
+
         duplicate_ids = await client.post(
             endpoint,
             headers=headers,

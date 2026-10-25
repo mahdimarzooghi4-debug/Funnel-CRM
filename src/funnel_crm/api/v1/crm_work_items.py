@@ -452,6 +452,131 @@ async def get_lifecycle_review_readout(
         ),
     }
 
+
+@router.get(
+    "/lifecycle-review-performance",
+    response_model=dict,
+    operation_id="getCRMLifecycleReviewPerformance",
+)
+async def get_lifecycle_review_performance(
+    organization_unit_id: UUID,
+    start_at: datetime,
+    end_at: datetime,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    """Report explicit follow-up outcomes by recorder, channel, and outcome code."""
+    if start_at.tzinfo is None or end_at.tzinfo is None:
+        raise HTTPException(status_code=422, detail="start_at and end_at must include timezones")
+    if start_at >= end_at:
+        raise HTTPException(status_code=422, detail="start_at must be earlier than end_at")
+
+    tenant_id = context.access.tenant_id
+    await _require_permission(context, "crm.work_item:view", organization_unit_id)
+    lifecycle_item = select(AuditEvent.event_id).where(
+        AuditEvent.tenant_id == tenant_id,
+        AuditEvent.target_type == "crm_work_item",
+        AuditEvent.target_key == cast(CRMWorkItem.id, String),
+        AuditEvent.action_key == "crm_work_item.created_from_lifecycle_review",
+    ).exists()
+    filters = (
+        CRMWorkItemOutcome.tenant_id == tenant_id,
+        CRMWorkItemOutcome.organization_unit_id == organization_unit_id,
+        CRMWorkItemOutcome.occurred_at >= start_at,
+        CRMWorkItemOutcome.occurred_at < end_at,
+        CRMWorkItem.tenant_id == tenant_id,
+        CRMWorkItem.organization_unit_id == organization_unit_id,
+        lifecycle_item,
+    )
+    total_outcomes, work_item_count, profile_count = (await context.session.execute(
+        select(
+            func.count(CRMWorkItemOutcome.id),
+            func.count(func.distinct(CRMWorkItemOutcome.work_item_id)),
+            func.count(func.distinct(CRMWorkItemOutcome.profile_id)),
+        )
+        .select_from(CRMWorkItemOutcome)
+        .join(
+            CRMWorkItem,
+            (CRMWorkItem.tenant_id == CRMWorkItemOutcome.tenant_id)
+            & (CRMWorkItem.id == CRMWorkItemOutcome.work_item_id),
+        )
+        .where(*filters)
+    )).one()
+    rows = (await context.session.execute(
+        select(
+            CRMWorkItemOutcome.recorded_by_membership_id,
+            CRMWorkItemOutcome.channel,
+            CRMWorkItemOutcome.outcome_code,
+            func.count(CRMWorkItemOutcome.id).label("outcome_count"),
+            func.count(func.distinct(CRMWorkItemOutcome.work_item_id)).label("work_item_count"),
+            func.count(func.distinct(CRMWorkItemOutcome.profile_id)).label("profile_count"),
+        )
+        .select_from(CRMWorkItemOutcome)
+        .join(
+            CRMWorkItem,
+            (CRMWorkItem.tenant_id == CRMWorkItemOutcome.tenant_id)
+            & (CRMWorkItem.id == CRMWorkItemOutcome.work_item_id),
+        )
+        .where(*filters)
+        .group_by(
+            CRMWorkItemOutcome.recorded_by_membership_id,
+            CRMWorkItemOutcome.channel,
+            CRMWorkItemOutcome.outcome_code,
+        )
+        .order_by(
+            CRMWorkItemOutcome.recorded_by_membership_id,
+            CRMWorkItemOutcome.channel,
+            CRMWorkItemOutcome.outcome_code,
+        )
+    )).all()
+    breakdown = [
+        {
+            "recorded_by_membership_id": str(row.recorded_by_membership_id),
+            "channel": row.channel,
+            "outcome_code": row.outcome_code,
+            "outcome_count": row.outcome_count,
+            "work_item_count": row.work_item_count,
+            "profile_count": row.profile_count,
+        }
+        for row in rows
+    ]
+    context.session.add(AuditEvent(
+        tenant_id=tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_work_item.lifecycle_review_performance_viewed",
+        target_type="crm_work_item_collection",
+        target_key=str(organization_unit_id),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "start_at": start_at.isoformat(),
+            "end_at": end_at.isoformat(),
+            "outcome_count": total_outcomes,
+            "breakdown_count": len(breakdown),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {
+        "organization_unit_id": str(organization_unit_id),
+        "window": {
+            "start_at": start_at.isoformat(),
+            "end_at": end_at.isoformat(),
+            "end_at_is_exclusive": True,
+        },
+        "totals": {
+            "outcome_count": total_outcomes,
+            "work_item_count": work_item_count,
+            "profile_count": profile_count,
+        },
+        "breakdown": breakdown,
+        "interpretation": (
+            "These are human-recorded follow-up outcomes by time, recorder, and channel. "
+            "They do not establish causal effectiveness or customer sentiment."
+        ),
+    }
+
 @router.get("/{item_id}", response_model=WorkItemRead,
             operation_id="getCRMWorkItem")
 async def get_work_item(
