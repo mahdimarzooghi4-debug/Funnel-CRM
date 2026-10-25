@@ -69,7 +69,8 @@ const ids = [
   "target-variance-summary-note", "target-variance-summary",
   "campaign-target-variance-note", "campaign-target-variance",
   "variance-review-panel", "variance-review-assessment", "variance-review-action",
-  "save-variance-review", "cancel-variance-review",
+  "save-variance-review", "cancel-variance-review", "variance-review-next-step",
+  "variance-review-created-note", "create-variance-review-work-item",
   "target-period-comparison-note", "target-period-comparison",
   "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
 ];
@@ -78,7 +79,9 @@ elements.get("load-scenarios").tagName = "BUTTON";
 elements.get("compare").tagName = "BUTTON";
 elements.get("save-variance-review").tagName = "BUTTON";
 elements.get("cancel-variance-review").tagName = "BUTTON";
+elements.get("create-variance-review-work-item").tagName = "BUTTON";
 elements.get("variance-review-panel").hidden = true;
+elements.get("variance-review-next-step").hidden = true;
 elements.get("period-start").value = "2026-10-01";
 elements.get("period-end").value = "2026-10-14";
 
@@ -158,6 +161,8 @@ const fetch = async (path, options = {}) => {
     payload = query.get("period_start") === "2026-09-17" ? previousTargetPortfolio : targetPortfolio;
   } else if (path === "/api/v1/crm/marketing-learning/reviews" && options.method === "POST") {
     payload = { id: "review-1", status: "planned" };
+  } else if (path === "/api/v1/crm/marketing-learning/reviews/review-1/work-item" && options.method === "POST") {
+    payload = { created: true, work_item: { id: "work-1", status: "open" } };
   } else if (path.startsWith("/api/v1/crm/budget-scenarios/compare/performance-context?")) {
     const query = new URLSearchParams(path.split("?")[1]);
     if (query.get("period_start") === "2026-09-17") {
@@ -389,7 +394,8 @@ async function main() {
   assert.ok(elements.get("variance-review-assessment").value.includes("فاصله: محاسبه نشده"));
   elements.get("variance-review-action").value = "بررسی منبع دادهٔ سرنخ";
   await elements.get("save-variance-review").dispatch("click");
-  assert.equal(elements.get("variance-review-panel").hidden, true);
+  assert.equal(elements.get("variance-review-panel").hidden, false);
+  assert.equal(elements.get("variance-review-next-step").hidden, false);
   assert.equal(elements.get("status").textContent,
     "بررسی مدیریتی ثبت شد؛ هیچ بودجه یا اقدامی به‌صورت خودکار تغییر نکرد.");
   const reviewCall = calls.find((call) => call.path === "/api/v1/crm/marketing-learning/reviews");
@@ -401,6 +407,18 @@ async function main() {
     campaign_id: "campaign-1", target_plan_id: "target-plan-1", experiment_id: null,
     assessment: elements.get("variance-review-assessment").value,
     corrective_action: "بررسی منبع دادهٔ سرنخ",
+  });
+  await elements.get("create-variance-review-work-item").dispatch("click");
+  assert.equal(elements.get("status").textContent, "کار پیگیری CRM آمادهٔ واگذاری است.");
+  assert.equal(elements.get("variance-review-created-note").textContent,
+    "کار پیگیری در صف CRM ایجاد شد؛ مسئول و موعد هنوز تعیین نشده‌اند.");
+  const workItemCall = calls.find((call) => call.path.endsWith("/reviews/review-1/work-item"));
+  assert.ok(workItemCall);
+  assert.equal(workItemCall.options.method, "POST");
+  assert.equal(workItemCall.options.credentials, "same-origin");
+  assert.equal(workItemCall.options.headers["X-Workspace-ID"], workspace.id);
+  assert.deepEqual(JSON.parse(workItemCall.options.body), {
+    assigned_membership_id: null, due_at: null, priority: "normal",
   });
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
     "formula-like labels must be neutralized and CSV-escaped");
