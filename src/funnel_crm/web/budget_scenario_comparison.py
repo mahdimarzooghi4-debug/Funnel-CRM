@@ -65,7 +65,7 @@ _PAGE = """<!doctype html>
   <script src="/assets/budget-scenario-comparison.js" defer></script>
 </head>
 <body>
-  <header><strong>FUNNEL CRM</strong></header>
+  <header><strong>FUNNEL CRM</strong> · <a href="/workspace/crm-activity-capture" style="color:#fff">ثبت فعالیت میدانی</a></header>
   <main>
     <div class="intro">
       <div>
