@@ -160,6 +160,8 @@ async def test_crm_permission_requires_matching_action_and_inherited_org_scope(
                 "crm.commission:view",
                 "crm.commission:manage",
                 "crm.commission:export",
+                "crm.catalog:view",
+                "crm.catalog:manage",
             }
         )
 
