@@ -202,12 +202,79 @@ _CLIENT_SCRIPT = r"""(() => {
   byId("workspace-id").addEventListener("change", refresh);
   window.addEventListener("online", updateConnection);
   window.addEventListener("offline", updateConnection);
+  if (window.isSecureContext && navigator.serviceWorker) {
+    navigator.serviceWorker.register("/assets/crm-activity-capture-sw.js", { scope: "/" })
+      .catch(() => { byId("connection-status").textContent += " بارگذاری آفلاین صفحه برای دفعات بعد فعال نشد."; });
+  }
   byId("occurred-at").value = localInputTime();
   const requestedWorkspace = new URLSearchParams(window.location.search).get("workspace_id");
   if (requestedWorkspace) byId("workspace-id").value = requestedWorkspace;
   refresh();
   updateConnection();
 })();"""
+
+_SERVICE_WORKER_SCRIPT = r"""const CACHE_NAME = "funnel-crm-activity-shell-v1";
+const PAGE_PATH = "/workspace/crm-activity-capture";
+const SCRIPT_PATH = "/assets/crm-activity-capture.js";
+const SHELL = [PAGE_PATH, SCRIPT_PATH];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    for (const path of SHELL) {
+      const response = await fetch(path, { cache: "reload", credentials: "same-origin" });
+      if (!response.ok) throw new Error("Could not cache the offline activity shell");
+      await cache.put(new URL(path, self.location.origin), response.clone());
+    }
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    const names = await caches.keys();
+    await Promise.all(names.filter((name) => name.startsWith("funnel-crm-activity-shell-") && name !== CACHE_NAME)
+      .map((name) => caches.delete(name)));
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener("fetch", (event) => {
+  const request = event.request;
+  const url = new URL(request.url);
+  if (request.method !== "GET" || url.origin !== self.location.origin) return;
+  if (url.pathname === PAGE_PATH && request.mode === "navigate") {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const key = new URL(PAGE_PATH, self.location.origin);
+      try {
+        const response = await fetch(request);
+        if (response.ok) await cache.put(key, response.clone());
+        return response;
+      } catch (_) {
+        return await cache.match(key) || new Response("برای استفادهٔ آفلاین، صفحه را یک‌بار هنگام اتصال باز کنید.", {
+          status: 503, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+        });
+      }
+    })());
+    return;
+  }
+  if (url.pathname === SCRIPT_PATH) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const key = new URL(SCRIPT_PATH, self.location.origin);
+      const cached = await cache.match(key);
+      const update = fetch(request).then(async (response) => {
+        if (response.ok) await cache.put(key, response.clone());
+        return response;
+      }).catch(() => null);
+      if (cached) { event.waitUntil(update); return cached; }
+      return await update || new Response("اسکریپت ثبت آفلاین در دسترس نیست.", {
+        status: 503, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    })());
+  }
+});"""
 
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
@@ -231,4 +298,17 @@ async def crm_activity_capture_script() -> Response:
         _CLIENT_SCRIPT,
         media_type="application/javascript",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/assets/crm-activity-capture-sw.js")
+async def crm_activity_capture_service_worker() -> Response:
+    return Response(
+        _SERVICE_WORKER_SCRIPT,
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache",
+            "Service-Worker-Allowed": "/",
+            "X-Content-Type-Options": "nosniff",
+        },
     )

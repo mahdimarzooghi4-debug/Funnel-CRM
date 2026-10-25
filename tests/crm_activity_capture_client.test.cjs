@@ -71,7 +71,7 @@ const document = {
   createElement: (tag) => new Element(tag),
 };
 const code = fs.readFileSync("src/funnel_crm/web/crm_activity_capture.py", "utf8")
-  .split('_CLIENT_SCRIPT = r"""')[1].split('"""\n\n_SECURITY_HEADERS')[0];
+  .split('_CLIENT_SCRIPT = r"""')[1].split('"""\n\n_SERVICE_WORKER_SCRIPT')[0];
 assert.ok(code);
 vm.runInNewContext(code, { window, navigator, document, fetch, crypto, URLSearchParams, encodeURIComponent, setTimeout, Date, structuredClone });
 
