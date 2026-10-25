@@ -197,6 +197,17 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         }
         assert Decimal(revised_by_currency[(str(seller_id), "USD")] ["commission_amount"]) == Decimal("10.200000")
 
+        plan_versions = await client.get(
+            f"/api/v1/crm/commission-plans/{plan_id}/versions", headers=headers
+        )
+        assert plan_versions.status_code == 200, plan_versions.text
+        versions_by_number = {
+            item["version"]: item for item in plan_versions.json()["items"]
+        }
+        assert set(versions_by_number) == {1, 2}
+        assert Decimal(versions_by_number[1]["rate_percent"]) == Decimal("10.0000")
+        assert Decimal(versions_by_number[2]["rate_percent"]) == Decimal("12.0000")
+
         history = await client.get(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations", headers=headers
         )

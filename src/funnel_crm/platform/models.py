@@ -2171,6 +2171,36 @@ class CRMCommissionPlan(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
+class CRMCommissionPlanVersion(Base):
+    """Immutable rule values for one version of a commission plan."""
+
+    __tablename__ = "crm_commission_plan_versions"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_crm_commission_plan_versions_version_positive"),
+        CheckConstraint("rate_percent > 0 AND rate_percent <= 100", name="ck_crm_commission_plan_versions_rate"),
+        ForeignKeyConstraint(["tenant_id", "plan_id"],
+            ["crm_commission_plans.tenant_id", "crm_commission_plans.id"],
+            name="fk_crm_commission_plan_versions_plan_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "seller_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plan_versions_seller_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "changed_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plan_versions_actor_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_commission_plan_versions_tenant_plan", "tenant_id", "plan_id", "version"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    changed_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
 class CRMCommissionCalculation(Base):
     """Immutable calculation snapshot; it does not approve or pay commission."""
 
@@ -2182,6 +2212,9 @@ class CRMCommissionCalculation(Base):
         ForeignKeyConstraint(["tenant_id", "plan_id"],
             ["crm_commission_plans.tenant_id", "crm_commission_plans.id"],
             name="fk_crm_commission_calculations_plan_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "plan_id", "plan_version"],
+            ["crm_commission_plan_versions.tenant_id", "crm_commission_plan_versions.plan_id", "crm_commission_plan_versions.version"],
+            name="fk_crm_commission_calculations_plan_version_same_tenant", ondelete="RESTRICT"),
         ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
             ["workspace_memberships.tenant_id", "workspace_memberships.id"],
             name="fk_crm_commission_calculations_creator_same_tenant", ondelete="CASCADE"),

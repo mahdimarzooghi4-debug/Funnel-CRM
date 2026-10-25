@@ -15,6 +15,7 @@ from funnel_crm.platform.models import (
     CRMCommissionCalculation,
     CRMCommissionCalculationRow,
     CRMCommissionPlan,
+    CRMCommissionPlanVersion,
     CRMProductCommerceEvent,
     WorkspaceMembership,
 )
@@ -84,6 +85,12 @@ async def create_plan(payload: CommissionPlanCreate, context: TenantSessionConte
         is_active=True, created_by_membership_id=context.access.membership_id,
     )
     context.session.add(plan)
+    context.session.add(CRMCommissionPlanVersion(
+        tenant_id=context.access.tenant_id, plan_id=plan.id, version=1,
+        seller_membership_id=plan.seller_membership_id, name=plan.name,
+        rate_percent=plan.rate_percent, is_active=plan.is_active,
+        changed_by_membership_id=context.access.membership_id,
+    ))
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id, actor_kind="user",
         actor_identity_id=context.access.identity_id,
@@ -132,6 +139,12 @@ async def update_plan(
     for key, value in changes.items():
         setattr(plan, key, value)
     plan.version += 1
+    context.session.add(CRMCommissionPlanVersion(
+        tenant_id=context.access.tenant_id, plan_id=plan.id, version=plan.version,
+        seller_membership_id=plan.seller_membership_id, name=plan.name,
+        rate_percent=plan.rate_percent, is_active=plan.is_active,
+        changed_by_membership_id=context.access.membership_id,
+    ))
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id, actor_kind="user",
         actor_identity_id=context.access.identity_id,
@@ -145,6 +158,32 @@ async def update_plan(
     ))
     await context.session.flush()
     return _plan_json(plan)
+
+
+@router.get("/{plan_id}/versions", operation_id="listCRMCommissionPlanVersions")
+async def list_plan_versions(
+    plan_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    plan = await context.session.scalar(select(CRMCommissionPlan).where(
+        CRMCommissionPlan.tenant_id == context.access.tenant_id,
+        CRMCommissionPlan.id == plan_id,
+    ))
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Commission plan not found")
+    await _authorized(context, "crm.commission:view", plan.organization_unit_id)
+    versions = await context.session.scalars(select(CRMCommissionPlanVersion).where(
+        CRMCommissionPlanVersion.tenant_id == context.access.tenant_id,
+        CRMCommissionPlanVersion.plan_id == plan_id,
+    ).order_by(CRMCommissionPlanVersion.version.desc()).limit(100))
+    return {"items": [{
+        "plan_id": item.plan_id, "version": item.version,
+        "seller_membership_id": item.seller_membership_id,
+        "name": item.name, "rate_percent": item.rate_percent,
+        "is_active": item.is_active,
+        "changed_by_membership_id": item.changed_by_membership_id,
+        "created_at": item.created_at,
+    } for item in versions]}
 
 
 @router.get("", operation_id="listCRMCommissionPlans")
