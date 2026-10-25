@@ -2395,8 +2395,6 @@ class CRMOpportunityOfferDraftLine(Base):
         CheckConstraint("unit_amount >= 0", name="ck_crm_opportunity_offer_draft_lines_amount"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_opportunity_offer_draft_lines_currency"),
         ForeignKeyConstraint(["tenant_id", "offer_id"], ["crm_opportunity_offer_drafts.tenant_id", "crm_opportunity_offer_drafts.id"], name="fk_crm_opportunity_offer_draft_lines_offer", ondelete="CASCADE"),
-        ForeignKeyConstraint(["tenant_id", "catalog_item_id"], ["crm_product_catalog_items.tenant_id", "crm_product_catalog_items.id"], name="fk_crm_opportunity_offer_draft_lines_catalog", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["tenant_id", "catalog_item_id", "catalog_price_version"], ["crm_product_catalog_price_versions.tenant_id", "crm_product_catalog_price_versions.item_id", "crm_product_catalog_price_versions.version"], name="fk_crm_opportunity_offer_draft_lines_price", ondelete="RESTRICT"),
         Index("ix_crm_opportunity_offer_draft_lines_tenant_offer", "tenant_id", "offer_id", "line_number"),
     )
 

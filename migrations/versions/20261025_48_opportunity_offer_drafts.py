@@ -51,8 +51,6 @@ def upgrade() -> None:
         sa.CheckConstraint("unit_amount >= 0", name="ck_crm_opportunity_offer_draft_lines_amount"),
         sa.CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_opportunity_offer_draft_lines_currency"),
         sa.ForeignKeyConstraint(["tenant_id", "offer_id"], ["crm_opportunity_offer_drafts.tenant_id", "crm_opportunity_offer_drafts.id"], name="fk_crm_opportunity_offer_draft_lines_offer", ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id", "catalog_item_id"], ["crm_product_catalog_items.tenant_id", "crm_product_catalog_items.id"], name="fk_crm_opportunity_offer_draft_lines_catalog", ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["tenant_id", "catalog_item_id", "catalog_price_version"], ["crm_product_catalog_price_versions.tenant_id", "crm_product_catalog_price_versions.item_id", "crm_product_catalog_price_versions.version"], name="fk_crm_opportunity_offer_draft_lines_price", ondelete="RESTRICT"),
     )
     op.create_index("ix_crm_opportunity_offer_draft_lines_tenant_offer", "crm_opportunity_offer_draft_lines", ["tenant_id", "offer_id", "line_number"])
     _rls("crm_opportunity_offer_drafts")
