@@ -420,6 +420,21 @@ async def get_learning_portfolio(
         )).all()
         task_counts = {key: int(value) for key, value in task_status_rows}
         linked_count = sum(task_counts.values())
+        overdue_count = int(await context.session.scalar(
+            select(func.count(CRMWorkItem.id))
+            .join(CRMMarketingLearningReview,
+                  (CRMMarketingLearningReview.tenant_id == CRMWorkItem.tenant_id)
+                  & (CRMMarketingLearningReview.organization_unit_id == CRMWorkItem.organization_unit_id)
+                  & (CRMMarketingLearningReview.campaign_id == CRMWorkItem.campaign_id)
+                  & (CRMMarketingLearningReview.id == CRMWorkItem.source_learning_review_id))
+            .join(CRMMarketingCampaignTargetPlan,
+                  (CRMMarketingCampaignTargetPlan.tenant_id == CRMMarketingLearningReview.tenant_id)
+                  & (CRMMarketingCampaignTargetPlan.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+                  & (CRMMarketingCampaignTargetPlan.campaign_id == CRMMarketingLearningReview.campaign_id)
+                  & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
+            .where(*filters, CRMWorkItem.status.in_(("open", "in_progress")),
+                   CRMWorkItem.due_at.is_not(None), CRMWorkItem.due_at < datetime.now(timezone.utc))
+        ) or 0)
         work_item_counts = {
             "linked": linked_count,
             "without_work_item": max(total - linked_count, 0),
@@ -427,6 +442,7 @@ async def get_learning_portfolio(
             "in_progress": task_counts.get("in_progress", 0),
             "completed": task_counts.get("completed", 0),
             "cancelled": task_counts.get("cancelled", 0),
+            "overdue": overdue_count,
         }
     rows = (await context.session.execute(
         base.order_by(CRMMarketingLearningReview.status, CRMMarketingLearningReview.updated_at.desc(),

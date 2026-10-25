@@ -146,7 +146,7 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert [row["id"] for row in task_list.json()] == [task_id]
         task_progress = await client.patch(
             f"/api/v1/crm/work-items/{task_id}", headers=headers,
-            json={"status": "in_progress"},
+            json={"status": "in_progress", "due_at": "2026-10-20T09:00:00+03:30"},
         )
         assert task_progress.status_code == 200, task_progress.text
 
@@ -172,7 +172,7 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert portfolio_body["items"][0]["work_item"]["status"] == "in_progress"
         assert portfolio_body["work_item_counts"] == {
             "linked": 1, "without_work_item": 0, "open": 0,
-            "in_progress": 1, "completed": 0, "cancelled": 0,
+            "in_progress": 1, "completed": 0, "cancelled": 0, "overdue": 1,
         }
 
         missing_data = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
@@ -216,6 +216,7 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert evaluated_body["items"][0]["follow_up_period_start"] == "2026-10-18"
         assert evaluated_body["items"][0]["work_item"]["status"] == "completed"
         assert evaluated_body["work_item_counts"]["completed"] == 1
+        assert evaluated_body["work_item_counts"]["overdue"] == 0
 
         repeated = await client.patch(f"{base}/{review_id}/evaluation", headers=headers, json={
             "follow_up_target_plan_id": str(follow_up_id),
