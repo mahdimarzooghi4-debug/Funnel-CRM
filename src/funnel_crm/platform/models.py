@@ -2370,9 +2370,12 @@ class CRMOpportunityOfferDraft(Base):
     __tablename__ = "crm_opportunity_offer_drafts"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_crm_opportunity_offer_drafts_tenant_id"),
+        UniqueConstraint("tenant_id", "previous_revision_id", name="uq_crm_opportunity_offer_drafts_previous_revision"),
         CheckConstraint("status = 'draft'", name="ck_crm_opportunity_offer_drafts_status"),
+        CheckConstraint("revision_number >= 1", name="ck_crm_opportunity_offer_drafts_revision_number"),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_opportunity_offer_drafts_workspace", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "opportunity_id"], ["crm_opportunities.tenant_id", "crm_opportunities.id"], name="fk_crm_opportunity_offer_drafts_opportunity", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "previous_revision_id"], ["crm_opportunity_offer_drafts.tenant_id", "crm_opportunity_offer_drafts.id"], name="fk_crm_opportunity_offer_drafts_previous_revision", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_opportunity_offer_drafts_creator", ondelete="CASCADE"),
         Index("ix_crm_opportunity_offer_drafts_tenant_opportunity", "tenant_id", "opportunity_id", "created_at"),
     )
@@ -2381,6 +2384,8 @@ class CRMOpportunityOfferDraft(Base):
     tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     opportunity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default=text("'draft'"))
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    previous_revision_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
