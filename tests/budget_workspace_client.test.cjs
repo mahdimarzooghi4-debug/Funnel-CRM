@@ -187,8 +187,14 @@ const fetch = async (path, options = {}) => {
   } else if (path === "/api/v1/crm/marketing-learning/reviews/review-portfolio-1" && options.method === "GET") {
     payload = {
       review: { ...learningPortfolio.items[0].review },
-      baseline: { period_start: "2026-10-01", period_end: "2026-10-14", metrics: { leads: { target: 12, actual: 8, currency: null } } },
-      follow_up: { period_start: "2026-10-15", period_end: "2026-10-28", metrics: { leads: { target: 15, actual: 13, currency: null } } },
+      baseline: { period_start: "2026-10-01", period_end: "2026-10-14", metrics: {
+        leads: { target: 12, actual: 8, currency: null, observed_days: 7, period_days: 14, recorded_day_coverage_percent: "50.00" },
+        conversions: { target: 2, actual: 0, currency: null, observed_days: 0, period_days: 14, recorded_day_coverage_percent: "0.00" },
+      } },
+      follow_up: { period_start: "2026-10-15", period_end: "2026-10-28", metrics: {
+        leads: { target: 15, actual: 13, currency: null, observed_days: 14, period_days: 14, recorded_day_coverage_percent: "100.00" },
+        conversions: { target: 3, actual: 2, currency: null, observed_days: 4, period_days: 14, recorded_day_coverage_percent: "28.57" },
+      } },
     };
   } else if (path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?") && (options.method || "GET") === "GET") {
     const query = new URLSearchParams(path.split("?")[1]);
@@ -409,8 +415,15 @@ async function main() {
   const evidenceCall = calls.find((call) => call.path === "/api/v1/crm/marketing-learning/reviews/review-portfolio-1" && call.options.method === "GET");
   assert.ok(evidenceCall);
   const evidencePanel = evidenceRow.children[8].children[5];
-  const followUpActual = evidencePanel.children[2].children[1].children[0].children[4].textContent;
+  const evidenceTableRows = evidencePanel.children[2].children[1].children;
+  const leadEvidence = evidenceTableRows[0];
+  const followUpActual = leadEvidence.children[4].textContent;
   assert.ok(["13", "۱۳"].some((digits) => followUpActual.includes(digits)));
+  assert.ok(leadEvidence.children[5].textContent.includes("+"));
+  assert.ok(leadEvidence.children[6].textContent.includes("+"));
+  assert.ok(["62", "۶۲"].some((digits) => leadEvidence.children[6].textContent.includes(digits)));
+  assert.ok(leadEvidence.children[7].textContent.includes("7 از 14 روز"));
+  assert.ok(evidenceTableRows[1].children[6].textContent.includes("مبنای صفر"));
   assert.ok(evidencePanel.children[5].textContent.includes("رابطهٔ علّی را اثبات نمی‌کند"));
   const learningPortfolioCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?"));
   assert.ok(learningPortfolioCall);
