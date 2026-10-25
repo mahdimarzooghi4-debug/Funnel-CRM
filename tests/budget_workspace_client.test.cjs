@@ -66,6 +66,7 @@ const ids = [
   "period-comparison-period", "period-comparison", "channel-period-comparison", "unit-cost-comparison",
   "target-outcomes-note", "target-outcomes",
   "channel-target-summary-note", "channel-target-summary",
+  "target-variance-summary-note", "target-variance-summary",
   "target-period-comparison-note", "target-period-comparison",
   "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
 ];
@@ -100,6 +101,17 @@ const targetPortfolio = {
   grouped_by: "channel",
   campaign_count: 1,
   campaign_list_truncated: false,
+  groups: [{
+    key: "email",
+    campaign_count: 1,
+    metric_variances: {
+      leads: {
+        targeted_campaign_count: 1, complete_campaign_count: 0, incomplete_campaign_count: 1,
+        target_total: 10, complete_actual_total: 0, complete_campaign_target_total: 0,
+        complete_variance: 0, incomplete_target_total: 10, partial_actual_total: 12,
+      },
+    },
+  }],
   campaigns: [{
     campaign_id: "campaign-1",
     target_plan_id: "target-plan-1",
@@ -242,6 +254,10 @@ async function main() {
     ["email", "سرنخ", "۱", "۱", "۰", "۰", "۰"],
   ]);
   assert.match(elements.get("channel-target-summary-note").textContent, /وضعیت‌های نامشخص/);
+  assert.deepEqual(elements.get("target-variance-summary").children.map((row) => row.children.map((cell) => cell.textContent)), [
+    ["email", "سرنخ", "۱", "۰ / ۱", "۱۰", "نامشخص", "نامشخص", "۱۰", "۱۲"],
+  ]);
+  assert.match(elements.get("target-variance-summary-note").textContent, /علت را ثابت نمی‌کند/);
   assert.deepEqual(elements.get("target-period-comparison").children.map((row) =>
     row.children.map((cell) => cell.textContent)), [
     ["email", "تبدیل", "دادهٔ کافی ثبت نشده", "دادهٔ کافی ثبت نشده", "۱"],
@@ -343,6 +359,8 @@ async function main() {
   assert.ok(csv.includes('"وضعیت هدف کمپین"'));
   assert.ok(csv.includes('وضعیت: هدف محقق‌شده'));
   assert.ok(csv.includes('"خلاصه هدف کانال"'));
+  assert.ok(csv.includes('"فاصله هدف و عملکرد"'));
+  assert.ok(csv.includes('هدف دوره ناقص: 10؛ عملکرد ناقص ثبت‌شده: 12'));
   assert.ok(csv.includes('"محقق‌شده: 1؛ محقق‌نشده: 0؛ داده ناکافی: 0؛ نامشخص: 0"'));
   assert.ok(csv.includes('"تغییر وضعیت هدف"'));
   assert.ok(csv.includes('هدف محقق‌نشده ← هدف محقق‌شده'));
