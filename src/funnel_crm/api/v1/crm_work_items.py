@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import cast, func, select, String
+from sqlalchemy.orm import aliased
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import has_crm_permission
@@ -789,15 +790,17 @@ async def list_lifecycle_follow_up_action_queue(
     channel: ActivityChannel | None = None,
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    include_created: bool = False,
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> dict:
-    """List active-customer follow-up outcomes that have not yet become a task."""
+    """List follow-up outcomes, optionally including the task created from each outcome."""
     tenant_id = context.access.tenant_id
     await _require_permission(context, "crm.work_item:view", organization_unit_id)
-    has_follow_up_task = select(CRMWorkItem.id).where(
-        CRMWorkItem.tenant_id == tenant_id,
-        CRMWorkItem.organization_unit_id == organization_unit_id,
-        CRMWorkItem.source_outcome_id == CRMWorkItemOutcome.id,
+    follow_up_task = aliased(CRMWorkItem)
+    has_follow_up_task = select(follow_up_task.id).where(
+        follow_up_task.tenant_id == tenant_id,
+        follow_up_task.organization_unit_id == organization_unit_id,
+        follow_up_task.source_outcome_id == CRMWorkItemOutcome.id,
     ).correlate(CRMWorkItemOutcome).exists()
     stmt = (
         select(
@@ -812,11 +815,22 @@ async def list_lifecycle_follow_up_action_queue(
             CRMWorkItem.title.label("source_work_item_title"),
             CRMWorkItem.status.label("source_work_item_status"),
             CRMProfile.display_name.label("customer_name"),
+            follow_up_task.id.label("follow_up_task_id"),
+            follow_up_task.status.label("follow_up_task_status"),
+            follow_up_task.assigned_membership_id.label("follow_up_assigned_membership_id"),
+            follow_up_task.due_at.label("follow_up_due_at"),
+            follow_up_task.priority.label("follow_up_priority"),
         )
         .join(
             CRMWorkItem,
             (CRMWorkItem.tenant_id == CRMWorkItemOutcome.tenant_id)
             & (CRMWorkItem.id == CRMWorkItemOutcome.work_item_id),
+        )
+        .outerjoin(
+            follow_up_task,
+            (follow_up_task.tenant_id == CRMWorkItemOutcome.tenant_id)
+            & (follow_up_task.source_outcome_id == CRMWorkItemOutcome.id)
+            & (follow_up_task.organization_unit_id == organization_unit_id),
         )
         .join(
             CRMProfile,
@@ -831,7 +845,7 @@ async def list_lifecycle_follow_up_action_queue(
             CRMProfile.archived_at.is_(None),
             CRMProfile.merged_into_profile_id.is_(None),
             CRMWorkItemOutcome.outcome_code.in_(("callback_requested", "no_contact")),
-            ~has_follow_up_task,
+            *([] if include_created else [~has_follow_up_task]),
         )
     )
     if outcome_code is not None:
@@ -858,6 +872,11 @@ async def list_lifecycle_follow_up_action_queue(
             "notes": row.notes,
             "occurred_at": row.occurred_at.isoformat(),
             "recorded_by_membership_id": str(row.recorded_by_membership_id),
+            "follow_up_task_id": str(row.follow_up_task_id) if row.follow_up_task_id else None,
+            "follow_up_task_status": row.follow_up_task_status,
+            "follow_up_assigned_membership_id": (str(row.follow_up_assigned_membership_id) if row.follow_up_assigned_membership_id else None),
+            "follow_up_due_at": row.follow_up_due_at.isoformat() if row.follow_up_due_at else None,
+            "follow_up_priority": row.follow_up_priority,
         }
         for row in rows
     ]
@@ -876,6 +895,7 @@ async def list_lifecycle_follow_up_action_queue(
             "channel": channel,
             "limit": limit,
             "offset": offset,
+            "include_created": include_created,
             "total": total,
             "returned_count": len(items),
         },

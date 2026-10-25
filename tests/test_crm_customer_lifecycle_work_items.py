@@ -308,6 +308,18 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         )
         untracked_task = await client.post(untracked_follow_up_url, headers=headers, json={})
         assert untracked_task.status_code == 201, untracked_task.text
+        visible_queue = await client.get(
+            queue_url,
+            headers=headers,
+            params={"organization_unit_id": str(root_id), "include_created": True},
+        )
+        assert visible_queue.status_code == 200, visible_queue.text
+        assert visible_queue.json()["total"] == 1
+        visible_item = visible_queue.json()["items"][0]
+        assert visible_item["outcome_id"] == untracked_outcome.json()["id"]
+        assert visible_item["follow_up_task_id"] == untracked_task.json()["id"]
+        assert visible_item["follow_up_task_status"] == "open"
+
         empty_queue = await client.get(
             queue_url,
             headers=headers,
