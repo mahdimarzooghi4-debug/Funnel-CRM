@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from sqlalchemy import select
 
 from funnel_crm.api.v1.crm_commissions import router as commissions_router
+from funnel_crm.api.v1.crm_workspace_context import router as workspace_context_router
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMCommissionCalculation,
@@ -31,6 +32,7 @@ def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
         return await call_next(request)
 
     app.include_router(commissions_router, prefix="/api/v1")
+    app.include_router(workspace_context_router, prefix="/api/v1")
     return app
 
 
@@ -141,6 +143,11 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         )
         assert plan_response.status_code == 201, plan_response.text
         plan_id = plan_response.json()["id"]
+        commission_units = await client.get(
+            "/api/v1/system/commission-organization-units", headers=headers
+        )
+        assert commission_units.status_code == 200, commission_units.text
+        assert {unit["id"] for unit in commission_units.json()} == {str(org_id)}
 
         calculation_response = await client.post(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations",
