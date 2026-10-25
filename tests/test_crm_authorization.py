@@ -159,6 +159,7 @@ async def test_crm_permission_requires_matching_action_and_inherited_org_scope(
                 "crm.sales_target:manage",
                 "crm.commission:view",
                 "crm.commission:manage",
+                "crm.commission:export",
             }
         )
 

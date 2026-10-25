@@ -1,9 +1,12 @@
 """Commission plans and auditable, non-payment calculation snapshots."""
+import csv
+import io
+import json
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_EVEN
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
@@ -439,3 +442,80 @@ async def list_calculations(plan_id: UUID, context: TenantSessionContext = Depen
                       "source_event_ids": row.source_event_ids} for row in rows],
         })
     return {"items": items}
+
+
+@router.get(
+    "/{plan_id}/calculations/{calculation_id}/export.csv",
+    operation_id="exportCRMCommissionCalculationCsv",
+    response_class=Response,
+)
+async def export_calculation_csv(
+    plan_id: UUID,
+    calculation_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> Response:
+    plan = await context.session.scalar(select(CRMCommissionPlan).where(
+        CRMCommissionPlan.tenant_id == context.access.tenant_id,
+        CRMCommissionPlan.id == plan_id,
+    ))
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Commission plan not found")
+    await _authorized(context, "crm.commission:view", plan.organization_unit_id)
+    await _authorized(context, "crm.commission:export", plan.organization_unit_id)
+    calculation = await context.session.scalar(select(CRMCommissionCalculation).where(
+        CRMCommissionCalculation.tenant_id == context.access.tenant_id,
+        CRMCommissionCalculation.plan_id == plan_id,
+        CRMCommissionCalculation.id == calculation_id,
+    ))
+    if calculation is None:
+        raise HTTPException(status_code=404, detail="Commission calculation not found")
+    rows = list(await context.session.scalars(select(CRMCommissionCalculationRow).where(
+        CRMCommissionCalculationRow.tenant_id == context.access.tenant_id,
+        CRMCommissionCalculationRow.calculation_id == calculation.id,
+    ).order_by(CRMCommissionCalculationRow.seller_membership_id.asc().nulls_first(),
+               CRMCommissionCalculationRow.currency)))
+
+    def safe_cell(value: object) -> str:
+        if isinstance(value, (Decimal, int, float)):
+            return str(value)
+        text_value = value.isoformat() if hasattr(value, "isoformat") else str(value)
+        if text_value.startswith(("=", "+", "-", "@", "\t", "\r")):
+            return "'" + text_value
+        return text_value
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([
+        "calculation_id", "plan_id", "plan_version", "period_start", "period_end",
+        "rate_percent", "seller_membership_id", "currency", "paid_amount",
+        "refunded_amount", "net_amount", "commission_amount", "source_event_ids",
+    ])
+    for row in rows:
+        writer.writerow([
+            safe_cell(calculation.id), safe_cell(plan.id), safe_cell(calculation.plan_version),
+            safe_cell(calculation.period_start), safe_cell(calculation.period_end),
+            safe_cell(calculation.rate_percent), safe_cell(row.seller_membership_id or ""),
+            safe_cell(row.currency), safe_cell(row.paid_amount), safe_cell(row.refunded_amount),
+            safe_cell(row.net_amount), safe_cell(row.commission_amount),
+            safe_cell(json.dumps(row.source_event_ids, ensure_ascii=False, separators=(",", ":"))),
+        ])
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id, actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_commission.calculation_exported",
+        target_type="crm_commission_calculation", target_key=str(calculation.id),
+        organization_unit_id=plan.organization_unit_id, before_state=None,
+        after_state={"format": "csv", "rows": len(rows), "plan_version": calculation.plan_version},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="commission-{calculation.id}.csv"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

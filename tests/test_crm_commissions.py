@@ -195,6 +195,27 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         assert calculation["timezone"] == "UTC"
         assert calculation["money_transfer_or_payroll_instruction_created"] is False
         assert calculation["rows"] == preview["rows"]
+        denied_export = await client.get(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations/{calculation['id']}/export.csv",
+            headers=headers,
+        )
+        assert denied_export.status_code == 403
+        async with tenant_session(
+            runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+        ) as context:
+            context.session.add(RolePermission(
+                tenant_id=tenant_id, role_id=role.id,
+                permission_key="crm.commission:export",
+            ))
+        export_response = await client.get(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations/{calculation['id']}/export.csv",
+            headers=headers,
+        )
+        assert export_response.status_code == 200, export_response.text
+        assert export_response.headers["cache-control"] == "no-store"
+        assert "attachment; filename=\"commission-" in export_response.headers["content-disposition"]
+        assert "source_event_ids" in export_response.text
+        assert str(event_ids[0]) in export_response.text
         by_currency_seller = {
             (row["seller_membership_id"], row["currency"]): row
             for row in calculation["rows"]

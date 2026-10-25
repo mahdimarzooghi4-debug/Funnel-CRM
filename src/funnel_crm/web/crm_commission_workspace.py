@@ -143,9 +143,25 @@ _SCRIPT = r"""(() => {
       card.append(title, body);
       if (type === "calculations") {
         item.rows.forEach((row) => { const line = document.createElement("p"); line.className = "muted"; line.textContent = `${row.seller_membership_id || "بدون انتساب فروشنده"} · ${row.currency} · خالص ${row.net_amount} · کمیسیون ${row.commission_amount}`; card.appendChild(line); });
+        const exportButton = document.createElement("button"); exportButton.type = "button"; exportButton.textContent = "دریافت CSV";
+        exportButton.addEventListener("click", () => downloadCalculationCsv(item.id)); card.appendChild(exportButton);
       }
       historyNode.appendChild(card);
     });
+  }
+  async function downloadCalculationCsv(calculationId) {
+    try {
+      const response = await fetch(`/api/v1/crm/commission-plans/${encodeURIComponent(selectedPlan.id)}/calculations/${encodeURIComponent(calculationId)}/export.csv`, {
+        credentials: "same-origin", headers: { Accept: "text/csv", "X-Workspace-ID": workspace.value },
+      });
+      if (!response.ok) {
+        let data = {}; try { data = await response.json(); } catch (_) {}
+        throw new Error(data.detail || `دریافت فایل ناموفق بود (${response.status}).`);
+      }
+      const url = URL.createObjectURL(await response.blob()), link = document.createElement("a");
+      link.href = url; link.download = `commission-${calculationId}.csv`; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+      message("فایل CSV دریافت شد.");
+    } catch (error) { message(error.message, true); }
   }
   function renderCalculation(data) {
     clear(resultNode); const h = document.createElement("h3");
