@@ -167,10 +167,31 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert offer.json()["status"] == "draft"
         assert offer.json()["lines"][0]["unit_amount"] == "250.000000"
         assert offer.json()["totals_by_currency"] == {"USD": "500.000000"}
+        revised_offer = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts/{offer.json()['id']}/revisions",
+            headers=headers,
+            json={"lines": [{"catalog_item_id": catalog_item.json()["id"],
+                             "expected_catalog_version": 1,
+                             "price_version": price.json()["version"], "quantity": "3"}]},
+        )
+        assert revised_offer.status_code == 201, revised_offer.text
+        assert revised_offer.json()["revision_number"] == 2
+        assert revised_offer.json()["previous_revision_id"] == offer.json()["id"]
+        assert revised_offer.json()["totals_by_currency"] == {"USD": "750.000000"}
+        stale_revision = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts/{offer.json()['id']}/revisions",
+            headers=headers,
+            json={"lines": [{"catalog_item_id": catalog_item.json()["id"],
+                             "expected_catalog_version": 1,
+                             "price_version": price.json()["version"], "quantity": "4"}]},
+        )
+        assert stale_revision.status_code == 409
         offer_list = await client.get(
             f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts", headers=headers,
         )
-        assert [entry["id"] for entry in offer_list.json()["items"]] == [offer.json()["id"]]
+        assert {entry["id"] for entry in offer_list.json()["items"]} == {
+            offer.json()["id"], revised_offer.json()["id"],
+        }
 
         board = await client.get(
             "/api/v1/crm/opportunities",
