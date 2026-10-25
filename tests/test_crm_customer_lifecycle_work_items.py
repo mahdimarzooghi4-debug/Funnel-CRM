@@ -275,6 +275,44 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         assert repeated_task.status_code == 201
         assert repeated_task.json()["id"] == next_task_data["id"]
 
+        untracked_outcome = await client.post(
+            f"/api/v1/crm/work-items/{untracked_item['id']}/outcomes",
+            headers=headers,
+            json={
+                "request_id": str(uuid4()),
+                "outcome_code": "no_contact",
+                "channel": "online",
+                "notes": "No response yet",
+            },
+        )
+        assert untracked_outcome.status_code == 201, untracked_outcome.text
+        queue_url = "/api/v1/crm/work-items/lifecycle-follow-up-queue"
+        queue = await client.get(
+            queue_url,
+            headers=headers,
+            params={"organization_unit_id": str(root_id), "channel": "online"},
+        )
+        assert queue.status_code == 200, queue.text
+        queue_data = queue.json()
+        assert queue_data["total"] == 1
+        assert len(queue_data["items"]) == 1
+        assert queue_data["items"][0]["outcome_id"] == untracked_outcome.json()["id"]
+        assert queue_data["items"][0]["customer_name"] == "Lifecycle untracked work item"
+        assert queue_data["items"][0]["source_work_item_status"] == "open"
+
+        untracked_follow_up_url = (
+            f"/api/v1/crm/work-items/outcomes/{untracked_outcome.json()['id']}/follow-up"
+        )
+        untracked_task = await client.post(untracked_follow_up_url, headers=headers, json={})
+        assert untracked_task.status_code == 201, untracked_task.text
+        empty_queue = await client.get(
+            queue_url,
+            headers=headers,
+            params={"organization_unit_id": str(root_id)},
+        )
+        assert empty_queue.status_code == 200
+        assert empty_queue.json()["total"] == 0
+
         duplicate_ids = await client.post(
             endpoint,
             headers=headers,

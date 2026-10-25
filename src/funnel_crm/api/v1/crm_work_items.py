@@ -682,6 +682,114 @@ async def create_follow_up_from_outcome(
     await context.session.flush()
     return WorkItemRead.model_validate(item)
 
+
+@router.get(
+    "/lifecycle-follow-up-queue",
+    response_model=dict,
+    operation_id="listCRMLifecycleFollowUpActionQueue",
+)
+async def list_lifecycle_follow_up_action_queue(
+    organization_unit_id: UUID,
+    outcome_code: Literal["callback_requested", "no_contact"] | None = None,
+    channel: ActivityChannel | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    """List active-customer follow-up outcomes that have not yet become a task."""
+    tenant_id = context.access.tenant_id
+    await _require_permission(context, "crm.work_item:view", organization_unit_id)
+    has_follow_up_task = select(AuditEvent.event_id).where(
+        AuditEvent.tenant_id == tenant_id,
+        AuditEvent.target_type == "crm_work_item_outcome",
+        AuditEvent.target_key == cast(CRMWorkItemOutcome.id, String),
+        AuditEvent.action_key == "crm_work_item.created_from_outcome",
+    ).exists()
+    stmt = (
+        select(
+            CRMWorkItemOutcome.id.label("outcome_id"),
+            CRMWorkItemOutcome.profile_id,
+            CRMWorkItemOutcome.work_item_id.label("source_work_item_id"),
+            CRMWorkItemOutcome.outcome_code,
+            CRMWorkItemOutcome.channel,
+            CRMWorkItemOutcome.notes,
+            CRMWorkItemOutcome.occurred_at,
+            CRMWorkItemOutcome.recorded_by_membership_id,
+            CRMWorkItem.title.label("source_work_item_title"),
+            CRMWorkItem.status.label("source_work_item_status"),
+            CRMProfile.display_name.label("customer_name"),
+        )
+        .join(
+            CRMWorkItem,
+            (CRMWorkItem.tenant_id == CRMWorkItemOutcome.tenant_id)
+            & (CRMWorkItem.id == CRMWorkItemOutcome.work_item_id),
+        )
+        .join(
+            CRMProfile,
+            (CRMProfile.tenant_id == CRMWorkItemOutcome.tenant_id)
+            & (CRMProfile.id == CRMWorkItemOutcome.profile_id)
+            & (CRMProfile.organization_unit_id == CRMWorkItemOutcome.organization_unit_id),
+        )
+        .where(
+            CRMWorkItemOutcome.tenant_id == tenant_id,
+            CRMWorkItemOutcome.organization_unit_id == organization_unit_id,
+            CRMWorkItem.organization_unit_id == organization_unit_id,
+            CRMProfile.archived_at.is_(None),
+            CRMProfile.merged_into_profile_id.is_(None),
+            CRMWorkItemOutcome.outcome_code.in_(("callback_requested", "no_contact")),
+            ~has_follow_up_task,
+        )
+    )
+    if outcome_code is not None:
+        stmt = stmt.where(CRMWorkItemOutcome.outcome_code == outcome_code)
+    if channel is not None:
+        stmt = stmt.where(CRMWorkItemOutcome.channel == channel)
+    total = await context.session.scalar(
+        select(func.count()).select_from(stmt.order_by(None).subquery())
+    ) or 0
+    rows = (await context.session.execute(
+        stmt.order_by(CRMWorkItemOutcome.occurred_at.desc(), CRMWorkItemOutcome.id)
+        .limit(limit).offset(offset)
+    )).all()
+    items = [
+        {
+            "outcome_id": str(row.outcome_id),
+            "profile_id": str(row.profile_id),
+            "customer_name": row.customer_name,
+            "source_work_item_id": str(row.source_work_item_id),
+            "source_work_item_title": row.source_work_item_title,
+            "source_work_item_status": row.source_work_item_status,
+            "outcome_code": row.outcome_code,
+            "channel": row.channel,
+            "notes": row.notes,
+            "occurred_at": row.occurred_at.isoformat(),
+            "recorded_by_membership_id": str(row.recorded_by_membership_id),
+        }
+        for row in rows
+    ]
+    context.session.add(AuditEvent(
+        tenant_id=tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_work_item.lifecycle_follow_up_queue_viewed",
+        target_type="crm_work_item_collection",
+        target_key=str(organization_unit_id),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "outcome_code": outcome_code,
+            "channel": channel,
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+            "returned_count": len(items),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {"organization_unit_id": str(organization_unit_id), "total": total, "items": items}
+
 @router.get("/{item_id}", response_model=WorkItemRead,
             operation_id="getCRMWorkItem")
 async def get_work_item(
