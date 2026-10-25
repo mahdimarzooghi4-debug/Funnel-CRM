@@ -53,6 +53,8 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.commerce_event:view",
         "crm.sales_target:view",
         "crm.sales_target:manage",
+        "crm.commission:view",
+        "crm.commission:manage",
     }
 )
 
