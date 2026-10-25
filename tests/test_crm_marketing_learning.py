@@ -171,7 +171,7 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert portfolio_body["planned_count"] == 1
         assert portfolio_body["evaluated_count"] == 0
         assert portfolio_body["campaign_summaries"] == [{
-            "campaign_id": campaign_id,
+            "campaign_id": str(campaign_id),
             "campaign_name": "Learning campaign",
             "review_count": 1,
             "planned_count": 1,
