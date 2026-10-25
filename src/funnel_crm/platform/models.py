@@ -2207,6 +2207,7 @@ class CRMCommissionCalculation(Base):
     __tablename__ = "crm_commission_calculations"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_crm_commission_calculations_tenant_id"),
+        UniqueConstraint("tenant_id", "plan_id", "request_id", name="uq_crm_commission_calculations_request"),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
             name="fk_crm_commission_calculations_workspace", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "plan_id"],
@@ -2226,6 +2227,7 @@ class CRMCommissionCalculation(Base):
     tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     period_start: Mapped[date] = mapped_column(Date, nullable=False)
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
     rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)

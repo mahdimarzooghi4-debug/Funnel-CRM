@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -70,6 +70,7 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
     assert isinstance(identity, AuthenticatedIdentity)
     assert isinstance(identity_b, AuthenticatedIdentity)
     period_date = datetime.now(timezone.utc).date()
+    calculation_request_id = uuid4()
     event_time = datetime.combine(period_date, datetime.min.time(), tzinfo=timezone.utc).replace(hour=12)
 
     async with tenant_session(
@@ -144,7 +145,8 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         calculation_response = await client.post(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations",
             headers=headers,
-            json={"period_start": period_date.isoformat(), "period_end": period_date.isoformat()},
+            json={"period_start": period_date.isoformat(), "period_end": period_date.isoformat(),
+                  "request_id": str(calculation_request_id)},
         )
         assert calculation_response.status_code == 201, calculation_response.text
         calculation = calculation_response.json()
@@ -172,6 +174,24 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         other_seller_row = by_currency_seller[(str(other_seller_id), "USD")]
         assert Decimal(other_seller_row["commission_amount"]) == Decimal("20.000000")
 
+        duplicate_calculation = await client.post(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations",
+            headers=headers,
+            json={"period_start": period_date.isoformat(), "period_end": period_date.isoformat(),
+                  "request_id": str(calculation_request_id)},
+        )
+        assert duplicate_calculation.status_code == 201, duplicate_calculation.text
+        assert duplicate_calculation.json()["id"] == calculation["id"]
+        assert duplicate_calculation.json()["rows"] == calculation["rows"]
+        conflicting_retry = await client.post(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations",
+            headers=headers,
+            json={"period_start": (period_date - timedelta(days=1)).isoformat(),
+                  "period_end": period_date.isoformat(),
+                  "request_id": str(calculation_request_id)},
+        )
+        assert conflicting_retry.status_code == 409
+
         updated_plan = await client.patch(
             f"/api/v1/crm/commission-plans/{plan_id}", headers=headers,
             json={"expected_version": 1, "rate_percent": "12"},
@@ -183,6 +203,15 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
             json={"expected_version": 1, "rate_percent": "15"},
         )
         assert stale_update.status_code == 409
+        replay_after_plan_change = await client.post(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations",
+            headers=headers,
+            json={"period_start": period_date.isoformat(), "period_end": period_date.isoformat(),
+                  "request_id": str(calculation_request_id)},
+        )
+        assert replay_after_plan_change.status_code == 201
+        assert replay_after_plan_change.json()["id"] == calculation["id"]
+        assert replay_after_plan_change.json()["plan_version"] == 1
         revised_calculation_response = await client.post(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations",
             headers=headers,

@@ -37,6 +37,7 @@ class CommissionCalculationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     period_start: date
     period_end: date
+    request_id: UUID | None = None
 
 
 class CommissionPlanUpdate(BaseModel):
@@ -207,11 +208,47 @@ async def calculate_commission(
     plan = await context.session.scalar(select(CRMCommissionPlan).where(
         CRMCommissionPlan.tenant_id == context.access.tenant_id,
         CRMCommissionPlan.id == plan_id,
-        CRMCommissionPlan.is_active.is_(True),
     ).with_for_update())
     if plan is None:
-        raise HTTPException(status_code=404, detail="Active commission plan not found")
+        raise HTTPException(status_code=404, detail="Commission plan not found")
     await _authorized(context, "crm.commission:manage", plan.organization_unit_id)
+    if payload.request_id is not None:
+        existing = await context.session.scalar(select(CRMCommissionCalculation).where(
+            CRMCommissionCalculation.tenant_id == context.access.tenant_id,
+            CRMCommissionCalculation.plan_id == plan.id,
+            CRMCommissionCalculation.request_id == payload.request_id,
+        ))
+        if existing is not None:
+            if (existing.period_start != payload.period_start
+                    or existing.period_end != payload.period_end):
+                raise HTTPException(status_code=409, detail="Calculation request ID was already used with different inputs")
+            stored_rows = await context.session.scalars(select(CRMCommissionCalculationRow).where(
+                CRMCommissionCalculationRow.tenant_id == context.access.tenant_id,
+                CRMCommissionCalculationRow.calculation_id == existing.id,
+            ).order_by(CRMCommissionCalculationRow.currency, CRMCommissionCalculationRow.seller_membership_id))
+            rows = list(stored_rows)
+            return {
+                "id": existing.id, "plan_id": existing.plan_id,
+                "period_start": existing.period_start, "period_end": existing.period_end,
+                "timezone": "UTC", "rate_percent": existing.rate_percent,
+                "plan_version": existing.plan_version,
+                "rows": [{
+                    "seller_membership_id": row.seller_membership_id,
+                    "unattributed": row.seller_membership_id is None,
+                    "excluded_from_commission": row.seller_membership_id is None,
+                    "currency": row.currency, "paid_amount": row.paid_amount,
+                    "refunded_amount": row.refunded_amount, "net_amount": row.net_amount,
+                    "rate_percent": existing.rate_percent,
+                    "commission_amount": row.commission_amount,
+                    "source_event_ids": row.source_event_ids,
+                } for row in rows],
+                "unattributed_events_excluded_from_commission": True,
+                "status": "calculation_only",
+                "money_transfer_or_payroll_instruction_created": False,
+                "request_id": existing.request_id,
+            }
+    if not plan.is_active:
+        raise HTTPException(status_code=404, detail="Active commission plan not found")
     start = datetime.combine(payload.period_start, time.min, tzinfo=timezone.utc)
     end = datetime.combine(payload.period_end + timedelta(days=1), time.min, tzinfo=timezone.utc)
     filters = [
@@ -228,6 +265,7 @@ async def calculate_commission(
         id=uuid4(), tenant_id=context.access.tenant_id, plan_id=plan.id,
         period_start=payload.period_start, period_end=payload.period_end,
         rate_percent=plan.rate_percent, plan_version=plan.version,
+        request_id=payload.request_id,
         created_by_membership_id=context.access.membership_id,
     )
     context.session.add(calculation)
@@ -263,7 +301,9 @@ async def calculate_commission(
         target_type="crm_commission_calculation", target_key=str(calculation.id),
         organization_unit_id=plan.organization_unit_id, before_state=None,
         after_state={"plan_id": str(plan.id), "period_start": payload.period_start.isoformat(),
-                     "period_end": payload.period_end.isoformat(), "row_count": len(output_rows)},
+                     "period_end": payload.period_end.isoformat(), "row_count": len(output_rows),
+                     "plan_version": plan.version,
+                     "request_id": str(payload.request_id) if payload.request_id else None},
         correlation_id=None,
     ))
     await context.session.flush()
@@ -272,6 +312,7 @@ async def calculate_commission(
         "period_start": payload.period_start, "period_end": payload.period_end,
         "timezone": "UTC", "rate_percent": plan.rate_percent,
         "plan_version": plan.version,
+        "request_id": payload.request_id,
         "rows": output_rows,
             "unattributed_events_excluded_from_commission": True,
         "status": "calculation_only",
@@ -302,6 +343,7 @@ async def list_calculations(plan_id: UUID, context: TenantSessionContext = Depen
             "id": calculation.id, "period_start": calculation.period_start,
             "period_end": calculation.period_end, "rate_percent": calculation.rate_percent,
             "plan_version": calculation.plan_version,
+            "request_id": calculation.request_id,
             "created_at": calculation.created_at,
             "rows": [{"seller_membership_id": row.seller_membership_id,
                       "unattributed": row.seller_membership_id is None,
