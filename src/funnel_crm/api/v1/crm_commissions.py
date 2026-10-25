@@ -225,7 +225,8 @@ async def calculate_commission(
             stored_rows = await context.session.scalars(select(CRMCommissionCalculationRow).where(
                 CRMCommissionCalculationRow.tenant_id == context.access.tenant_id,
                 CRMCommissionCalculationRow.calculation_id == existing.id,
-        ).order_by(CRMCommissionCalculationRow.seller_membership_id, CRMCommissionCalculationRow.currency))
+        ).order_by(CRMCommissionCalculationRow.seller_membership_id.asc().nulls_first(),
+                    CRMCommissionCalculationRow.currency))
             rows = list(stored_rows)
             return {
                 "id": existing.id, "plan_id": existing.plan_id,
