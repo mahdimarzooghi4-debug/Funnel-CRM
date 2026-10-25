@@ -72,7 +72,7 @@ const ids = [
   "save-variance-review", "cancel-variance-review", "variance-review-next-step",
   "variance-review-created-note", "create-variance-review-work-item",
   "assign-follow-up-to-me", "follow-up-due-at",
-  "learning-portfolio-note", "learning-portfolio-counts", "learning-portfolio-items",
+  "learning-portfolio-note", "learning-overdue-only", "learning-portfolio-counts", "learning-portfolio-items",
   "target-period-comparison-note", "target-period-comparison",
   "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
 ];
@@ -340,6 +340,10 @@ async function main() {
   assert.equal(elements.get("status").textContent, "گزارش برای 14 روز تقویمی آماده شد.");
   assert.equal(elements.get("learning-portfolio-counts").children.length, 6);
   assert.equal(elements.get("learning-portfolio-items").children.length, 1);
+  elements.get("learning-overdue-only").checked = true;
+  await elements.get("learning-overdue-only").dispatch("change");
+  const overduePortfolioCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?") && new URLSearchParams(call.path.split("?")[1]).get("overdue_only") === "true");
+  assert.ok(overduePortfolioCall, "overdue filter must be applied by the portfolio API");
   assert.deepEqual(elements.get("learning-portfolio-items").children[0].children.map((cell) => cell.textContent), [
     "Spring launch", "2026-10-01 تا 2026-10-14", "در انتظار پیگیری نتیجه",
     "بررسی افت سرنخ", "بررسی داده منبع", "باز", "واگذارنشده", "—",

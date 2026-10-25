@@ -315,6 +315,7 @@ async def get_learning_portfolio(
     status: Literal["planned", "evaluated"] | None = Query(default=None),
     organization_unit_id: UUID | None = None,
     include_work_items: bool = False,
+    overdue_only: bool = False,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantSessionContext = Depends(require_tenant_session),
@@ -339,6 +340,8 @@ async def get_learning_portfolio(
         work_item_scopes = crm_scope_ids(
             context, permission_key="crm.work_item:view", cte_name="crm_learning_work_item_scope"
         )
+    elif overdue_only:
+        raise HTTPException(status_code=422, detail="overdue_only requires include_work_items")
 
     follow_up_plan = aliased(CRMMarketingCampaignTargetPlan)
     review_filters = [
@@ -349,6 +352,17 @@ async def get_learning_portfolio(
         review_filters.append(CRMMarketingLearningReview.organization_unit_id == organization_unit_id)
     if work_item_scopes is not None:
         review_filters.append(CRMMarketingLearningReview.organization_unit_id.in_(work_item_scopes))
+    report_generated_at = datetime.now(timezone.utc)
+    if overdue_only:
+        review_filters.append(CRMMarketingLearningReview.id.in_(
+            select(CRMWorkItem.source_learning_review_id).where(
+                CRMWorkItem.tenant_id == context.access.tenant_id,
+                CRMWorkItem.organization_unit_id.in_(work_item_scopes),
+                CRMWorkItem.status.in_(("open", "in_progress")),
+                CRMWorkItem.due_at.is_not(None),
+                CRMWorkItem.due_at < report_generated_at,
+            )
+        ))
     if period_start is not None:
         review_filters.append(CRMMarketingCampaignTargetPlan.period_end >= period_start)
     if period_end is not None:
@@ -433,7 +447,7 @@ async def get_learning_portfolio(
                   & (CRMMarketingCampaignTargetPlan.campaign_id == CRMMarketingLearningReview.campaign_id)
                   & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
             .where(*filters, CRMWorkItem.status.in_(("open", "in_progress")),
-                   CRMWorkItem.due_at.is_not(None), CRMWorkItem.due_at < datetime.now(timezone.utc))
+                   CRMWorkItem.due_at.is_not(None), CRMWorkItem.due_at < report_generated_at)
         ) or 0)
         work_item_counts = {
             "linked": linked_count,
@@ -473,13 +487,14 @@ async def get_learning_portfolio(
         after_state={"period_start": period_start.isoformat() if period_start else None,
                      "period_end": period_end.isoformat() if period_end else None,
                      "status": status, "include_work_items": include_work_items,
+                     "overdue_only": overdue_only,
                      "total_count": total, "returned_count": len(items),
                      "offset": offset, "limit": limit},
         correlation_id=None,
     ))
     await context.session.flush()
     return LearningPortfolioReport(
-        generated_at=datetime.now(timezone.utc), period_start=period_start,
+        generated_at=report_generated_at, period_start=period_start,
         period_end=period_end, status_filter=status, total_count=total,
         planned_count=counts.get("planned", 0), evaluated_count=counts.get("evaluated", 0),
         work_item_counts=work_item_counts,

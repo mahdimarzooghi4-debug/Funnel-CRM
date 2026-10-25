@@ -268,6 +268,10 @@ _PAGE = """<!doctype html>
       </section>
       <h3 style="margin-top:26px">پیگیری بررسی‌های مدیریتی</h3>
       <p id="learning-portfolio-note" class="muted">بررسی‌ها و کارهای پیگیری ثبت‌شده در همین واحد و بازه.</p>
+      <label for="learning-overdue-only" style="display:flex;align-items:center;gap:8px;margin:10px 0">
+        <input id="learning-overdue-only" type="checkbox" style="width:18px;min-height:18px">
+        فقط بررسی‌های دارای کار موعدگذشته
+      </label>
       <div id="learning-portfolio-counts" class="cards" aria-live="polite"></div>
       <div class="table-wrap">
         <table>
@@ -1546,11 +1550,14 @@ _CLIENT_SCRIPT = r"""(() => {
       include_work_items: "true",
       limit: "100",
     });
+    const overdueOnly = byId("learning-overdue-only").checked;
+    if (overdueOnly) query.set("overdue_only", "true");
     const path = "/api/v1/crm/marketing-learning/reviews/portfolio?" + query.toString();
     try {
       return { report: await getJson(path, fields.workspace), workItemsVisible: true };
     } catch (_) {
       query.set("include_work_items", "false");
+      if (overdueOnly) query.delete("overdue_only");
       try {
         return { report: await getJson("/api/v1/crm/marketing-learning/reviews/portfolio?" + query.toString(), fields.workspace), workItemsVisible: false };
       } catch (_) {
@@ -1572,8 +1579,13 @@ _CLIENT_SCRIPT = r"""(() => {
     body.replaceChildren();
     latestLearningPortfolio = result?.report || null;
     if (!latestLearningPortfolio) {
+      byId("learning-overdue-only").disabled = true;
       note.textContent = "فهرست بررسی‌ها در این محدوده در دسترس نیست یا مجوز مشاهده ثبت نشده است.";
       return;
+    }
+    byId("learning-overdue-only").disabled = !result.workItemsVisible;
+    if (!result.workItemsVisible && byId("learning-overdue-only").checked) {
+      byId("learning-overdue-only").checked = false;
     }
     const report = latestLearningPortfolio;
     const taskCounts = report.work_item_counts;
@@ -2115,6 +2127,9 @@ _CLIENT_SCRIPT = r"""(() => {
   byId("compare").addEventListener("click", compareScenarios);
   byId("save-variance-review").addEventListener("click", saveVarianceReview);
   byId("create-variance-review-work-item").addEventListener("click", createVarianceReviewWorkItem);
+  byId("learning-overdue-only").addEventListener("change", async () => {
+    if (latestFields) renderLearningPortfolio(await loadLearningPortfolio(latestFields));
+  });
   byId("cancel-variance-review").addEventListener("click", () => {
     selectedVarianceReview = null;
     selectedVarianceReviewId = null;
