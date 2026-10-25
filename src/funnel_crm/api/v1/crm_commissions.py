@@ -75,6 +75,17 @@ async def create_plan(payload: CommissionPlanCreate, context: TenantSessionConte
         is_active=True, created_by_membership_id=context.access.membership_id,
     )
     context.session.add(plan)
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id, actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_commission.plan_created",
+        target_type="crm_commission_plan", target_key=str(plan.id),
+        organization_unit_id=plan.organization_unit_id, before_state=None,
+        after_state={"name": plan.name, "seller_membership_id": str(plan.seller_membership_id) if plan.seller_membership_id else None,
+                     "rate_percent": str(plan.rate_percent)},
+        correlation_id=None,
+    ))
     await context.session.flush()
     return _plan_json(plan)
 
