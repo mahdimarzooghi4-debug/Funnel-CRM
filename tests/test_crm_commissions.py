@@ -149,6 +149,23 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         assert commission_units.status_code == 200, commission_units.text
         assert {unit["id"] for unit in commission_units.json()} == {str(org_id)}
 
+        preview_response = await client.post(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations/preview",
+            headers=headers,
+            json={"period_start": period_date.isoformat(), "period_end": period_date.isoformat()},
+        )
+        assert preview_response.status_code == 200, preview_response.text
+        preview = preview_response.json()
+        assert preview["status"] == "preview"
+        assert preview["snapshot_created"] is False
+        assert preview["money_transfer_or_payroll_instruction_created"] is False
+        assert Decimal(next(row for row in preview["rows"] if row["currency"] == "USD" and row["seller_membership_id"] == str(seller_id))["commission_amount"]) == Decimal("8.500000")
+        empty_history = await client.get(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations", headers=headers
+        )
+        assert empty_history.status_code == 200, empty_history.text
+        assert empty_history.json()["items"] == []
+
         calculation_response = await client.post(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations",
             headers=headers,
@@ -161,6 +178,7 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         assert calculation["status"] == "calculation_only"
         assert calculation["timezone"] == "UTC"
         assert calculation["money_transfer_or_payroll_instruction_created"] is False
+        assert calculation["rows"] == preview["rows"]
         by_currency_seller = {
             (row["seller_membership_id"], row["currency"]): row
             for row in calculation["rows"]

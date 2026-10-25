@@ -65,7 +65,7 @@ _PAGE = """<!doctype html>
         <label for="period-start">از تاریخ<input id="period-start" type="date" required></label>
         <label for="period-end">تا تاریخ<input id="period-end" type="date" required></label>
       </div><p class="muted">شناسهٔ درخواست برای retry حفظ می‌شود؛ با ثبت موفق، محاسبهٔ بعدی شناسهٔ تازه می‌گیرد.</p>
-      <div class="actions"><button type="submit">ساخت snapshot محاسبه</button></div></form>
+      <div class="actions"><button id="preview-calculation" type="button">پیش‌نمایش محاسبه</button><button type="submit">ثبت snapshot محاسبه</button></div></form>
       <div id="calculation-result"></div>
     </section>
   </main>
@@ -143,7 +143,14 @@ _SCRIPT = r"""(() => {
     });
   }
   function renderCalculation(data) {
-    clear(resultNode); const h = document.createElement("h3"); h.textContent = `محاسبه ثبت شد · نسخه ${data.plan_version}`; resultNode.appendChild(h);
+    clear(resultNode); const h = document.createElement("h3");
+    h.textContent = data.status === "preview" ? `پیش‌نمایش · نسخه ${data.plan_version}` : `محاسبه ثبت شد · نسخه ${data.plan_version}`;
+    resultNode.appendChild(h);
+    const note = document.createElement("p"); note.className = "muted";
+    note.textContent = data.status === "preview"
+      ? "این پیش‌نمایش ذخیره نشده است؛ هنگام ثبت snapshot، داده‌های فروش دوباره خوانده می‌شوند."
+      : "این snapshot فقط محاسبهٔ پیشنهادی است و دستور پرداخت یا حقوق صادر نمی‌کند.";
+    resultNode.appendChild(note);
     const table = document.createElement("table"), head = document.createElement("thead"), body = document.createElement("tbody"), row = document.createElement("tr");
     ["فروشنده", "ارز", "فروش", "بازپرداخت", "خالص", "کمیسیون"].forEach((label) => { const th = document.createElement("th"); th.textContent = label; row.appendChild(th); });
     head.appendChild(row);
@@ -167,6 +174,14 @@ _SCRIPT = r"""(() => {
   });
   $("show-versions").addEventListener("click", async () => { if (!selectedPlan) return; try { const data = await api(`/api/v1/crm/commission-plans/${encodeURIComponent(selectedPlan.id)}/versions`); renderHistory(data.items || [], "versions"); } catch (error) { message(error.message, true); } });
   $("show-calculations").addEventListener("click", async () => { if (!selectedPlan) return; try { const data = await api(`/api/v1/crm/commission-plans/${encodeURIComponent(selectedPlan.id)}/calculations`); renderHistory(data.items || [], "calculations"); } catch (error) { message(error.message, true); } });
+  $("preview-calculation").addEventListener("click", async () => {
+    if (!selectedPlan) return; const start = $("period-start").value, end = $("period-end").value;
+    if (!start || !end || start > end) return message("بازهٔ تاریخ را درست وارد کنید.", true);
+    try {
+      const data = await api(`/api/v1/crm/commission-plans/${encodeURIComponent(selectedPlan.id)}/calculations/preview`, "POST", { period_start: start, period_end: end });
+      renderCalculation(data); message("پیش‌نمایش آماده شد؛ هنوز snapshot ذخیره نشده است.");
+    } catch (error) { message(error.message, true); }
+  });
   $("calculate-form").addEventListener("submit", async (event) => {
     event.preventDefault(); if (!selectedPlan) return; const start = $("period-start").value, end = $("period-end").value;
     if (!start || !end || start > end) return message("بازهٔ تاریخ را درست وارد کنید.", true);

@@ -21,6 +21,7 @@ def test_commission_workspace_is_rtl_data_free_shell_with_security_headers() -> 
     assert 'src="/assets/crm-commission-workspace.js"' in response.text
     assert "مدیریت پلن‌های کمیسیون فروش" in response.text
     assert "دستور پرداخت یا حقوق صادر نمی‌کند" in response.text
+    assert 'id="preview-calculation"' in response.text
 
 
 def test_commission_workspace_client_uses_authorized_apis_and_safe_dom_updates() -> None:
@@ -35,5 +36,6 @@ def test_commission_workspace_client_uses_authorized_apis_and_safe_dom_updates()
     assert "/api/v1/crm/commission-plans" in response.text
     assert "/versions" in response.text
     assert "/calculations" in response.text
+    assert "/calculations/preview" in response.text
     assert "sessionStorage" in response.text
     assert "innerHTML" not in response.text

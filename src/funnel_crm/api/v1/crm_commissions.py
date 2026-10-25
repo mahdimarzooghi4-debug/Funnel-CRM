@@ -66,6 +66,52 @@ def _plan_json(row: CRMCommissionPlan) -> dict:
     }
 
 
+def _commission_rows(events: list[CRMProductCommerceEvent], plan: CRMCommissionPlan) -> list[dict]:
+    groups = aggregate_commission_events(events, seller_membership_id=plan.seller_membership_id)
+    rows = []
+    for (seller_id, currency), totals in sorted(
+        groups.items(), key=lambda item: (str(item[0][0] or ""), item[0][1])
+    ):
+        net = totals["paid"] - totals["refunded"]
+        commission = Decimal("0.000000") if seller_id is None else (
+            net * plan.rate_percent / Decimal("100")
+        ).quantize(SIX_PLACES, rounding=ROUND_HALF_EVEN)
+        rows.append({
+            "seller_membership_id": seller_id,
+            "unattributed": seller_id is None,
+            "excluded_from_commission": seller_id is None,
+            "currency": currency,
+            "paid_amount": totals["paid"].quantize(SIX_PLACES),
+            "refunded_amount": totals["refunded"].quantize(SIX_PLACES),
+            "net_amount": net.quantize(SIX_PLACES),
+            "rate_percent": plan.rate_percent,
+            "commission_amount": commission,
+            "source_event_ids": totals["ids"],
+        })
+    return rows
+
+
+async def _events_for_period(
+    context: TenantSessionContext,
+    plan: CRMCommissionPlan,
+    period_start: date,
+    period_end: date,
+) -> list[CRMProductCommerceEvent]:
+    start = datetime.combine(period_start, time.min, tzinfo=timezone.utc)
+    end = datetime.combine(period_end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    return list(await context.session.scalars(select(CRMProductCommerceEvent).where(
+        CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+        CRMProductCommerceEvent.organization_unit_id == plan.organization_unit_id,
+        CRMProductCommerceEvent.occurred_at >= start,
+        CRMProductCommerceEvent.occurred_at < end,
+    ).order_by(CRMProductCommerceEvent.occurred_at, CRMProductCommerceEvent.id)))
+
+
+def _validate_period(period_start: date, period_end: date) -> None:
+    if period_start > period_end or (period_end - period_start).days > 365:
+        raise HTTPException(status_code=422, detail="Calculation period must be ordered and no longer than 366 days")
+
+
 @router.post("", status_code=201, operation_id="createCRMCommissionPlan")
 async def create_plan(payload: CommissionPlanCreate, context: TenantSessionContext = Depends(require_tenant_session)) -> dict:
     await _authorized(context, "crm.commission:manage", payload.organization_unit_id)
@@ -198,14 +244,44 @@ async def list_plans(context: TenantSessionContext = Depends(require_tenant_sess
     return {"items": [_plan_json(row) for row in rows]}
 
 
+@router.post("/{plan_id}/calculations/preview", operation_id="previewCRMCommissionCalculation")
+async def preview_commission(
+    plan_id: UUID,
+    payload: CommissionCalculationCreate,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    _validate_period(payload.period_start, payload.period_end)
+    plan = await context.session.scalar(select(CRMCommissionPlan).where(
+        CRMCommissionPlan.tenant_id == context.access.tenant_id,
+        CRMCommissionPlan.id == plan_id,
+        CRMCommissionPlan.is_active.is_(True),
+    ))
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Active commission plan not found")
+    await _authorized(context, "crm.commission:view", plan.organization_unit_id)
+    events = await _events_for_period(context, plan, payload.period_start, payload.period_end)
+    return {
+        "plan_id": plan.id,
+        "period_start": payload.period_start,
+        "period_end": payload.period_end,
+        "timezone": "UTC",
+        "rate_percent": plan.rate_percent,
+        "plan_version": plan.version,
+        "rows": _commission_rows(events, plan),
+        "unattributed_events_excluded_from_commission": True,
+        "status": "preview",
+        "snapshot_created": False,
+        "money_transfer_or_payroll_instruction_created": False,
+    }
+
+
 @router.post("/{plan_id}/calculations", status_code=201, operation_id="calculateCRMCommission")
 async def calculate_commission(
     plan_id: UUID,
     payload: CommissionCalculationCreate,
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> dict:
-    if payload.period_start > payload.period_end or (payload.period_end - payload.period_start).days > 365:
-        raise HTTPException(status_code=422, detail="Calculation period must be ordered and no longer than 366 days")
+    _validate_period(payload.period_start, payload.period_end)
     plan = await context.session.scalar(select(CRMCommissionPlan).where(
         CRMCommissionPlan.tenant_id == context.access.tenant_id,
         CRMCommissionPlan.id == plan_id,
@@ -251,18 +327,7 @@ async def calculate_commission(
             }
     if not plan.is_active:
         raise HTTPException(status_code=404, detail="Active commission plan not found")
-    start = datetime.combine(payload.period_start, time.min, tzinfo=timezone.utc)
-    end = datetime.combine(payload.period_end + timedelta(days=1), time.min, tzinfo=timezone.utc)
-    filters = [
-        CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
-        CRMProductCommerceEvent.organization_unit_id == plan.organization_unit_id,
-        CRMProductCommerceEvent.occurred_at >= start,
-        CRMProductCommerceEvent.occurred_at < end,
-    ]
-    events = list(await context.session.scalars(select(CRMProductCommerceEvent).where(*filters).order_by(
-        CRMProductCommerceEvent.occurred_at, CRMProductCommerceEvent.id,
-    )))
-    groups = aggregate_commission_events(events, seller_membership_id=plan.seller_membership_id)
+    events = await _events_for_period(context, plan, payload.period_start, payload.period_end)
     calculation = CRMCommissionCalculation(
         id=uuid4(), tenant_id=context.access.tenant_id, plan_id=plan.id,
         period_start=payload.period_start, period_end=payload.period_end,
@@ -272,29 +337,16 @@ async def calculate_commission(
     )
     context.session.add(calculation)
     await context.session.flush()
-    output_rows = []
-    for (seller_id, currency), totals in sorted(groups.items(), key=lambda item: (str(item[0][0] or ""), item[0][1])):
-        net = totals["paid"] - totals["refunded"]
-        commission = Decimal("0.000000") if seller_id is None else (
-            net * plan.rate_percent / Decimal("100")
-        ).quantize(SIX_PLACES, rounding=ROUND_HALF_EVEN)
+    output_rows = _commission_rows(events, plan)
+    for totals in output_rows:
         row = CRMCommissionCalculationRow(
             id=uuid4(), tenant_id=context.access.tenant_id, calculation_id=calculation.id,
-            seller_membership_id=seller_id, currency=currency,
-            paid_amount=totals["paid"].quantize(SIX_PLACES),
-            refunded_amount=totals["refunded"].quantize(SIX_PLACES),
-            net_amount=net.quantize(SIX_PLACES), commission_amount=commission,
-            source_event_ids=totals["ids"],
+            seller_membership_id=totals["seller_membership_id"], currency=totals["currency"],
+            paid_amount=totals["paid_amount"], refunded_amount=totals["refunded_amount"],
+            net_amount=totals["net_amount"], commission_amount=totals["commission_amount"],
+            source_event_ids=totals["source_event_ids"],
         )
         context.session.add(row)
-        output_rows.append({
-            "seller_membership_id": seller_id, "unattributed": seller_id is None,
-            "excluded_from_commission": seller_id is None,
-            "currency": currency, "paid_amount": row.paid_amount,
-            "refunded_amount": row.refunded_amount, "net_amount": row.net_amount,
-            "rate_percent": plan.rate_percent, "commission_amount": row.commission_amount,
-            "source_event_ids": row.source_event_ids,
-        })
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id, actor_kind="user",
         actor_identity_id=context.access.identity_id,
