@@ -798,7 +798,7 @@ async def list_lifecycle_follow_up_action_queue(
         CRMWorkItem.tenant_id == tenant_id,
         CRMWorkItem.organization_unit_id == organization_unit_id,
         CRMWorkItem.source_outcome_id == CRMWorkItemOutcome.id,
-    ).exists()
+    ).correlate(CRMWorkItemOutcome).exists()
     stmt = (
         select(
             CRMWorkItemOutcome.id.label("outcome_id"),
