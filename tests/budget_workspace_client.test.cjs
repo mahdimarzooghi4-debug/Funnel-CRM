@@ -152,12 +152,13 @@ const previousTargetPortfolio = {
 };
 const learningPortfolio = {
   total_count: 1, planned_count: 1, evaluated_count: 0,
+  can_update_work_items: true,
   work_item_counts: { linked: 1, without_work_item: 0, open: 1, in_progress: 0, completed: 0, cancelled: 0, overdue: 0 },
   items: [{
     campaign_name: "Spring launch",
     baseline_period_start: "2026-10-01", baseline_period_end: "2026-10-14",
     review: { status: "planned", assessment: "بررسی افت سرنخ", corrective_action: "بررسی داده منبع" },
-    work_item: { status: "open", assigned_membership_id: null, due_at: null },
+    work_item: { id: "work-portfolio-1", status: "open", assigned_membership_id: null, due_at: null },
   }],
 };
 let reportCampaigns = null;
@@ -173,7 +174,9 @@ const fetch = async (path, options = {}) => {
   } else if (path.startsWith("/api/v1/crm/analytics/campaign-target-performance/portfolio?")) {
     const query = new URLSearchParams(path.split("?")[1]);
     payload = query.get("period_start") === "2026-09-17" ? previousTargetPortfolio : targetPortfolio;
-  } else if (path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?")) {
+  } else if (path === "/api/v1/crm/work-items/work-portfolio-1" && options.method === "PATCH") {
+    payload = { id: "work-portfolio-1", status: JSON.parse(options.body).status };
+  } else if (path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?") && (options.method || "GET") === "GET") {
     const query = new URLSearchParams(path.split("?")[1]);
     assert.equal(query.get("organization_unit_id"), "root-1");
     assert.equal(query.get("period_start"), "2026-10-01");
@@ -344,9 +347,19 @@ async function main() {
   await elements.get("learning-overdue-only").dispatch("change");
   const overduePortfolioCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?") && new URLSearchParams(call.path.split("?")[1]).get("overdue_only") === "true");
   assert.ok(overduePortfolioCall, "overdue filter must be applied by the portfolio API");
+  const taskRow = elements.get("learning-portfolio-items").children[0];
+  const statusSelect = taskRow.children[8].children[0];
+  const saveTaskStatus = taskRow.children[8].children[1];
+  assert.equal(statusSelect.children[0].value, "in_progress");
+  statusSelect.value = "in_progress";
+  await saveTaskStatus.dispatch("click");
+  const taskStatusCall = calls.find((call) => call.path === "/api/v1/crm/work-items/work-portfolio-1");
+  assert.ok(taskStatusCall);
+  assert.equal(taskStatusCall.options.method, "PATCH");
+  assert.deepEqual(JSON.parse(taskStatusCall.options.body), { status: "in_progress" });
   assert.deepEqual(elements.get("learning-portfolio-items").children[0].children.map((cell) => cell.textContent), [
     "Spring launch", "2026-10-01 تا 2026-10-14", "در انتظار پیگیری نتیجه",
-    "بررسی افت سرنخ", "بررسی داده منبع", "باز", "واگذارنشده", "—",
+    "بررسی افت سرنخ", "بررسی داده منبع", "باز", "واگذارنشده", "—", "",
   ]);
   const learningPortfolioCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?"));
   assert.ok(learningPortfolioCall);

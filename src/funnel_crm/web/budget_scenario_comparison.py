@@ -275,7 +275,7 @@ _PAGE = """<!doctype html>
       <div id="learning-portfolio-counts" class="cards" aria-live="polite"></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th scope="col">کمپین</th><th scope="col">دورهٔ مبنا</th><th scope="col">وضعیت بررسی</th><th scope="col">ارزیابی ثبت‌شده</th><th scope="col">اقدام ثبت‌شده</th><th scope="col">وضعیت کار CRM</th><th scope="col">واگذاری</th><th scope="col">موعد</th></tr></thead>
+          <thead><tr><th scope="col">کمپین</th><th scope="col">دورهٔ مبنا</th><th scope="col">وضعیت بررسی</th><th scope="col">ارزیابی ثبت‌شده</th><th scope="col">اقدام ثبت‌شده</th><th scope="col">وضعیت کار CRM</th><th scope="col">واگذاری</th><th scope="col">موعد</th><th scope="col">به‌روزرسانی کار</th></tr></thead>
           <tbody id="learning-portfolio-items"></tbody>
         </table>
       </div>
@@ -1571,6 +1571,25 @@ _CLIENT_SCRIPT = r"""(() => {
   function learningWorkItemStatusLabel(status) {
     return ({ open: "باز", in_progress: "در حال انجام", completed: "انجام‌شده", cancelled: "لغوشده" })[status] || "ایجاد نشده";
   }
+  async function updateLearningWorkItem(workItem, nextStatus, button) {
+    button.disabled = true;
+    try {
+      const response = await fetch(`/api/v1/crm/work-items/${encodeURIComponent(workItem.id)}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Workspace-ID": latestFields.workspace },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      let payload = {};
+      try { payload = await response.json(); } catch (_) {}
+      if (!response.ok) throw new Error(payload.detail || "به‌روزرسانی کار پیگیری ناموفق بود.");
+      setStatus("وضعیت کار پیگیری به‌روزرسانی شد.", false);
+      renderLearningPortfolio(await loadLearningPortfolio(latestFields));
+    } catch (error) {
+      setStatus(error.message || "به‌روزرسانی کار پیگیری ناموفق بود.", true);
+      button.disabled = false;
+    }
+  }
   function renderLearningPortfolio(result) {
     const note = byId("learning-portfolio-note");
     const counts = byId("learning-portfolio-counts");
@@ -1602,13 +1621,13 @@ _CLIENT_SCRIPT = r"""(() => {
       counts.appendChild(card);
     });
     note.textContent = result.workItemsVisible
-      ? "وضعیت بررسی‌ها و کارهای پیوندخورده بر اساس دادهٔ ثبت‌شده نمایش داده شده است؛ اقدام یا ارزیابی خودکار انجام نمی‌شود."
+      ? "وضعیت بررسی‌ها و کارهای پیوندخورده بر اساس دادهٔ ثبت‌شده است؛ تغییر وضعیت فقط با ثبت صریح شما انجام می‌شود."
       : "بررسی‌ها بر اساس مجوز مشاهده نمایش داده شده‌اند؛ جزئیات کارها برای حساب شما در دسترس نیست.";
     const items = report.items || [];
     if (!items.length) {
       const row = document.createElement("tr");
       const cell = element("td", "muted", "برای این واحد و بازه بررسی مدیریتی ثبت نشده است.");
-      cell.colSpan = 8;
+      cell.colSpan = 9;
       row.appendChild(cell);
       body.appendChild(row);
       return;
@@ -1627,6 +1646,27 @@ _CLIENT_SCRIPT = r"""(() => {
         element("td", "", workItem ? (workItem.assigned_membership_id ? "دارای مسئول" : "واگذارنشده") : "—"),
         element("td", "", workItem?.due_at || "—"),
       );
+      const actionCell = document.createElement("td");
+      if (workItem && report.can_update_work_items && ["open", "in_progress"].includes(workItem.status)) {
+        const statusSelect = document.createElement("select");
+        const allowedStatuses = workItem.status === "open"
+          ? [["in_progress", "شروع کار"], ["completed", "ثبت انجام"]]
+          : [["completed", "ثبت انجام"]];
+        allowedStatuses.forEach(([value, label]) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          statusSelect.appendChild(option);
+        });
+        const saveButton = document.createElement("button");
+        saveButton.type = "button";
+        saveButton.textContent = "ثبت وضعیت";
+        saveButton.addEventListener("click", () => updateLearningWorkItem(workItem, statusSelect.value, saveButton));
+        actionCell.append(statusSelect, saveButton);
+      } else {
+        actionCell.textContent = "—";
+      }
+      row.appendChild(actionCell);
       body.appendChild(row);
     });
   }

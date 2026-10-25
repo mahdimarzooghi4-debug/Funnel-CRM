@@ -174,6 +174,7 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
             "linked": 1, "without_work_item": 0, "open": 0,
             "in_progress": 1, "completed": 0, "cancelled": 0, "overdue": 1,
         }
+        assert portfolio_body["can_update_work_items"] is True
         overdue_portfolio = await client.get(
             f"{base}/portfolio", headers=headers,
             params={"period_start": "2026-10-16", "period_end": "2026-10-17",
