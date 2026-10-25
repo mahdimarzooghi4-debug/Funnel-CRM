@@ -49,3 +49,21 @@ def test_commission_workspace_is_mounted() -> None:
 
     assert response.status_code == 200
     assert "مدیریت پلن‌های کمیسیون فروش" in response.text
+
+
+def test_catalog_workspace_is_mounted_with_security_headers() -> None:
+    response = client.get("/workspace/crm-catalog")
+
+    assert response.status_code == 200
+    assert "کاتالوگ محصول و خدمت" in response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert "default-src 'self'" in response.headers["content-security-policy"]
+
+
+def test_catalog_workspace_script_is_mounted() -> None:
+    response = client.get("/assets/crm-catalog-workspace.js")
+
+    assert response.status_code == 200
+    assert "X-Workspace-ID" in response.text
+    assert "replaceChildren" in response.text
+    assert "innerHTML" not in response.text
