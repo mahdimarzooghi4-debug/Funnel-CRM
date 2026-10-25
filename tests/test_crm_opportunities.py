@@ -75,6 +75,7 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
                     "crm.offer_plan:view",
                     "crm.offer_plan:create",
                     "crm.offer_plan:update",
+                    "crm.offer_plan:approve",
                 )
             ],
         ])
@@ -220,9 +221,27 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         )
         assert plan_update.status_code == 200, plan_update.text
         assert plan_update.json()["version"] == 2
+        requested_changes = await client.post(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/decision", headers=headers,
+            json={"expected_version": 2, "decision": "request_changes", "comment": "Clarify the audience."},
+        )
+        assert requested_changes.status_code == 200, requested_changes.text
+        assert requested_changes.json()["status"] == "changes_requested"
+        revised_plan = await client.patch(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}", headers=headers,
+            json={"expected_version": 3, "audience_description": "New customers at assigned stores"},
+        )
+        assert revised_plan.status_code == 200, revised_plan.text
+        assert revised_plan.json()["status"] == "draft"
+        approved_plan = await client.post(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/decision", headers=headers,
+            json={"expected_version": 4, "decision": "approve", "comment": "Reviewed for the CRM plan."},
+        )
+        assert approved_plan.status_code == 200, approved_plan.text
+        assert approved_plan.json()["status"] == "approved"
         stale_plan_update = await client.patch(
             f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}", headers=headers,
-            json={"expected_version": 1, "objective": "Stale update"},
+            json={"expected_version": 5, "objective": "Approved plans are locked"},
         )
         assert stale_plan_update.status_code == 409
 
