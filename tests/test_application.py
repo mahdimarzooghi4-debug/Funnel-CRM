@@ -67,3 +67,6 @@ def test_catalog_workspace_script_is_mounted() -> None:
     assert "X-Workspace-ID" in response.text
     assert "replaceChildren" in response.text
     assert "innerHTML" not in response.text
+    page = client.get("/workspace/crm-catalog")
+    assert "item-category" in page.text
+    assert "item-search" in page.text

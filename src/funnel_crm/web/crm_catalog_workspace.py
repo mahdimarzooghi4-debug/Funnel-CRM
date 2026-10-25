@@ -42,15 +42,16 @@ _PAGE = """<!doctype html>
     <label for="item-code">کد<input id="item-code" maxlength="80" required></label>
     <label for="item-name">نام<input id="item-name" maxlength="200" required></label>
     <label for="item-type">نوع<select id="item-type"><option value="product">محصول</option><option value="service">خدمت</option></select></label>
+    <label for="item-category">گروه<input id="item-category" maxlength="120"></label>
   </div><label for="item-description">توضیح<input id="item-description" maxlength="2000"></label>
   <div class="actions"><button type="submit">ثبت در کاتالوگ</button></div></form></section>
-  <section class="panel"><h2>فهرست کاتالوگ</h2><div id="item-list" class="items"></div></section>
+  <section class="panel"><h2>فهرست کاتالوگ</h2><label for="item-search">جست‌وجوی نام یا کد<input id="item-search" maxlength="200"></label><div id="item-list" class="items"></div></section>
   <section class="panel" id="item-detail" hidden><h2>ویرایش مورد انتخاب‌شده</h2><p id="item-summary" class="muted"></p>
     <form id="update-form"><div class="grid">
       <label for="edit-name">نام<input id="edit-name" maxlength="200" required></label>
       <label for="edit-type">نوع<select id="edit-type"><option value="product">محصول</option><option value="service">خدمت</option></select></label>
       <label for="edit-active">وضعیت<select id="edit-active"><option value="true">فعال</option><option value="false">غیرفعال</option></select></label>
-    </div><label for="edit-description">توضیح<input id="edit-description" maxlength="2000"></label>
+    </div><label for="edit-description">توضیح<input id="edit-description" maxlength="2000"></label><label for="edit-category">گروه<input id="edit-category" maxlength="120"></label>
     <div class="actions"><button type="submit">ذخیرهٔ تغییرات</button></div></form>
   </section>
   <section class="panel" id="price-panel" hidden><h2>افزودن نسخهٔ قیمت</h2><p class="muted">قیمت را با ارز خودش ثبت کنید؛ تبدیل ارز انجام نمی‌شود.</p>
@@ -95,28 +96,29 @@ _SCRIPT = r"""(() => {
       const card = document.createElement("article"); card.className = "card";
       const title = document.createElement("strong"); title.textContent = `${item.name} · ${item.code}`;
       const meta = document.createElement("p"); meta.className = "muted"; meta.textContent = `${item.item_type === "product" ? "محصول" : "خدمت"} · نسخه ${item.version}`;
+      if (item.category) meta.textContent += ` · ${item.category}`;
       const state = document.createElement("span"); state.className = `tag${item.is_active ? "" : " off"}`; state.textContent = item.is_active ? "فعال" : "غیرفعال";
       const button = document.createElement("button"); button.type = "button"; button.textContent = "مدیریت"; button.addEventListener("click", () => selectItem(item));
       card.append(title, meta, state, button); list.appendChild(card);
     });
   }
-  async function loadItems() { items = (await api(`/api/v1/crm/catalog/items?organization_unit_id=${encodeURIComponent(organization.value)}&active_only=false`)).items || []; renderItems(); }
+  async function loadItems() { const search = $("item-search").value.trim(); const query = new URLSearchParams({ organization_unit_id: organization.value, active_only: "false" }); if (search) query.set("search", search); items = (await api(`/api/v1/crm/catalog/items?${query}`)).items || []; renderItems(); }
   function selectItem(item) {
     selected = item; detail.hidden = false; pricePanel.hidden = false; priceHistory.replaceChildren();
     $("item-summary").textContent = `${item.code} · نسخه ${item.version}`;
-    $("edit-name").value = item.name; $("edit-type").value = item.item_type; $("edit-active").value = String(item.is_active); $("edit-description").value = item.description || "";
+    $("edit-name").value = item.name; $("edit-type").value = item.item_type; $("edit-active").value = String(item.is_active); $("edit-description").value = item.description || ""; $("edit-category").value = item.category || "";
   }
   $("create-form").addEventListener("submit", async (event) => {
     event.preventDefault(); if (!organization.value) return message("واحد سازمانی را انتخاب کنید.", true);
     try {
-      const item = await api("/api/v1/crm/catalog/items", "POST", { organization_unit_id: organization.value, code: $("item-code").value, name: $("item-name").value, item_type: $("item-type").value, description: $("item-description").value || null });
+      const item = await api("/api/v1/crm/catalog/items", "POST", { organization_unit_id: organization.value, code: $("item-code").value, name: $("item-name").value, item_type: $("item-type").value, description: $("item-description").value || null, category: $("item-category").value || null });
       event.currentTarget.reset(); await loadItems(); selectItem(item); message("مورد در کاتالوگ ثبت شد.");
     } catch (error) { message(error.message, true); }
   });
   $("update-form").addEventListener("submit", async (event) => {
     event.preventDefault(); if (!selected) return;
     try {
-      selected = await api(`/api/v1/crm/catalog/items/${encodeURIComponent(selected.id)}`, "PATCH", { expected_version: selected.version, name: $("edit-name").value, item_type: $("edit-type").value, is_active: $("edit-active").value === "true", description: $("edit-description").value || null });
+      selected = await api(`/api/v1/crm/catalog/items/${encodeURIComponent(selected.id)}`, "PATCH", { expected_version: selected.version, name: $("edit-name").value, item_type: $("edit-type").value, is_active: $("edit-active").value === "true", description: $("edit-description").value || null, category: $("edit-category").value || null });
       await loadItems(); selectItem(selected); message("تغییرات ذخیره شد.");
     } catch (error) { message(error.message, true); }
   });
@@ -143,6 +145,8 @@ _SCRIPT = r"""(() => {
   $("show-prices").addEventListener("click", () => loadPrices().catch((error) => message(error.message, true)));
   workspace.addEventListener("change", async () => { try { await loadOrganizations(); await loadItems(); detail.hidden = true; pricePanel.hidden = true; } catch (error) { message(error.message, true); } });
   organization.addEventListener("change", () => { loadItems().catch((error) => message(error.message, true)); detail.hidden = true; pricePanel.hidden = true; });
+  let searchTimer;
+  $("item-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadItems().catch((error) => message(error.message, true)), 250); });
   async function init() {
     try {
       const spaces = await api("/api/v1/system/workspaces", "GET", undefined, false);

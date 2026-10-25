@@ -51,12 +51,19 @@ async def test_catalog_items_and_immutable_price_versions_are_scoped_and_audited
     ) as client:
         created = await client.post("/api/v1/crm/catalog/items", headers=headers, json={
             "organization_unit_id": str(org_id), "code": " SKU-01 ",
-            "name": "Service package", "item_type": "service",
+            "name": "Service package", "item_type": "service", "category": "Marketing",
         })
         assert created.status_code == 201, created.text
         item = created.json()
         assert item["code"] == "SKU-01"
         assert item["version"] == 1
+        assert item["category"] == "Marketing"
+        search = await client.get("/api/v1/crm/catalog/items?search=service", headers=headers)
+        assert [row["id"] for row in search.json()["items"]] == [item["id"]]
+        category_filter = await client.get(
+            "/api/v1/crm/catalog/items?category=Marketing", headers=headers,
+        )
+        assert [row["id"] for row in category_filter.json()["items"]] == [item["id"]]
         duplicate = await client.post("/api/v1/crm/catalog/items", headers=headers, json={
             "organization_unit_id": str(org_id), "code": "SKU-01",
             "name": "Duplicate", "item_type": "product",
@@ -93,6 +100,13 @@ async def test_catalog_items_and_immutable_price_versions_are_scoped_and_audited
         )
         assert deactivated.status_code == 200
         assert deactivated.json()["version"] == 2
+        categorized = await client.patch(
+            f"/api/v1/crm/catalog/items/{item['id']}", headers=headers,
+            json={"expected_version": 2, "category": "Growth"},
+        )
+        assert categorized.status_code == 200
+        assert categorized.json()["category"] == "Growth"
+        assert categorized.json()["version"] == 3
         stale_item_update = await client.patch(
             f"/api/v1/crm/catalog/items/{item['id']}", headers=headers,
             json={"expected_version": 1, "name": "Stale edit"},

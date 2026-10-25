@@ -21,6 +21,7 @@ class CatalogItemCreate(BaseModel):
     code: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
+    category: str | None = Field(default=None, max_length=120)
     item_type: str = Field(pattern=r"^(product|service)$")
 
 
@@ -29,6 +30,7 @@ class CatalogItemUpdate(BaseModel):
     expected_version: int = Field(ge=1)
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
+    category: str | None = Field(default=None, max_length=120)
     item_type: str | None = Field(default=None, pattern=r"^(product|service)$")
     is_active: bool | None = None
 
@@ -45,6 +47,7 @@ def _item_json(item: CRMProductCatalogItem) -> dict:
     return {
         "id": item.id, "organization_unit_id": item.organization_unit_id,
         "code": item.code, "name": item.name, "description": item.description,
+        "category": item.category,
         "item_type": item.item_type, "version": item.version,
         "is_active": item.is_active, "created_at": item.created_at,
         "updated_at": item.updated_at,
@@ -94,6 +97,7 @@ async def create_catalog_item(
         id=uuid4(), tenant_id=context.access.tenant_id,
         organization_unit_id=payload.organization_unit_id, code=code,
         name=name, description=payload.description.strip() if payload.description else None,
+        category=payload.category.strip() if payload.category and payload.category.strip() else None,
         item_type=payload.item_type, version=1, is_active=True,
         created_by_membership_id=context.access.membership_id,
     )
@@ -115,6 +119,8 @@ async def create_catalog_item(
 async def list_catalog_items(
     organization_unit_id: UUID | None = None,
     item_type: str | None = Query(default=None, pattern=r"^(product|service)$"),
+    category: str | None = Query(default=None, min_length=1, max_length=120),
+    search: str | None = Query(default=None, min_length=1, max_length=200),
     active_only: bool = True,
     limit: int = Query(default=200, ge=1, le=500),
     context: TenantSessionContext = Depends(require_tenant_session),
@@ -129,6 +135,11 @@ async def list_catalog_items(
         filters.append(CRMProductCatalogItem.organization_unit_id == organization_unit_id)
     if item_type is not None:
         filters.append(CRMProductCatalogItem.item_type == item_type)
+    if category is not None:
+        filters.append(CRMProductCatalogItem.category == category.strip())
+    if search is not None:
+        needle = f"%{search.strip()}%"
+        filters.append((CRMProductCatalogItem.name.ilike(needle)) | (CRMProductCatalogItem.code.ilike(needle)))
     if active_only:
         filters.append(CRMProductCatalogItem.is_active.is_(True))
     items = await context.session.scalars(select(CRMProductCatalogItem).where(*filters).order_by(
@@ -164,6 +175,8 @@ async def update_catalog_item(
             if not value:
                 raise HTTPException(status_code=422, detail="Catalog name cannot be blank")
         if field == "description" and value is not None:
+            value = value.strip() or None
+        if field == "category" and value is not None:
             value = value.strip() or None
         changes[field] = value
     before = {key: getattr(item, key) for key in changes}
