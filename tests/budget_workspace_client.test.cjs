@@ -158,7 +158,7 @@ const learningPortfolio = {
   items: [{
     campaign_name: "Spring launch",
     baseline_period_start: "2026-10-01", baseline_period_end: "2026-10-14",
-    review: { id: "review-portfolio-1", campaign_id: "campaign-portfolio-1", status: "planned", assessment: "بررسی افت سرنخ", corrective_action: "بررسی داده منبع" },
+    review: { id: "review-portfolio-1", campaign_id: "campaign-portfolio-1", status: "planned", assessment: "بررسی افت سرنخ", corrective_action: "بررسی داده منبع", follow_up_effectiveness: null, lesson_learned: null },
     work_item: { id: "work-portfolio-1", status: "open", assigned_membership_id: "membership-other", due_at: null },
   }],
 };
@@ -180,7 +180,16 @@ const fetch = async (path, options = {}) => {
   } else if (path === "/api/v1/crm/campaigns/campaign-portfolio-1/targets" && options.method === "GET") {
     payload = [{ id: "target-follow-up-1", period_start: "2026-10-15", period_end: "2026-10-28" }];
   } else if (path === "/api/v1/crm/marketing-learning/reviews/review-portfolio-1/evaluation" && options.method === "PATCH") {
+    learningPortfolio.items[0].review.status = "evaluated";
+    learningPortfolio.items[0].review.follow_up_effectiveness = "دادهٔ مشاهده‌شده پس از اقدام بهبود را نشان می‌دهد.";
+    learningPortfolio.items[0].review.lesson_learned = "زمان‌بندی پیگیری باید در برنامهٔ کمپین ثبت شود.";
     payload = { review: { status: "evaluated" } };
+  } else if (path === "/api/v1/crm/marketing-learning/reviews/review-portfolio-1" && options.method === "GET") {
+    payload = {
+      review: { ...learningPortfolio.items[0].review },
+      baseline: { period_start: "2026-10-01", period_end: "2026-10-14", metrics: { leads: { target: 12, actual: 8, currency: null } } },
+      follow_up: { period_start: "2026-10-15", period_end: "2026-10-28", metrics: { leads: { target: 15, actual: 13, currency: null } } },
+    };
   } else if (path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?") && (options.method || "GET") === "GET") {
     const query = new URLSearchParams(path.split("?")[1]);
     assert.equal(query.get("organization_unit_id"), "root-1");
@@ -391,9 +400,18 @@ async function main() {
     status: "evaluated",
   });
   assert.deepEqual(elements.get("learning-portfolio-items").children[0].children.map((cell) => cell.textContent), [
-    "Spring launch", "2026-10-01 تا 2026-10-14", "در انتظار پیگیری نتیجه",
+    "Spring launch", "2026-10-01 تا 2026-10-14", "ارزیابی‌شده",
     "بررسی افت سرنخ", "بررسی داده منبع", "باز", "دارای مسئول", "—", "",
   ]);
+  const evidenceRow = elements.get("learning-portfolio-items").children[0];
+  assert.equal(evidenceRow.children[8].children[4].textContent, "مشاهدهٔ شواهد");
+  await evidenceRow.children[8].children[4].dispatch("click");
+  const evidenceCall = calls.find((call) => call.path === "/api/v1/crm/marketing-learning/reviews/review-portfolio-1" && call.options.method === "GET");
+  assert.ok(evidenceCall);
+  const evidencePanel = evidenceRow.children[8].children[5];
+  const followUpActual = evidencePanel.children[2].children[1].children[0].children[4].textContent;
+  assert.ok(["13", "۱۳"].some((digits) => followUpActual.includes(digits)));
+  assert.ok(evidencePanel.children[5].textContent.includes("رابطهٔ علّی را اثبات نمی‌کند"));
   const learningPortfolioCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?"));
   assert.ok(learningPortfolioCall);
   assert.equal(learningPortfolioCall.options.headers["X-Workspace-ID"], workspace.id);

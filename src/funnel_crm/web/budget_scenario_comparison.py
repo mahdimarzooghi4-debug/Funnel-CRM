@@ -1671,6 +1671,41 @@ _CLIENT_SCRIPT = r"""(() => {
       button.disabled = false;
     }
   }
+  async function openLearningEvidence(item, host, button) {
+    button.disabled = true;
+    try {
+      const detail = await getJson(`/api/v1/crm/marketing-learning/reviews/${encodeURIComponent(item.review.id)}`, latestFields.workspace);
+      const panel = document.createElement("div");
+      panel.className = "notice";
+      panel.appendChild(element("strong", "", "شواهد دورهٔ مبنا و پیگیری"));
+      panel.appendChild(element("p", "muted", `مبنا: ${detail.baseline.period_start} تا ${detail.baseline.period_end} · پیگیری: ${detail.follow_up ? `${detail.follow_up.period_start} تا ${detail.follow_up.period_end}` : "ثبت نشده"}`));
+      const table = document.createElement("table");
+      const head = document.createElement("tr");
+      ["شاخص", "هدف مبنا", "واقعی مبنا", "هدف پیگیری", "واقعی پیگیری"].forEach((label) => head.appendChild(element("th", "", label)));
+      const thead = document.createElement("thead"); thead.appendChild(head); table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      const metricKeys = new Set([...Object.keys(detail.baseline.metrics || {}), ...Object.keys(detail.follow_up?.metrics || {})]);
+      metricKeys.forEach((key) => {
+        const baseline = detail.baseline.metrics?.[key];
+        const followUp = detail.follow_up?.metrics?.[key];
+        const row = document.createElement("tr");
+        row.append(element("td", "", targetMetricLabel(key)),
+          element("td", "", targetValue(baseline?.target, baseline?.currency)),
+          element("td", "", targetValue(baseline?.actual, baseline?.currency)),
+          element("td", "", targetValue(followUp?.target, followUp?.currency)),
+          element("td", "", targetValue(followUp?.actual, followUp?.currency)));
+        tbody.appendChild(row);
+      });
+      table.appendChild(tbody);
+      panel.appendChild(table);
+      panel.appendChild(element("p", "", `اثربخشی ثبت‌شده: ${detail.review.follow_up_effectiveness || "—"}`));
+      panel.appendChild(element("p", "", `درس آموخته‌شده: ${detail.review.lesson_learned || "—"}`));
+      panel.appendChild(element("p", "muted", "این مقایسه تغییرهای مشاهده‌شده را نشان می‌دهد و به‌تنهایی رابطهٔ علّی را اثبات نمی‌کند."));
+      host.appendChild(panel);
+    } catch (error) {
+      setStatus(error.message || "دریافت شواهد ارزیابی ناموفق بود.", true);
+    } finally { button.disabled = false; }
+  }
   function renderLearningPortfolio(result) {
     const note = byId("learning-portfolio-note");
     const counts = byId("learning-portfolio-counts");
@@ -1773,6 +1808,13 @@ _CLIENT_SCRIPT = r"""(() => {
         evaluationButton.textContent = "ارزیابی پیگیری";
         evaluationButton.addEventListener("click", () => openLearningEvaluation(item, actionCell, evaluationButton));
         actionCell.appendChild(evaluationButton);
+      }
+      if (review.status === "evaluated") {
+        const evidenceButton = document.createElement("button");
+        evidenceButton.type = "button";
+        evidenceButton.textContent = "مشاهدهٔ شواهد";
+        evidenceButton.addEventListener("click", () => openLearningEvidence(item, actionCell, evidenceButton));
+        actionCell.appendChild(evidenceButton);
       }
       if (!actionCell.children.length) actionCell.textContent = "—";
       row.appendChild(actionCell);
