@@ -110,6 +110,7 @@ class LearningPortfolioReport(BaseModel):
     period_start: date | None
     period_end: date | None
     status_filter: Literal["planned", "evaluated"] | None
+    lesson_query: str | None
     total_count: int
     planned_count: int
     evaluated_count: int
@@ -318,10 +319,12 @@ async def get_learning_portfolio(
     organization_unit_id: UUID | None = None,
     include_work_items: bool = False,
     overdue_only: bool = False,
+    lesson_query: str | None = Query(default=None, max_length=120),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> LearningPortfolioReport:
+    lesson_query = lesson_query.strip() if lesson_query and lesson_query.strip() else None
     if period_start is not None and period_end is not None and period_start > period_end:
         raise HTTPException(status_code=422, detail="period_start must not be after period_end")
     if period_start is not None and period_end is not None and (period_end - period_start).days > 365:
@@ -380,6 +383,11 @@ async def get_learning_portfolio(
         review_filters.append(CRMMarketingCampaignTargetPlan.period_end >= period_start)
     if period_end is not None:
         review_filters.append(CRMMarketingCampaignTargetPlan.period_start <= period_end)
+    if lesson_query is not None:
+        escaped_query = lesson_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        review_filters.append(CRMMarketingLearningReview.lesson_learned.ilike(
+            f"%{escaped_query}%", escape="\\"
+        ))
     filters = list(review_filters)
     if status is not None:
         filters.append(CRMMarketingLearningReview.status == status)
@@ -501,6 +509,7 @@ async def get_learning_portfolio(
                      "period_end": period_end.isoformat() if period_end else None,
                      "status": status, "include_work_items": include_work_items,
                      "overdue_only": overdue_only,
+                     "lesson_query": lesson_query,
                      "total_count": total, "returned_count": len(items),
                      "offset": offset, "limit": limit},
         correlation_id=None,
@@ -508,7 +517,7 @@ async def get_learning_portfolio(
     await context.session.flush()
     return LearningPortfolioReport(
         generated_at=report_generated_at, period_start=period_start,
-        period_end=period_end, status_filter=status, total_count=total,
+        period_end=period_end, status_filter=status, lesson_query=lesson_query, total_count=total,
         planned_count=counts.get("planned", 0), evaluated_count=counts.get("evaluated", 0),
         work_item_counts=work_item_counts,
         can_update_work_items=can_update_work_items,

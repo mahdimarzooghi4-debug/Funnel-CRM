@@ -72,7 +72,8 @@ const ids = [
   "save-variance-review", "cancel-variance-review", "variance-review-next-step",
   "variance-review-created-note", "create-variance-review-work-item",
   "assign-follow-up-to-me", "follow-up-due-at",
-  "learning-portfolio-note", "learning-overdue-only", "learning-portfolio-counts", "learning-portfolio-items",
+  "learning-portfolio-note", "learning-lesson-query", "search-learning-lessons",
+  "learning-overdue-only", "learning-portfolio-counts", "learning-portfolio-items",
   "target-period-comparison-note", "target-period-comparison",
   "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
 ];
@@ -82,6 +83,7 @@ elements.get("compare").tagName = "BUTTON";
 elements.get("save-variance-review").tagName = "BUTTON";
 elements.get("cancel-variance-review").tagName = "BUTTON";
 elements.get("create-variance-review-work-item").tagName = "BUTTON";
+elements.get("search-learning-lessons").tagName = "BUTTON";
 elements.get("variance-review-panel").hidden = true;
 elements.get("variance-review-next-step").hidden = true;
 elements.get("assign-follow-up-to-me").checked = true;
@@ -201,7 +203,7 @@ const fetch = async (path, options = {}) => {
     assert.equal(query.get("organization_unit_id"), "root-1");
     assert.equal(query.get("period_start"), "2026-10-01");
     assert.equal(query.get("period_end"), "2026-10-14");
-    payload = learningPortfolio;
+    payload = { ...learningPortfolio, lesson_query: query.get("lesson_query") };
   } else if (path === "/api/v1/crm/marketing-learning/reviews" && options.method === "POST") {
     payload = { id: "review-1", status: "planned" };
   } else if (path === "/api/v1/crm/marketing-learning/reviews/review-1/work-item" && options.method === "POST") {
@@ -367,6 +369,10 @@ async function main() {
   await elements.get("learning-overdue-only").dispatch("change");
   const overduePortfolioCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?") && new URLSearchParams(call.path.split("?")[1]).get("overdue_only") === "true");
   assert.ok(overduePortfolioCall, "overdue filter must be applied by the portfolio API");
+  elements.get("learning-lesson-query").value = "زمان‌بندی پیگیری";
+  await elements.get("search-learning-lessons").dispatch("click");
+  const lessonSearchCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?") && new URLSearchParams(call.path.split("?")[1]).get("lesson_query") === "زمان‌بندی پیگیری");
+  assert.ok(lessonSearchCall, "lesson search must be applied by the portfolio API");
   const taskRow = elements.get("learning-portfolio-items").children[0];
   const statusSelect = taskRow.children[8].children[0];
   const selfAssignControl = taskRow.children[8].children[1].children[0];

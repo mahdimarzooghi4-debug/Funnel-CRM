@@ -233,6 +233,21 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert evaluated_body["items"][0]["work_item"]["status"] == "completed"
         assert evaluated_body["work_item_counts"]["completed"] == 1
         assert evaluated_body["work_item_counts"]["overdue"] == 0
+        lesson_search = await client.get(
+            f"{base}/portfolio", headers=headers,
+            params={"organization_unit_id": str(root_id),
+                    "lesson_query": " observed CONVERSION ", "include_work_items": "true"},
+        )
+        assert lesson_search.status_code == 200, lesson_search.text
+        assert lesson_search.json()["lesson_query"] == "observed CONVERSION"
+        assert lesson_search.json()["total_count"] == 1
+        assert lesson_search.json()["items"][0]["review"]["id"] == review_id
+        literal_wildcard_search = await client.get(
+            f"{base}/portfolio", headers=headers,
+            params={"lesson_query": "%"},
+        )
+        assert literal_wildcard_search.status_code == 200, literal_wildcard_search.text
+        assert literal_wildcard_search.json()["total_count"] == 0
         completed_overdue_filter = await client.get(
             f"{base}/portfolio", headers=headers,
             params={"include_work_items": "true", "overdue_only": "true"},

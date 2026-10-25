@@ -268,6 +268,12 @@ _PAGE = """<!doctype html>
       </section>
       <h3 style="margin-top:26px">پیگیری بررسی‌های مدیریتی</h3>
       <p id="learning-portfolio-note" class="muted">بررسی‌ها و کارهای پیگیری ثبت‌شده در همین واحد و بازه.</p>
+      <div class="actions">
+        <label for="learning-lesson-query">جست‌وجو در درس‌های آموخته‌شده
+          <input id="learning-lesson-query" type="search" maxlength="120" placeholder="مثلاً زمان‌بندی پیگیری">
+        </label>
+        <button id="search-learning-lessons" type="button">جست‌وجو</button>
+      </div>
       <label for="learning-overdue-only" style="display:flex;align-items:center;gap:8px;margin:10px 0">
         <input id="learning-overdue-only" type="checkbox" style="width:18px;min-height:18px">
         فقط بررسی‌های دارای کار موعدگذشته
@@ -1550,6 +1556,8 @@ _CLIENT_SCRIPT = r"""(() => {
       include_work_items: "true",
       limit: "100",
     });
+    const lessonQuery = byId("learning-lesson-query").value.trim();
+    if (lessonQuery) query.set("lesson_query", lessonQuery);
     const overdueOnly = byId("learning-overdue-only").checked;
     if (overdueOnly) query.set("overdue_only", "true");
     const path = "/api/v1/crm/marketing-learning/reviews/portfolio?" + query.toString();
@@ -1756,6 +1764,9 @@ _CLIENT_SCRIPT = r"""(() => {
     note.textContent = result.workItemsVisible
       ? "وضعیت بررسی‌ها و کارهای پیوندخورده بر اساس دادهٔ ثبت‌شده است؛ تغییر وضعیت فقط با ثبت صریح شما انجام می‌شود."
       : "بررسی‌ها بر اساس مجوز مشاهده نمایش داده شده‌اند؛ جزئیات کارها برای حساب شما در دسترس نیست.";
+    if (report.lesson_query) {
+      note.textContent += ` جست‌وجوی درس: «${report.lesson_query}»؛ ${formatNumber.format(report.total_count)} نتیجه.`;
+    }
     const items = report.items || [];
     if (!items.length) {
       const row = document.createElement("tr");
@@ -2336,6 +2347,9 @@ _CLIENT_SCRIPT = r"""(() => {
   byId("save-variance-review").addEventListener("click", saveVarianceReview);
   byId("create-variance-review-work-item").addEventListener("click", createVarianceReviewWorkItem);
   byId("learning-overdue-only").addEventListener("change", async () => {
+    if (latestFields) renderLearningPortfolio(await loadLearningPortfolio(latestFields));
+  });
+  byId("search-learning-lessons").addEventListener("click", async () => {
     if (latestFields) renderLearningPortfolio(await loadLearningPortfolio(latestFields));
   });
   byId("cancel-variance-review").addEventListener("click", () => {
