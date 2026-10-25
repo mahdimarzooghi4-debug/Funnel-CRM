@@ -153,11 +153,12 @@ const previousTargetPortfolio = {
 const learningPortfolio = {
   total_count: 1, planned_count: 1, evaluated_count: 0,
   can_update_work_items: true,
+  can_manage_marketing_reviews: true,
   work_item_counts: { linked: 1, without_work_item: 0, open: 1, in_progress: 0, completed: 0, cancelled: 0, overdue: 0 },
   items: [{
     campaign_name: "Spring launch",
     baseline_period_start: "2026-10-01", baseline_period_end: "2026-10-14",
-    review: { status: "planned", assessment: "بررسی افت سرنخ", corrective_action: "بررسی داده منبع" },
+    review: { id: "review-portfolio-1", campaign_id: "campaign-portfolio-1", status: "planned", assessment: "بررسی افت سرنخ", corrective_action: "بررسی داده منبع" },
     work_item: { id: "work-portfolio-1", status: "open", assigned_membership_id: "membership-other", due_at: null },
   }],
 };
@@ -176,6 +177,10 @@ const fetch = async (path, options = {}) => {
     payload = query.get("period_start") === "2026-09-17" ? previousTargetPortfolio : targetPortfolio;
   } else if (path === "/api/v1/crm/work-items/work-portfolio-1" && options.method === "PATCH") {
     payload = { id: "work-portfolio-1", status: JSON.parse(options.body).status };
+  } else if (path === "/api/v1/crm/campaigns/campaign-portfolio-1/targets" && options.method === "GET") {
+    payload = [{ id: "target-follow-up-1", period_start: "2026-10-15", period_end: "2026-10-28" }];
+  } else if (path === "/api/v1/crm/marketing-learning/reviews/review-portfolio-1/evaluation" && options.method === "PATCH") {
+    payload = { review: { status: "evaluated" } };
   } else if (path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?") && (options.method || "GET") === "GET") {
     const query = new URLSearchParams(path.split("?")[1]);
     assert.equal(query.get("organization_unit_id"), "root-1");
@@ -369,6 +374,22 @@ async function main() {
   await assignmentCell.children[3].dispatch("click");
   const assignmentCall = calls.filter((call) => call.path === "/api/v1/crm/work-items/work-portfolio-1")[1];
   assert.deepEqual(JSON.parse(assignmentCall.options.body), { assigned_membership_id: "membership-1" });
+  const postAssignmentRow = elements.get("learning-portfolio-items").children[0];
+  const evaluationButton = postAssignmentRow.children[8].children[4];
+  await evaluationButton.dispatch("click");
+  const evaluationForm = postAssignmentRow.children[8].children[5];
+  evaluationForm.children[1].value = "target-follow-up-1";
+  evaluationForm.children[2].value = "دادهٔ مشاهده‌شده پس از اقدام بهبود را نشان می‌دهد.";
+  evaluationForm.children[3].value = "زمان‌بندی پیگیری باید در برنامهٔ کمپین ثبت شود.";
+  await evaluationForm.children[4].dispatch("click");
+  const evaluationCall = calls.find((call) => call.path === "/api/v1/crm/marketing-learning/reviews/review-portfolio-1/evaluation");
+  assert.ok(evaluationCall);
+  assert.deepEqual(JSON.parse(evaluationCall.options.body), {
+    follow_up_target_plan_id: "target-follow-up-1",
+    follow_up_effectiveness: "دادهٔ مشاهده‌شده پس از اقدام بهبود را نشان می‌دهد.",
+    lesson_learned: "زمان‌بندی پیگیری باید در برنامهٔ کمپین ثبت شود.",
+    status: "evaluated",
+  });
   assert.deepEqual(elements.get("learning-portfolio-items").children[0].children.map((cell) => cell.textContent), [
     "Spring launch", "2026-10-01 تا 2026-10-14", "در انتظار پیگیری نتیجه",
     "بررسی افت سرنخ", "بررسی داده منبع", "باز", "دارای مسئول", "—", "",
