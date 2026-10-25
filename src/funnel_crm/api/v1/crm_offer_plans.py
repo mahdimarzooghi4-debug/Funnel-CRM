@@ -1,5 +1,6 @@
 """Organization-scoped marketing offer planning drafts."""
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -94,6 +95,21 @@ class OfferPlanUpdate(BaseModel):
         return self
 
 
+class OfferPlanDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    decision: Literal["approve", "request_changes"]
+    comment: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("comment")
+    @classmethod
+    def clean_comment(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("review comment must not be blank")
+        return value
+
+
 def _json(row: CRMMarketingOfferPlan) -> dict:
     return {
         "id": row.id, "organization_unit_id": row.organization_unit_id,
@@ -103,6 +119,8 @@ def _json(row: CRMMarketingOfferPlan) -> dict:
         "starts_at": row.starts_at, "ends_at": row.ends_at,
         "eligibility_conditions": row.eligibility_conditions, "success_metric": row.success_metric,
         "campaign_id": row.campaign_id, "status": row.status, "version": row.version,
+        "review_note": row.review_note, "reviewed_by_membership_id": row.reviewed_by_membership_id,
+        "reviewed_at": row.reviewed_at,
         "owner_membership_id": row.owner_membership_id,
         "created_at": row.created_at, "updated_at": row.updated_at,
     }
@@ -186,6 +204,8 @@ async def update_offer_plan(plan_id: UUID, payload: OfferPlanUpdate,
         raise HTTPException(status_code=404, detail="CRM offer plan scope not found")
     if row.version != payload.expected_version:
         raise HTTPException(status_code=409, detail="Offer plan version is stale")
+    if row.status == "approved":
+        raise HTTPException(status_code=409, detail="Approved plans cannot be edited; create a new draft instead")
     changes = payload.model_dump(exclude={"expected_version"}, exclude_unset=True)
     merged = {field: getattr(row, field) for field in OfferPlanCreate.model_fields if field != "organization_unit_id"}
     merged.update(changes)
@@ -195,6 +215,10 @@ async def update_offer_plan(plan_id: UUID, payload: OfferPlanUpdate,
     for field, value in normalized.model_dump(exclude={"organization_unit_id"}).items():
         setattr(row, field, value)
     row.version += 1
+    row.status = "draft"
+    row.review_note = None
+    row.reviewed_by_membership_id = None
+    row.reviewed_at = None
     row.updated_at = datetime.now(timezone.utc)
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id, actor_kind="user", actor_identity_id=context.access.identity_id,
@@ -203,6 +227,40 @@ async def update_offer_plan(plan_id: UUID, payload: OfferPlanUpdate,
         organization_unit_id=row.organization_unit_id, before_state=before,
         after_state={"version": row.version, "name": row.name, "status": row.status,
                      "changed_fields": sorted(changes)}, correlation_id=None,
+    ))
+    await context.session.flush()
+    return _json(row)
+
+
+@router.post("/{plan_id}/decision", operation_id="decideCRMMarketingOfferPlan")
+async def decide_offer_plan(plan_id: UUID, payload: OfferPlanDecision,
+                            context: TenantSessionContext = Depends(require_tenant_session)) -> dict:
+    row = await context.session.scalar(select(CRMMarketingOfferPlan).where(
+        CRMMarketingOfferPlan.tenant_id == context.access.tenant_id,
+        CRMMarketingOfferPlan.id == plan_id,
+    ).with_for_update())
+    if row is None or not await has_crm_permission(context, permission_key="crm.offer_plan:approve",
+                                                   organization_unit_id=row.organization_unit_id):
+        raise HTTPException(status_code=404, detail="CRM offer plan scope not found")
+    if row.version != payload.expected_version:
+        raise HTTPException(status_code=409, detail="Offer plan version is stale")
+    if row.status != "draft":
+        raise HTTPException(status_code=409, detail="Only a draft plan can receive a review decision")
+    before = {"status": row.status, "version": row.version}
+    row.status = "approved" if payload.decision == "approve" else "changes_requested"
+    row.version += 1
+    row.review_note = payload.comment
+    row.reviewed_by_membership_id = context.access.membership_id
+    row.reviewed_at = datetime.now(timezone.utc)
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id, actor_kind="user", actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_offer_plan.approved" if payload.decision == "approve"
+                   else "crm_marketing_offer_plan.changes_requested",
+        target_type="crm_marketing_offer_plan", target_key=str(row.id),
+        organization_unit_id=row.organization_unit_id, before_state=before,
+        after_state={"status": row.status, "version": row.version, "review_note": row.review_note},
+        correlation_id=None,
     ))
     await context.session.flush()
     return _json(row)
