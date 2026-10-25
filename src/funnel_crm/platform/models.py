@@ -2414,3 +2414,44 @@ class CRMOpportunityOfferDraftLine(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     unit_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
+
+
+class CRMMarketingOfferPlan(Base):
+    """Configurable, non-activating marketing offer proposal draft."""
+
+    __tablename__ = "crm_marketing_offer_plans"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_offer_plans_tenant_id"),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 160", name="ck_crm_marketing_offer_plans_name"),
+        CheckConstraint("length(trim(objective)) BETWEEN 1 AND 2000", name="ck_crm_marketing_offer_plans_objective"),
+        CheckConstraint("status = 'draft'", name="ck_crm_marketing_offer_plans_status"),
+        CheckConstraint("version >= 1", name="ck_crm_marketing_offer_plans_version"),
+        CheckConstraint("starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at", name="ck_crm_marketing_offer_plans_schedule"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_marketing_offer_plans_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"], ["organization_units.tenant_id", "organization_units.id"], name="fk_crm_marketing_offer_plans_org", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "campaign_id"], ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.id"], name="fk_crm_marketing_offer_plans_campaign", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "catalog_item_id"], ["crm_product_catalog_items.tenant_id", "crm_product_catalog_items.id"], name="fk_crm_marketing_offer_plans_catalog_item", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "owner_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_marketing_offer_plans_owner", ondelete="CASCADE"),
+        Index("ix_crm_marketing_offer_plans_tenant_org_status", "tenant_id", "organization_unit_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    objective: Mapped[str] = mapped_column(String(2000), nullable=False)
+    offer_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    catalog_item_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    audience_description: Mapped[str] = mapped_column(String(1000), nullable=False)
+    channel: Mapped[str] = mapped_column(String(80), nullable=False)
+    location_scope: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    eligibility_conditions: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    success_metric: Mapped[str] = mapped_column(String(500), nullable=False)
+    campaign_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default=text("'draft'"))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    owner_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
