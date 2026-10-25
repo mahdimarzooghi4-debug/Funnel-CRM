@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
@@ -225,10 +226,10 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         scenario_data = scenario.json()
         assert scenario_data["plan_version"] == 1
         assert scenario_data["expected_uses"] == "10.0"
-        assert scenario_data["gross_reference_revenue"] == "2500.000000"
-        assert scenario_data["planned_offer_value"] == "250.000000"
-        assert scenario_data["revenue_after_offer"] == "2250.000000"
-        assert scenario_data["revenue_after_offer_and_campaign_budget"] == "2150.000000"
+        assert Decimal(scenario_data["gross_reference_revenue"]) == Decimal("2500")
+        assert Decimal(scenario_data["planned_offer_value"]) == Decimal("250")
+        assert Decimal(scenario_data["revenue_after_offer"]) == Decimal("2250")
+        assert Decimal(scenario_data["revenue_after_offer_and_campaign_budget"]) == Decimal("2150")
         assert scenario_data["margin_estimate"] is None
         listed_scenarios = await client.get(
             f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/scenarios", headers=headers,
