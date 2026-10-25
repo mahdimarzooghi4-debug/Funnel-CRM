@@ -7,6 +7,8 @@ from fastapi import FastAPI, Request
 
 from funnel_crm.api.v1.crm_opportunities import router
 from funnel_crm.api.v1.crm_sales_forecasting import router as forecast_router
+from funnel_crm.api.v1.crm_catalog import router as catalog_router
+from funnel_crm.api.v1.crm_opportunity_catalog import router as opportunity_catalog_router
 from funnel_crm.platform.models import Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -22,6 +24,8 @@ def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
 
     app.include_router(router, prefix="/api/v1")
     app.include_router(forecast_router, prefix="/api/v1")
+    app.include_router(catalog_router, prefix="/api/v1")
+    app.include_router(opportunity_catalog_router, prefix="/api/v1")
     return app
 
 
@@ -60,6 +64,8 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
                     "crm.opportunity:view",
                     "crm.opportunity:create",
                     "crm.opportunity:update",
+                    "crm.catalog:view",
+                    "crm.catalog:manage",
                 )
             ],
         ])
@@ -119,6 +125,30 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert created.status_code == 201, created.text
         opportunity_id = created.json()["id"]
 
+        catalog_item = await client.post(
+            "/api/v1/crm/catalog/items", headers=headers,
+            json={"organization_unit_id": str(root_id), "code": "OFFER-01",
+                  "name": "Retail onboarding", "item_type": "service", "category": "Services"},
+        )
+        assert catalog_item.status_code == 201, catalog_item.text
+        attached = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/catalog-items", headers=headers,
+            json={"catalog_item_id": catalog_item.json()["id"],
+                  "expected_catalog_version": catalog_item.json()["version"]},
+        )
+        assert attached.status_code == 201, attached.text
+        assert attached.json()["name"] == "Retail onboarding"
+        assert attached.json()["category"] == "Services"
+        item_list = await client.get(
+            f"/api/v1/crm/opportunities/{opportunity_id}/catalog-items", headers=headers,
+        )
+        assert [row["id"] for row in item_list.json()["items"]] == [attached.json()["id"]]
+        duplicate_link = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/catalog-items", headers=headers,
+            json={"catalog_item_id": catalog_item.json()["id"], "expected_catalog_version": 1},
+        )
+        assert duplicate_link.status_code == 409
+
         board = await client.get(
             "/api/v1/crm/opportunities",
             headers=headers,
@@ -145,7 +175,7 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert history.status_code == 200, history.text
         history_page = history.json()
         assert history_page["opportunity_id"] == opportunity_id
-        assert history_page["total"] == 2
+        assert history_page["total"] == 3
         assert len(history_page["items"]) == 1
         latest_event = history_page["items"][0]
         assert latest_event["action_key"] == "crm_opportunity.updated"

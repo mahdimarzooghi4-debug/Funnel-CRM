@@ -2333,3 +2333,32 @@ class CRMProductCatalogPriceVersion(Base):
     effective_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMOpportunityCatalogItem(Base):
+    """Immutable product reference captured on a sales opportunity."""
+
+    __tablename__ = "crm_opportunity_catalog_items"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_opportunity_catalog_items_tenant_id"),
+        UniqueConstraint("tenant_id", "opportunity_id", "catalog_item_id", name="uq_crm_opportunity_catalog_items_link"),
+        CheckConstraint("catalog_item_version >= 1", name="ck_crm_opportunity_catalog_items_version"),
+        CheckConstraint("item_type_snapshot IN ('product', 'service')", name="ck_crm_opportunity_catalog_items_type"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_opportunity_catalog_items_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "opportunity_id"], ["crm_opportunities.tenant_id", "crm_opportunities.id"], name="fk_crm_opportunity_catalog_items_opportunity", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "catalog_item_id"], ["crm_product_catalog_items.tenant_id", "crm_product_catalog_items.id"], name="fk_crm_opportunity_catalog_items_catalog", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_opportunity_catalog_items_creator", ondelete="CASCADE"),
+        Index("ix_crm_opportunity_catalog_items_tenant_opportunity", "tenant_id", "opportunity_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    opportunity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    catalog_item_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    catalog_item_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_code_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
+    item_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    item_type_snapshot: Mapped[str] = mapped_column(String(16), nullable=False)
+    category_snapshot: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

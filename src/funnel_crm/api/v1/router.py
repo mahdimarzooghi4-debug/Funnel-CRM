@@ -11,6 +11,7 @@ from funnel_crm.api.v1.crm_sales_forecasting import router as crm_sales_forecast
 from funnel_crm.api.v1.crm_sales_targets import router as crm_sales_targets_router
 from funnel_crm.api.v1.crm_commissions import router as crm_commissions_router
 from funnel_crm.api.v1.crm_catalog import router as crm_catalog_router
+from funnel_crm.api.v1.crm_opportunity_catalog import router as crm_opportunity_catalog_router
 from funnel_crm.api.v1.crm_work_items import router as crm_work_items_router
 from funnel_crm.api.v1.crm_support_cases import router as crm_support_cases_router
 from funnel_crm.api.v1.crm_marketing_learning import router as crm_marketing_learning_router
@@ -57,6 +58,7 @@ router.include_router(crm_sales_forecasting_router)
 router.include_router(crm_sales_targets_router)
 router.include_router(crm_commissions_router)
 router.include_router(crm_catalog_router)
+router.include_router(crm_opportunity_catalog_router)
 router.include_router(crm_work_items_router)
 router.include_router(crm_support_cases_router)
 router.include_router(crm_marketing_learning_router)
