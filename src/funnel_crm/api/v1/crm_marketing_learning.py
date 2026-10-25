@@ -114,6 +114,7 @@ class LearningPortfolioReport(BaseModel):
     planned_count: int
     evaluated_count: int
     work_item_counts: dict[str, int] | None
+    can_update_work_items: bool
     has_more: bool
     items: list[LearningPortfolioItem]
     basis: str
@@ -328,6 +329,7 @@ async def get_learning_portfolio(
         context, permission_key="crm.campaign:view", cte_name="crm_learning_campaign_scope"
     )
     work_item_scopes = None
+    can_update_work_items = False
     if organization_unit_id is not None and not await has_crm_permission(
         context, permission_key="crm.campaign:view", organization_unit_id=organization_unit_id
     ):
@@ -340,6 +342,11 @@ async def get_learning_portfolio(
         work_item_scopes = crm_scope_ids(
             context, permission_key="crm.work_item:view", cte_name="crm_learning_work_item_scope"
         )
+        if organization_unit_id is not None:
+            can_update_work_items = await has_crm_permission(
+                context, permission_key="crm.work_item:update",
+                organization_unit_id=organization_unit_id,
+            )
     elif overdue_only:
         raise HTTPException(status_code=422, detail="overdue_only requires include_work_items")
 
@@ -498,6 +505,7 @@ async def get_learning_portfolio(
         period_end=period_end, status_filter=status, total_count=total,
         planned_count=counts.get("planned", 0), evaluated_count=counts.get("evaluated", 0),
         work_item_counts=work_item_counts,
+        can_update_work_items=can_update_work_items,
         has_more=offset + len(items) < total, items=items,
         basis=("Manager-authored assessments, corrective actions, and follow-up records linked to "
                "their baseline and follow-up campaign target periods; observed changes do not establish causality."),
