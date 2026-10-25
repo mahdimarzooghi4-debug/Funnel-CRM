@@ -179,6 +179,16 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         }
         assert portfolio_body["can_update_work_items"] is True
         assert portfolio_body["can_manage_marketing_reviews"] is True
+        filtered_portfolio = await client.get(
+            f"{base}/portfolio", headers=headers,
+            params={"organization_unit_id": str(root_id), "status": "planned",
+                    "campaign_query": " LEARNING ", "include_work_items": "true"},
+        )
+        assert filtered_portfolio.status_code == 200, filtered_portfolio.text
+        assert filtered_portfolio.json()["total_count"] == 1
+        assert filtered_portfolio.json()["status_filter"] == "planned"
+        assert filtered_portfolio.json()["campaign_query"] == "LEARNING"
+        assert filtered_portfolio.json()["items"][0]["review"]["id"] == review_id
         empty_page = await client.get(
             f"{base}/portfolio", headers=headers,
             params={"period_start": "2026-10-16", "period_end": "2026-10-17",
@@ -245,6 +255,12 @@ async def test_marketing_learning_review_connects_targets_action_and_measured_fo
         assert evaluated_body["items"][0]["work_item"]["status"] == "completed"
         assert evaluated_body["work_item_counts"]["completed"] == 1
         assert evaluated_body["work_item_counts"]["overdue"] == 0
+        no_planned_reviews = await client.get(
+            f"{base}/portfolio", headers=headers,
+            params={"status": "planned", "campaign_query": "Learning"},
+        )
+        assert no_planned_reviews.status_code == 200, no_planned_reviews.text
+        assert no_planned_reviews.json()["total_count"] == 0
         lesson_search = await client.get(
             f"{base}/portfolio", headers=headers,
             params={"organization_unit_id": str(root_id),

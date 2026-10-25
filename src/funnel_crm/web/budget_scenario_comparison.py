@@ -272,7 +272,17 @@ _PAGE = """<!doctype html>
         <label for="learning-lesson-query">جست‌وجو در درس‌های آموخته‌شده
           <input id="learning-lesson-query" type="search" maxlength="120" placeholder="مثلاً زمان‌بندی پیگیری">
         </label>
-        <button id="search-learning-lessons" type="button">جست‌وجو</button>
+        <label for="learning-campaign-query">نام کمپین
+          <input id="learning-campaign-query" type="search" maxlength="120" placeholder="بخشی از نام کمپین">
+        </label>
+        <label for="learning-review-status">وضعیت بررسی
+          <select id="learning-review-status">
+            <option value="">همهٔ وضعیت‌ها</option>
+            <option value="planned">در انتظار پیگیری</option>
+            <option value="evaluated">ارزیابی‌شده</option>
+          </select>
+        </label>
+        <button id="search-learning-lessons" type="button">جست‌وجو و فیلتر</button>
       </div>
       <label for="learning-overdue-only" style="display:flex;align-items:center;gap:8px;margin:10px 0">
         <input id="learning-overdue-only" type="checkbox" style="width:18px;min-height:18px">
@@ -1566,6 +1576,10 @@ _CLIENT_SCRIPT = r"""(() => {
     });
     const lessonQuery = byId("learning-lesson-query").value.trim();
     if (lessonQuery) query.set("lesson_query", lessonQuery);
+    const campaignQuery = byId("learning-campaign-query").value.trim();
+    if (campaignQuery) query.set("campaign_query", campaignQuery);
+    const reviewStatus = byId("learning-review-status").value;
+    if (reviewStatus) query.set("status", reviewStatus);
     const overdueOnly = byId("learning-overdue-only").checked;
     if (overdueOnly) query.set("overdue_only", "true");
     const path = "/api/v1/crm/marketing-learning/reviews/portfolio?" + query.toString();
@@ -1787,6 +1801,7 @@ _CLIENT_SCRIPT = r"""(() => {
     if (report.lesson_query) {
       note.textContent += ` جست‌وجوی درس: «${report.lesson_query}»؛ ${formatNumber.format(report.total_count)} نتیجه.`;
     }
+    if (report.campaign_query) note.textContent += ` کمپین: «${report.campaign_query}».`;
     if (!items.length) {
       const row = document.createElement("tr");
       const cell = element("td", "muted", "برای این واحد و بازه بررسی مدیریتی ثبت نشده است.");
