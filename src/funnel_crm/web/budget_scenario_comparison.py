@@ -224,6 +224,14 @@ _PAGE = """<!doctype html>
           <tbody id="channel-target-summary"></tbody>
         </table>
       </div>
+      <h3 style="margin-top:22px">فاصلهٔ کمی هدف تا عملکرد</h3>
+      <p id="target-variance-summary-note" class="muted">برای شاخص‌های تعدادی، فقط دوره‌های دارای پوشش کامل با هدف مقایسه می‌شوند. اختلاف عددی علت را ثابت نمی‌کند.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">گروه</th><th scope="col">شاخص</th><th scope="col">تعداد هدف‌دار</th><th scope="col">دورهٔ کامل</th><th scope="col">جمع هدف</th><th scope="col">عملکرد کامل</th><th scope="col">فاصله</th><th scope="col">هدف دوره ناقص</th><th scope="col">عملکرد ناقص ثبت‌شده</th></tr></thead>
+          <tbody id="target-variance-summary"></tbody>
+        </table>
+      </div>
       <h3 style="margin-top:22px">نسبت تبدیل ثبت‌شده به سرنخ</h3>
       <p class="muted">نسبت مجموع تبدیل‌های ثبت‌شده به سرنخ‌های ثبت‌شده است؛ فقط کمپین‌هایی با هر دو مقدار و سرنخ مثبت وارد می‌شوند. این شاخص، نرخ تبدیل یکتای افراد یا انتساب علّی را اثبات نمی‌کند.</p>
       <div class="table-wrap">
@@ -1282,6 +1290,55 @@ _CLIENT_SCRIPT = r"""(() => {
     return ({ met: "هدف محقق‌شده", not_met: "هدف محقق‌نشده",
       no_data: "دادهٔ کافی ثبت نشده", unknown: "نامشخص", no_plan: "هدف ثبت نشده" })[status] || "نامشخص";
   }
+  function targetVarianceRows(portfolio) {
+    if (!portfolio || portfolio.campaign_list_truncated) return [];
+    const rows = [];
+    (portfolio?.groups || []).forEach((group) => {
+      Object.entries(group.metric_variances || {}).forEach(([key, values]) => {
+        rows.push({ group: group.key, key, ...values });
+      });
+    });
+    return rows.sort((a, b) => a.group.localeCompare(b.group, "fa") || a.key.localeCompare(b.key));
+  }
+  function renderTargetVarianceSummary(portfolio) {
+    const body = byId("target-variance-summary");
+    const note = byId("target-variance-summary-note");
+    body.replaceChildren();
+    if (!portfolio) {
+      note.textContent = "تحلیل فاصلهٔ هدف و عملکرد در دسترس نیست.";
+      return;
+    }
+    if (portfolio.campaign_list_truncated) {
+      note.textContent = "به‌دلیل محدودیت تعداد کمپین‌ها، جمع‌بندی کامل نیست و نمایش داده نمی‌شود.";
+      return;
+    }
+    note.textContent = "جمع‌بندی همهٔ کمپین‌های هدف‌دار در دامنهٔ انتخاب‌شده است. فاصله فقط برای پوشش کامل دوره محاسبه شده؛ هدف‌ها و عملکرد دوره‌های ناقص جدا هستند. اختلاف عددی علت را ثابت نمی‌کند.";
+    const rows = targetVarianceRows(portfolio);
+    if (!rows.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "هدف تعدادی برای جمع‌بندی ثبت نشده است.");
+      cell.colSpan = 9;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    rows.forEach((item) => {
+      const complete = item.complete_campaign_count > 0;
+      const row = document.createElement("tr");
+      row.append(
+        element("td", "", item.group),
+        element("td", "", targetMetricLabel(item.key)),
+        element("td", "", formatNumber.format(item.targeted_campaign_count)),
+        element("td", "", formatNumber.format(item.complete_campaign_count) + " / " + formatNumber.format(item.incomplete_campaign_count)),
+        element("td", "", formatNumber.format(item.target_total)),
+        element("td", "", complete ? formatNumber.format(item.complete_actual_total) : "نامشخص"),
+        element("td", "", complete ? formatNumber.format(item.complete_variance) : "نامشخص"),
+        element("td", "", formatNumber.format(item.incomplete_target_total)),
+        element("td", "", formatNumber.format(item.partial_actual_total)),
+      );
+      body.appendChild(row);
+    });
+  }
   function renderTargetPeriodComparison(report, current, previous) {
     const body = byId("target-period-comparison");
     const note = byId("target-period-comparison-note");
@@ -1530,6 +1587,18 @@ _CLIENT_SCRIPT = r"""(() => {
         "محقق‌شده: " + item.met + "؛ محقق‌نشده: " + item.notMet
           + "؛ داده ناکافی: " + item.noData + "؛ نامشخص: " + item.unknown,
       ]));
+      targetVarianceRows(latestTargetPortfolio).forEach((item) => rows.push([
+        "فاصله هدف و عملکرد", fields.start, fields.end, "", "", item.group, "",
+        targetMetricLabel(item.key) + " · فاصلهٔ دورهٔ کامل",
+        item.complete_campaign_count > 0 ? item.complete_variance : "",
+        "تعداد هدف‌دار: " + item.targeted_campaign_count
+          + "؛ دورهٔ کامل: " + item.complete_campaign_count
+          + "؛ عملکرد کامل: " + (item.complete_campaign_count > 0 ? item.complete_actual_total : "نامشخص")
+          + "؛ جمع هدف: " + item.target_total
+          + "؛ هدف دوره ناقص: " + item.incomplete_target_total
+          + "؛ عملکرد ناقص ثبت‌شده: " + item.partial_actual_total
+          + "؛ اختلاف عددی است و علت را ثابت نمی‌کند",
+      ]));
       compareLeadConversionRates(result, latestPreviousComparison).forEach((item) => rows.push([
         "نسبت تبدیل به سرنخ", fields.start, fields.end, "", "", item.channel, "",
         "تبدیل ثبت‌شده به سرنخ ثبت‌شده (درصد)", item.current?.rate ?? "",
@@ -1738,6 +1807,7 @@ _CLIENT_SCRIPT = r"""(() => {
       } catch (_) {}
       renderCampaignTargetOutcomes(result, targetPortfolio);
       renderChannelTargetSummary(result, targetPortfolio);
+      renderTargetVarianceSummary(targetPortfolio);
       renderTargetPeriodComparison(result, targetPortfolio, previousTargetPortfolio);
       updateReportUrl(fields, ids);
       latestComparison = result;
