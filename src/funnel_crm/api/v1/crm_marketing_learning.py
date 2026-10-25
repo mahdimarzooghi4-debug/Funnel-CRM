@@ -112,6 +112,8 @@ class LearningPortfolioReport(BaseModel):
     status_filter: Literal["planned", "evaluated"] | None
     lesson_query: str | None
     total_count: int
+    limit: int
+    offset: int
     planned_count: int
     evaluated_count: int
     work_item_counts: dict[str, int] | None
@@ -518,6 +520,7 @@ async def get_learning_portfolio(
     return LearningPortfolioReport(
         generated_at=report_generated_at, period_start=period_start,
         period_end=period_end, status_filter=status, lesson_query=lesson_query, total_count=total,
+        limit=limit, offset=offset,
         planned_count=counts.get("planned", 0), evaluated_count=counts.get("evaluated", 0),
         work_item_counts=work_item_counts,
         can_update_work_items=can_update_work_items,
