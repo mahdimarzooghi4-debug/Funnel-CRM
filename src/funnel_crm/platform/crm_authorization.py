@@ -64,6 +64,7 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.offer_plan:create",
         "crm.offer_plan:update",
         "crm.offer_plan:approve",
+        "crm.offer_plan:scenario",
     }
 )
 
