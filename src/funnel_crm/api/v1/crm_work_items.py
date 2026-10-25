@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import cast, func, select, String
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import has_crm_permission
@@ -314,6 +314,81 @@ async def list_work_items(
     await context.session.flush()
     return [WorkItemRead.model_validate(item) for item in items]
 
+
+@router.get(
+    "/lifecycle-review-readout",
+    response_model=dict,
+    operation_id="getCRMLifecycleReviewReadout",
+)
+async def get_lifecycle_review_readout(
+    organization_unit_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    """Summarize task completion and later recorded activity for review-created work."""
+    tenant_id = context.access.tenant_id
+    await _require_permission(context, "crm.work_item:view", organization_unit_id)
+    is_review_item = select(AuditEvent.event_id).where(
+        AuditEvent.tenant_id == tenant_id,
+        AuditEvent.target_type == "crm_work_item",
+        AuditEvent.target_key == cast(CRMWorkItem.id, String),
+        AuditEvent.action_key == "crm_work_item.created_from_lifecycle_review",
+    ).exists()
+    filters = (
+        CRMWorkItem.tenant_id == tenant_id,
+        CRMWorkItem.organization_unit_id == organization_unit_id,
+        is_review_item,
+    )
+    status_rows = (await context.session.execute(
+        select(CRMWorkItem.status, func.count(CRMWorkItem.id))
+        .where(*filters)
+        .group_by(CRMWorkItem.status)
+    )).all()
+    status_counts = {status: count for status, count in status_rows}
+    activity_count, profile_count = (await context.session.execute(
+        select(
+            func.count(func.distinct(CRMCustomerActivity.id)),
+            func.count(func.distinct(CRMCustomerActivity.profile_id)),
+        )
+        .select_from(CRMWorkItem)
+        .join(
+            CRMCustomerActivity,
+            (CRMCustomerActivity.tenant_id == tenant_id)
+            & (CRMCustomerActivity.profile_id == CRMWorkItem.profile_id)
+            & (CRMCustomerActivity.occurred_at >= CRMWorkItem.created_at),
+        )
+        .where(*filters, CRMWorkItem.profile_id.is_not(None))
+    )).one()
+    context.session.add(AuditEvent(
+        tenant_id=tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_work_item.lifecycle_review_readout_viewed",
+        target_type="crm_work_item_collection",
+        target_key=str(organization_unit_id),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "review_item_count": sum(status_counts.values()),
+            "recorded_activities_after_task_count": activity_count,
+            "profiles_with_recorded_activity_after_task_count": profile_count,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {
+        "review_item_count": sum(status_counts.values()),
+        "work_item_count_by_status": {
+            status: status_counts.get(status, 0)
+            for status in ("open", "in_progress", "completed", "cancelled")
+        },
+        "recorded_activities_after_task_count": activity_count,
+        "profiles_with_recorded_activity_after_task_count": profile_count,
+        "interpretation": (
+            "Later recorded activity is descriptive timing evidence only; it does not establish "
+            "that a work item caused the activity or a customer outcome."
+        ),
+    }
 
 @router.get("/{item_id}", response_model=WorkItemRead,
             operation_id="getCRMWorkItem")
