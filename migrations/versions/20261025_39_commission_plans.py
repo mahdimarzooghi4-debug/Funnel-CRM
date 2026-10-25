@@ -81,6 +81,9 @@ def upgrade() -> None:
     op.execute("""
         CREATE FUNCTION reject_commission_snapshot_mutation() RETURNS trigger AS $$
         BEGIN
+            IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
+                RETURN OLD;
+            END IF;
             RAISE EXCEPTION 'commission calculation snapshots are append-only';
         END;
         $$ LANGUAGE plpgsql
