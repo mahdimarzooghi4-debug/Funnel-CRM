@@ -71,6 +71,7 @@ const ids = [
   "variance-review-panel", "variance-review-assessment", "variance-review-action",
   "save-variance-review", "cancel-variance-review", "variance-review-next-step",
   "variance-review-created-note", "create-variance-review-work-item",
+  "learning-portfolio-note", "learning-portfolio-counts", "learning-portfolio-items",
   "target-period-comparison-note", "target-period-comparison",
   "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
 ];
@@ -146,6 +147,16 @@ const previousTargetPortfolio = {
     },
   }],
 };
+const learningPortfolio = {
+  total_count: 1, planned_count: 1, evaluated_count: 0,
+  work_item_counts: { linked: 1, without_work_item: 0, open: 1, in_progress: 0, completed: 0, cancelled: 0 },
+  items: [{
+    campaign_name: "Spring launch",
+    baseline_period_start: "2026-10-01", baseline_period_end: "2026-10-14",
+    review: { status: "planned", assessment: "بررسی افت سرنخ", corrective_action: "بررسی داده منبع" },
+    work_item: { status: "open", assigned_membership_id: null, due_at: null },
+  }],
+};
 let reportCampaigns = null;
 const fetch = async (path, options = {}) => {
   calls.push({ path, options });
@@ -159,6 +170,12 @@ const fetch = async (path, options = {}) => {
   } else if (path.startsWith("/api/v1/crm/analytics/campaign-target-performance/portfolio?")) {
     const query = new URLSearchParams(path.split("?")[1]);
     payload = query.get("period_start") === "2026-09-17" ? previousTargetPortfolio : targetPortfolio;
+  } else if (path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?")) {
+    const query = new URLSearchParams(path.split("?")[1]);
+    assert.equal(query.get("organization_unit_id"), "root-1");
+    assert.equal(query.get("period_start"), "2026-10-01");
+    assert.equal(query.get("period_end"), "2026-10-14");
+    payload = learningPortfolio;
   } else if (path === "/api/v1/crm/marketing-learning/reviews" && options.method === "POST") {
     payload = { id: "review-1", status: "planned" };
   } else if (path === "/api/v1/crm/marketing-learning/reviews/review-1/work-item" && options.method === "POST") {
@@ -318,6 +335,16 @@ async function main() {
   await elements.get("compare").dispatch("click");
   assert.equal(elements.get("results").hidden, false);
   assert.equal(elements.get("status").textContent, "گزارش برای 14 روز تقویمی آماده شد.");
+  assert.equal(elements.get("learning-portfolio-counts").children.length, 5);
+  assert.equal(elements.get("learning-portfolio-items").children.length, 1);
+  assert.deepEqual(elements.get("learning-portfolio-items").children[0].children.map((cell) => cell.textContent), [
+    "Spring launch", "2026-10-01 تا 2026-10-14", "در انتظار پیگیری نتیجه",
+    "بررسی افت سرنخ", "بررسی داده منبع", "باز", "واگذارنشده", "—",
+  ]);
+  const learningPortfolioCall = calls.find((call) => call.path.startsWith("/api/v1/crm/marketing-learning/reviews/portfolio?"));
+  assert.ok(learningPortfolioCall);
+  assert.equal(learningPortfolioCall.options.headers["X-Workspace-ID"], workspace.id);
+  assert.equal(new URLSearchParams(learningPortfolioCall.path.split("?")[1]).get("include_work_items"), "true");
   const coverage = elements.get("evidence-coverage").children;
   assert.equal(coverage.length, 5);
   assert.equal(coverage[0].children[0].textContent, "۲");

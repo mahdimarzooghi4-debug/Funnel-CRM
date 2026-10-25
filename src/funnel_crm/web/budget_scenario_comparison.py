@@ -258,6 +258,15 @@ _PAGE = """<!doctype html>
           <button id="create-variance-review-work-item" type="button">ایجاد کار پیگیری در صف CRM</button>
         </div>
       </section>
+      <h3 style="margin-top:26px">پیگیری بررسی‌های مدیریتی</h3>
+      <p id="learning-portfolio-note" class="muted">بررسی‌ها و کارهای پیگیری ثبت‌شده در همین واحد و بازه.</p>
+      <div id="learning-portfolio-counts" class="cards" aria-live="polite"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">کمپین</th><th scope="col">دورهٔ مبنا</th><th scope="col">وضعیت بررسی</th><th scope="col">ارزیابی ثبت‌شده</th><th scope="col">اقدام ثبت‌شده</th><th scope="col">وضعیت کار CRM</th><th scope="col">واگذاری</th><th scope="col">موعد</th></tr></thead>
+          <tbody id="learning-portfolio-items"></tbody>
+        </table>
+      </div>
       <h3 style="margin-top:22px">نسبت تبدیل ثبت‌شده به سرنخ</h3>
       <p class="muted">نسبت مجموع تبدیل‌های ثبت‌شده به سرنخ‌های ثبت‌شده است؛ فقط کمپین‌هایی با هر دو مقدار و سرنخ مثبت وارد می‌شوند. این شاخص، نرخ تبدیل یکتای افراد یا انتساب علّی را اثبات نمی‌کند.</p>
       <div class="table-wrap">
@@ -297,6 +306,7 @@ _CLIENT_SCRIPT = r"""(() => {
   let latestFields = null;
   let selectedVarianceReview = null;
   let selectedVarianceReviewId = null;
+  let latestLearningPortfolio = null;
 
   const params = new URLSearchParams(window.location.search);
   const requestedWorkspaceId = params.get("workspace_id") || "";
@@ -1507,6 +1517,86 @@ _CLIENT_SCRIPT = r"""(() => {
       button.disabled = false;
     }
   }
+  async function loadLearningPortfolio(fields) {
+    const query = new URLSearchParams({
+      period_start: fields.start,
+      period_end: fields.end,
+      organization_unit_id: fields.organization,
+      include_work_items: "true",
+      limit: "100",
+    });
+    const path = "/api/v1/crm/marketing-learning/reviews/portfolio?" + query.toString();
+    try {
+      return { report: await getJson(path, fields.workspace), workItemsVisible: true };
+    } catch (_) {
+      query.set("include_work_items", "false");
+      try {
+        return { report: await getJson("/api/v1/crm/marketing-learning/reviews/portfolio?" + query.toString(), fields.workspace), workItemsVisible: false };
+      } catch (_) {
+        return { report: null, workItemsVisible: false };
+      }
+    }
+  }
+  function learningReviewStatusLabel(status) {
+    return ({ planned: "در انتظار پیگیری نتیجه", evaluated: "ارزیابی‌شده" })[status] || "نامشخص";
+  }
+  function learningWorkItemStatusLabel(status) {
+    return ({ open: "باز", in_progress: "در حال انجام", completed: "انجام‌شده", cancelled: "لغوشده" })[status] || "ایجاد نشده";
+  }
+  function renderLearningPortfolio(result) {
+    const note = byId("learning-portfolio-note");
+    const counts = byId("learning-portfolio-counts");
+    const body = byId("learning-portfolio-items");
+    counts.replaceChildren();
+    body.replaceChildren();
+    latestLearningPortfolio = result?.report || null;
+    if (!latestLearningPortfolio) {
+      note.textContent = "فهرست بررسی‌ها در این محدوده در دسترس نیست یا مجوز مشاهده ثبت نشده است.";
+      return;
+    }
+    const report = latestLearningPortfolio;
+    const taskCounts = report.work_item_counts;
+    const summary = [
+      ["بررسی‌ها", report.total_count],
+      ["در انتظار پیگیری نتیجه", report.planned_count],
+      ["ارزیابی‌شده", report.evaluated_count],
+    ];
+    if (taskCounts) summary.push(["کارهای باز", taskCounts.open], ["کارهای انجام‌شده", taskCounts.completed]);
+    summary.forEach(([label, value]) => {
+      const card = document.createElement("div");
+      card.className = "scenario-card";
+      card.append(element("strong", "", formatNumber.format(value)), element("span", "muted", label));
+      counts.appendChild(card);
+    });
+    note.textContent = result.workItemsVisible
+      ? "وضعیت بررسی‌ها و کارهای پیوندخورده بر اساس دادهٔ ثبت‌شده نمایش داده شده است؛ اقدام یا ارزیابی خودکار انجام نمی‌شود."
+      : "بررسی‌ها بر اساس مجوز مشاهده نمایش داده شده‌اند؛ جزئیات کارها برای حساب شما در دسترس نیست.";
+    const items = report.items || [];
+    if (!items.length) {
+      const row = document.createElement("tr");
+      const cell = element("td", "muted", "برای این واحد و بازه بررسی مدیریتی ثبت نشده است.");
+      cell.colSpan = 8;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    items.forEach((item) => {
+      const review = item.review;
+      const workItem = item.work_item;
+      const row = document.createElement("tr");
+      row.append(
+        element("td", "", item.campaign_name),
+        element("td", "", `${item.baseline_period_start} تا ${item.baseline_period_end}`),
+        element("td", "", learningReviewStatusLabel(review.status)),
+        element("td", "", review.assessment),
+        element("td", "", review.corrective_action),
+        element("td", "", learningWorkItemStatusLabel(workItem?.status)),
+        element("td", "", workItem ? (workItem.assigned_membership_id ? "دارای مسئول" : "واگذارنشده") : "—"),
+        element("td", "", workItem?.due_at || "—"),
+      );
+      body.appendChild(row);
+    });
+  }
   function renderTargetPeriodComparison(report, current, previous) {
     const body = byId("target-period-comparison");
     const note = byId("target-period-comparison-note");
@@ -1985,6 +2075,7 @@ _CLIENT_SCRIPT = r"""(() => {
       renderTargetVarianceSummary(targetPortfolio);
       renderCampaignTargetVariance(targetPortfolio);
       renderTargetPeriodComparison(result, targetPortfolio, previousTargetPortfolio);
+      renderLearningPortfolio(await loadLearningPortfolio(fields));
       updateReportUrl(fields, ids);
       latestComparison = result;
       latestPreviousComparison = previousResult;
