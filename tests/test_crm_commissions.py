@@ -16,6 +16,8 @@ from funnel_crm.platform.models import (
     Role,
     RoleAssignment,
     RolePermission,
+    UserIdentity,
+    WorkspaceMembership,
 )
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -90,12 +92,24 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
                 permission_key="crm.commission:view",
             ),
         ])
-        event_ids = [uuid4() for _ in range(4)]
+        other_identity = UserIdentity(
+            issuer=identity.issuer, subject=f"commission-seller-{uuid4()}",
+        )
+        context.session.add(other_identity)
+        await context.session.flush()
+        other_membership = WorkspaceMembership(
+            tenant_id=tenant_id, identity_id=other_identity.id, status="active",
+        )
+        context.session.add(other_membership)
+        await context.session.flush()
+        other_seller_id = other_membership.id
+        event_ids = [uuid4() for _ in range(5)]
         events = [
             (seller_id, "paid", "100", "USD"),
             (seller_id, "refunded", "15", "USD"),
             (None, "paid", "50", "USD"),
             (seller_id, "paid", "20", "EUR"),
+            (other_seller_id, "paid", "200", "USD"),
         ]
         for source_event_id, (event_seller, kind, amount, currency) in zip(event_ids, events):
             context.session.add(CRMProductCommerceEvent(
@@ -151,13 +165,45 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         assert Decimal(unattributed["paid_amount"]) == Decimal("50.000000")
         assert Decimal(unattributed["commission_amount"]) == Decimal("0.000000")
         assert set(unattributed["source_event_ids"]) == {str(event_ids[2])}
+        other_seller_row = by_currency_seller[(str(other_seller_id), "USD")]
+        assert Decimal(other_seller_row["commission_amount"]) == Decimal("20.000000")
 
         history = await client.get(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations", headers=headers
         )
         assert history.status_code == 200, history.text
         assert len(history.json()["items"]) == 1
-        assert len(history.json()["items"][0]["rows"]) == 3
+        assert len(history.json()["items"][0]["rows"]) == 4
+
+        seller_plan_response = await client.post(
+            "/api/v1/crm/commission-plans", headers=headers,
+            json={
+                "organization_unit_id": str(org_id),
+                "seller_membership_id": str(seller_id),
+                "name": "Individual seller",
+                "rate_percent": "20",
+            },
+        )
+        assert seller_plan_response.status_code == 201, seller_plan_response.text
+        seller_plan_id = seller_plan_response.json()["id"]
+        seller_calculation_response = await client.post(
+            f"/api/v1/crm/commission-plans/{seller_plan_id}/calculations",
+            headers=headers,
+            json={"period_start": period_date.isoformat(), "period_end": period_date.isoformat()},
+        )
+        assert seller_calculation_response.status_code == 201, seller_calculation_response.text
+        seller_calculation = seller_calculation_response.json()
+        seller_rows = {
+            (row["seller_membership_id"], row["currency"]): row
+            for row in seller_calculation["rows"]
+        }
+        assert set(seller_rows) == {(str(seller_id), "USD"), (str(seller_id), "EUR"), (None, "USD")}
+        assert Decimal(seller_rows[(str(seller_id), "USD")]["commission_amount"]) == Decimal("17.000000")
+        assert Decimal(seller_rows[(None, "USD")]["commission_amount"]) == Decimal("0.000000")
+        assert all(
+            str(event_ids[4]) not in row["source_event_ids"]
+            for row in seller_calculation["rows"]
+        )
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
@@ -171,7 +217,7 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
             CRMCommissionCalculationRow.tenant_id == tenant_id,
             CRMCommissionCalculationRow.calculation_id == snapshot.id,
         )))
-        assert len(rows) == 3
+        assert len(rows) == 4
         audit_actions = list(await context.session.scalars(select(AuditEvent.action_key).where(
             AuditEvent.tenant_id == tenant_id,
             AuditEvent.action_key.in_({
