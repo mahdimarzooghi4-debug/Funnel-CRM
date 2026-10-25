@@ -10,6 +10,7 @@ from funnel_crm.api.v1.crm_sales_forecasting import router as forecast_router
 from funnel_crm.api.v1.crm_catalog import router as catalog_router
 from funnel_crm.api.v1.crm_opportunity_catalog import router as opportunity_catalog_router
 from funnel_crm.api.v1.crm_opportunity_offers import router as opportunity_offers_router
+from funnel_crm.api.v1.crm_offer_plans import router as offer_plans_router
 from funnel_crm.platform.models import Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -28,6 +29,7 @@ def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
     app.include_router(catalog_router, prefix="/api/v1")
     app.include_router(opportunity_catalog_router, prefix="/api/v1")
     app.include_router(opportunity_offers_router, prefix="/api/v1")
+    app.include_router(offer_plans_router, prefix="/api/v1")
     return app
 
 
@@ -70,6 +72,9 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
                     "crm.catalog:manage",
                     "crm.offer:view",
                     "crm.offer:create",
+                    "crm.offer_plan:view",
+                    "crm.offer_plan:create",
+                    "crm.offer_plan:update",
                 )
             ],
         ])
@@ -192,6 +197,34 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert {entry["id"] for entry in offer_list.json()["items"]} == {
             offer.json()["id"], revised_offer.json()["id"],
         }
+
+        planned_offer = await client.post(
+            "/api/v1/crm/offer-plans", headers=headers,
+            json={"organization_unit_id": str(root_id), "name": "Retail launch offer",
+                  "objective": "Increase first-month customer conversion",
+                  "offer_type": "store-defined incentive", "catalog_item_id": catalog_item.json()["id"],
+                  "audience_description": "New customers in assigned stores", "channel": "store",
+                  "location_scope": "Central region", "eligibility_conditions": "First purchase only",
+                  "success_metric": "First purchase conversion"},
+        )
+        assert planned_offer.status_code == 201, planned_offer.text
+        assert planned_offer.json()["status"] == "draft"
+        assert planned_offer.json()["version"] == 1
+        plan_list = await client.get("/api/v1/crm/offer-plans", headers=headers,
+                                     params={"organization_unit_id": str(root_id)})
+        assert plan_list.status_code == 200, plan_list.text
+        assert [item["id"] for item in plan_list.json()["items"]] == [planned_offer.json()["id"]]
+        plan_update = await client.patch(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}", headers=headers,
+            json={"expected_version": 1, "eligibility_conditions": "First purchase from an assigned store"},
+        )
+        assert plan_update.status_code == 200, plan_update.text
+        assert plan_update.json()["version"] == 2
+        stale_plan_update = await client.patch(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}", headers=headers,
+            json={"expected_version": 1, "objective": "Stale update"},
+        )
+        assert stale_plan_update.status_code == 409
 
         board = await client.get(
             "/api/v1/crm/opportunities",
