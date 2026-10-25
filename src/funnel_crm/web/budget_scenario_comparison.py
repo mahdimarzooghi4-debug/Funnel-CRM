@@ -1605,6 +1605,72 @@ _CLIENT_SCRIPT = r"""(() => {
       button.disabled = false;
     }
   }
+  async function openLearningEvaluation(item, host, button) {
+    button.disabled = true;
+    try {
+      const plans = await getJson(`/api/v1/crm/campaigns/${encodeURIComponent(item.review.campaign_id)}/targets`, latestFields.workspace);
+      const eligiblePlans = (plans || []).filter((plan) => plan.period_start > item.baseline_period_end);
+      if (!eligiblePlans.length) {
+        setStatus("برای این کمپین دورهٔ هدفی پس از دورهٔ مبنا ثبت نشده است.", true);
+        button.disabled = false;
+        return;
+      }
+      const form = document.createElement("div");
+      const planSelect = document.createElement("select");
+      eligiblePlans.forEach((plan) => {
+        const option = document.createElement("option");
+        option.value = plan.id;
+        option.textContent = `${plan.period_start} تا ${plan.period_end}`;
+        planSelect.appendChild(option);
+      });
+      const effectiveness = document.createElement("textarea");
+      effectiveness.maxLength = 1200;
+      effectiveness.placeholder = "اثربخشی اقدام در داده‌های مشاهده‌شده";
+      effectiveness.required = true;
+      const lesson = document.createElement("textarea");
+      lesson.maxLength = 1200;
+      lesson.placeholder = "درس آموخته‌شده";
+      lesson.required = true;
+      const save = document.createElement("button");
+      save.type = "button";
+      save.textContent = "ثبت ارزیابی پیگیری";
+      const evidenceNote = element("p", "muted", "ارزیابی فقط با وجود دادهٔ مشاهده‌شدهٔ دورهٔ انتخابی پذیرفته می‌شود؛ تغییر مشاهده‌شده به‌تنهایی علت را اثبات نمی‌کند.");
+      save.addEventListener("click", async () => {
+        if (!effectiveness.value.trim() || !lesson.value.trim()) {
+          setStatus("ارزیابی اثربخشی و درس آموخته‌شده را وارد کنید.", true);
+          return;
+        }
+        save.disabled = true;
+        try {
+          const response = await fetch(`/api/v1/crm/marketing-learning/reviews/${encodeURIComponent(item.review.id)}/evaluation`, {
+            method: "PATCH",
+            credentials: "same-origin",
+            headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Workspace-ID": latestFields.workspace },
+            body: JSON.stringify({
+              follow_up_target_plan_id: planSelect.value,
+              follow_up_effectiveness: effectiveness.value.trim(),
+              lesson_learned: lesson.value.trim(),
+              status: "evaluated",
+            }),
+          });
+          let payload = {};
+          try { payload = await response.json(); } catch (_) {}
+          if (!response.ok) throw new Error(payload.detail || "ثبت ارزیابی پیگیری ناموفق بود.");
+          setStatus("ارزیابی پیگیری با دادهٔ ثبت‌شده ذخیره شد.", false);
+          renderLearningPortfolio(await loadLearningPortfolio(latestFields));
+        } catch (error) {
+          setStatus(error.message || "ثبت ارزیابی پیگیری ناموفق بود.", true);
+          save.disabled = false;
+        }
+      });
+      form.append(evidenceNote, planSelect, effectiveness, lesson, save);
+      host.appendChild(form);
+      button.disabled = false;
+    } catch (error) {
+      setStatus(error.message || "دریافت دوره‌های هدف کمپین ناموفق بود.", true);
+      button.disabled = false;
+    }
+  }
   function renderLearningPortfolio(result) {
     const note = byId("learning-portfolio-note");
     const counts = byId("learning-portfolio-counts");
@@ -1700,9 +1766,15 @@ _CLIENT_SCRIPT = r"""(() => {
         };
         saveButton.addEventListener("click", () => updateLearningWorkItem(updateContext, statusSelect.value, saveButton));
         actionCell.append(statusSelect, assignmentLabel, dueControl, saveButton);
-      } else {
-        actionCell.textContent = "—";
       }
+      if (review.status === "planned" && report.can_manage_marketing_reviews) {
+        const evaluationButton = document.createElement("button");
+        evaluationButton.type = "button";
+        evaluationButton.textContent = "ارزیابی پیگیری";
+        evaluationButton.addEventListener("click", () => openLearningEvaluation(item, actionCell, evaluationButton));
+        actionCell.appendChild(evaluationButton);
+      }
+      if (!actionCell.children.length) actionCell.textContent = "—";
       row.appendChild(actionCell);
       body.appendChild(row);
     });

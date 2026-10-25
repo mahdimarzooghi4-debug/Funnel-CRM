@@ -115,6 +115,7 @@ class LearningPortfolioReport(BaseModel):
     evaluated_count: int
     work_item_counts: dict[str, int] | None
     can_update_work_items: bool
+    can_manage_marketing_reviews: bool
     has_more: bool
     items: list[LearningPortfolioItem]
     basis: str
@@ -330,6 +331,7 @@ async def get_learning_portfolio(
     )
     work_item_scopes = None
     can_update_work_items = False
+    can_manage_marketing_reviews = False
     if organization_unit_id is not None and not await has_crm_permission(
         context, permission_key="crm.campaign:view", organization_unit_id=organization_unit_id
     ):
@@ -356,6 +358,10 @@ async def get_learning_portfolio(
         CRMMarketingLearningReview.organization_unit_id.in_(scopes),
     ]
     if organization_unit_id is not None:
+        can_manage_marketing_reviews = await has_crm_permission(
+            context, permission_key="crm.campaign:manage",
+            organization_unit_id=organization_unit_id,
+        )
         review_filters.append(CRMMarketingLearningReview.organization_unit_id == organization_unit_id)
     if work_item_scopes is not None:
         review_filters.append(CRMMarketingLearningReview.organization_unit_id.in_(work_item_scopes))
@@ -506,6 +512,7 @@ async def get_learning_portfolio(
         planned_count=counts.get("planned", 0), evaluated_count=counts.get("evaluated", 0),
         work_item_counts=work_item_counts,
         can_update_work_items=can_update_work_items,
+        can_manage_marketing_reviews=can_manage_marketing_reviews,
         has_more=offset + len(items) < total, items=items,
         basis=("Manager-authored assessments, corrective actions, and follow-up records linked to "
                "their baseline and follow-up campaign target periods; observed changes do not establish causality."),
