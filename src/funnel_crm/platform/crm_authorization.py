@@ -55,6 +55,7 @@ CRM_PERMISSION_KEYS = frozenset(
         "crm.sales_target:manage",
         "crm.commission:view",
         "crm.commission:manage",
+        "crm.commission:export",
     }
 )
 

@@ -39,5 +39,7 @@ def test_commission_workspace_client_uses_authorized_apis_and_safe_dom_updates()
     assert "/versions" in response.text
     assert "/calculations" in response.text
     assert "/calculations/preview" in response.text
+    assert "/export.csv" in response.text
+    assert "دریافت CSV" in response.text
     assert "sessionStorage" in response.text
     assert "innerHTML" not in response.text
