@@ -27,7 +27,7 @@ _PAGE = """<!doctype html>
     .panel { background: #fff; border: 1px solid #e1e8ef; border-radius: 14px; padding: 22px; margin: 18px 0; box-shadow: 0 5px 20px #142d4210; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
     label { display: grid; gap: 7px; color: #405367; font-size: 13px; }
-    input, select { width: 100%; min-height: 42px; border: 1px solid #cbd6e0; border-radius: 8px; padding: 9px 11px; color: #182638; background: #fff; font: inherit; }
+    input, select, textarea { width: 100%; min-height: 42px; border: 1px solid #cbd6e0; border-radius: 8px; padding: 9px 11px; color: #182638; background: #fff; font: inherit; }
     button { min-height: 42px; border: 0; border-radius: 8px; padding: 9px 16px; background: #1578a8; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
     button:hover { background: #0e648f; }
     button:disabled { opacity: .55; cursor: wait; }
@@ -236,10 +236,24 @@ _PAGE = """<!doctype html>
       <p id="campaign-target-variance-note" class="muted">کمپین‌ها و شاخص‌های دارای هدف در این بازه.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th scope="col">کمپین</th><th scope="col">گروه</th><th scope="col">شاخص</th><th scope="col">هدف</th><th scope="col">عملکرد</th><th scope="col">فاصله</th><th scope="col">پوشش روزانه</th></tr></thead>
+          <thead><tr><th scope="col">کمپین</th><th scope="col">گروه</th><th scope="col">شاخص</th><th scope="col">هدف</th><th scope="col">عملکرد</th><th scope="col">فاصله</th><th scope="col">پوشش روزانه</th><th scope="col">پیگیری</th></tr></thead>
           <tbody id="campaign-target-variance"></tbody>
         </table>
       </div>
+      <section id="variance-review-panel" class="panel" hidden aria-labelledby="variance-review-title">
+        <h3 id="variance-review-title">ثبت بررسی مدیریتی</h3>
+        <p class="muted">شواهد این ردیف به‌صورت پیش‌نویس درج شده‌اند. آن را بررسی کنید، برداشت خود را اصلاح کنید و اقدام بعدی را بنویسید. این ثبت، تصویب بودجه یا اجرای اقدام نیست.</p>
+        <label for="variance-review-assessment">شواهد و ارزیابی
+          <textarea id="variance-review-assessment" rows="4" maxlength="1200" required></textarea>
+        </label>
+        <label for="variance-review-action">اقدام یا بررسی بعدی
+          <textarea id="variance-review-action" rows="3" maxlength="1200" required></textarea>
+        </label>
+        <div class="actions">
+          <button id="save-variance-review" type="button">ثبت بررسی</button>
+          <button id="cancel-variance-review" type="button">بستن</button>
+        </div>
+      </section>
       <h3 style="margin-top:22px">نسبت تبدیل ثبت‌شده به سرنخ</h3>
       <p class="muted">نسبت مجموع تبدیل‌های ثبت‌شده به سرنخ‌های ثبت‌شده است؛ فقط کمپین‌هایی با هر دو مقدار و سرنخ مثبت وارد می‌شوند. این شاخص، نرخ تبدیل یکتای افراد یا انتساب علّی را اثبات نمی‌کند.</p>
       <div class="table-wrap">
@@ -277,6 +291,7 @@ _CLIENT_SCRIPT = r"""(() => {
   let latestTargetPortfolio = null;
   let latestPreviousTargetPortfolio = null;
   let latestFields = null;
+  let selectedVarianceReview = null;
 
   const params = new URLSearchParams(window.location.search);
   const requestedWorkspaceId = params.get("workspace_id") || "";
@@ -1355,7 +1370,8 @@ _CLIENT_SCRIPT = r"""(() => {
         if (!metric || !["impressions", "clicks", "leads", "conversions"].includes(key)) return;
         const complete = metric.observed_days >= metric.period_days;
         rows.push({
-          campaign: campaign.name, group: campaign.group_key, key,
+          campaign: campaign.name, campaignId: campaign.campaign_id,
+          targetPlanId: campaign.target_plan_id, group: campaign.group_key, key,
           target: metric.target, actual: metric.actual,
           variance: complete && metric.actual !== null ? metric.actual - metric.target : null,
           coverage: metric.recorded_day_coverage_percent,
@@ -1379,7 +1395,9 @@ _CLIENT_SCRIPT = r"""(() => {
     const rows = campaignTargetVarianceRows(portfolio);
     if (!rows.length) {
       const row = document.createElement("tr");
-      row.appendChild(element("td", "muted", "شاخص تعدادیِ هدف‌دار برای نمایش پیدا نشد."));
+      const cell = element("td", "muted", "شاخص تعدادیِ هدف‌دار برای نمایش پیدا نشد.");
+      cell.colSpan = 8;
+      row.appendChild(cell);
       body.appendChild(row);
       return;
     }
@@ -1391,8 +1409,67 @@ _CLIENT_SCRIPT = r"""(() => {
         element("td", "", item.actual === null ? "ثبت نشده" : formatNumber.format(item.actual)),
         element("td", "", item.variance === null ? "نامشخص" : formatNumber.format(item.variance)),
         element("td", "", `${item.coverage}%${item.complete ? " · کامل" : " · ناقص"}`));
+      const reviewCell = document.createElement("td");
+      const reviewButton = element("button", "", "ثبت بررسی");
+      reviewButton.type = "button";
+      reviewButton.addEventListener("click", () => {
+        selectedVarianceReview = item;
+        const panel = byId("variance-review-panel");
+        panel.hidden = false;
+        byId("variance-review-assessment").value = [
+          `کمپین: ${item.campaign}`,
+          `شاخص: ${targetMetricLabel(item.key)}`,
+          `دوره: ${portfolio.period_start} تا ${portfolio.period_end}`,
+          `هدف: ${item.target}`,
+          `عملکرد ثبت‌شده: ${item.actual === null ? "ثبت نشده" : item.actual}`,
+          `پوشش روزانه: ${item.coverage}% (${item.complete ? "کامل" : "ناقص"})`,
+          `فاصله: ${item.variance === null ? "محاسبه نشده؛ پوشش دوره کامل نیست" : item.variance}`,
+          "این شواهد عددی به‌تنهایی علت را مشخص نمی‌کند.",
+        ].join("\n");
+        byId("variance-review-action").value = "";
+      });
+      reviewCell.appendChild(reviewButton);
+      row.appendChild(reviewCell);
       body.appendChild(row);
     });
+  }
+  async function saveVarianceReview() {
+    if (!selectedVarianceReview || !latestFields) return;
+    const assessment = byId("variance-review-assessment").value.trim();
+    const correctiveAction = byId("variance-review-action").value.trim();
+    if (!assessment || !correctiveAction) {
+      setStatus("ارزیابی و اقدام بعدی را کامل کنید.", true);
+      return;
+    }
+    const button = byId("save-variance-review");
+    button.disabled = true;
+    try {
+      const response = await fetch("/api/v1/crm/marketing-learning/reviews", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Workspace-ID": latestFields.workspace },
+        body: JSON.stringify({
+          campaign_id: selectedVarianceReview.campaignId,
+          target_plan_id: selectedVarianceReview.targetPlanId,
+          experiment_id: null,
+          assessment,
+          corrective_action: correctiveAction,
+        }),
+      });
+      let payload = {};
+      try { payload = await response.json(); } catch (_) {}
+      if (!response.ok) {
+        if (response.status === 401) throw new Error("برای ثبت بررسی ابتدا وارد حساب کاربری شوید.");
+        if (response.status === 403) throw new Error("مجوز ثبت بررسی برای این کمپین را ندارید.");
+        throw new Error(payload.detail || "ثبت بررسی ناموفق بود.");
+      }
+      byId("variance-review-panel").hidden = true;
+      setStatus("بررسی مدیریتی ثبت شد؛ هیچ بودجه یا اقدامی به‌صورت خودکار تغییر نکرد.", false);
+    } catch (error) {
+      setStatus(error.message || "ثبت بررسی ناموفق بود.", true);
+    } finally {
+      button.disabled = false;
+    }
   }
   function renderTargetPeriodComparison(report, current, previous) {
     const body = byId("target-period-comparison");
@@ -1888,6 +1965,11 @@ _CLIENT_SCRIPT = r"""(() => {
   }
   byId("load-scenarios").addEventListener("click", loadScenarios);
   byId("compare").addEventListener("click", compareScenarios);
+  byId("save-variance-review").addEventListener("click", saveVarianceReview);
+  byId("cancel-variance-review").addEventListener("click", () => {
+    selectedVarianceReview = null;
+    byId("variance-review-panel").hidden = true;
+  });
   workspaceInput.addEventListener("change", async () => {
     scenarioPanel.hidden = true;
     clearResults();
