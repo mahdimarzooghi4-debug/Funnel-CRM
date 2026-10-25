@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
@@ -11,6 +12,7 @@ from funnel_crm.api.v1.crm_catalog import router as catalog_router
 from funnel_crm.api.v1.crm_opportunity_catalog import router as opportunity_catalog_router
 from funnel_crm.api.v1.crm_opportunity_offers import router as opportunity_offers_router
 from funnel_crm.api.v1.crm_offer_plans import router as offer_plans_router
+from funnel_crm.api.v1.crm_offer_scenarios import router as offer_scenarios_router
 from funnel_crm.platform.models import Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -30,6 +32,7 @@ def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
     app.include_router(opportunity_catalog_router, prefix="/api/v1")
     app.include_router(opportunity_offers_router, prefix="/api/v1")
     app.include_router(offer_plans_router, prefix="/api/v1")
+    app.include_router(offer_scenarios_router, prefix="/api/v1")
     return app
 
 
@@ -76,6 +79,7 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
                     "crm.offer_plan:create",
                     "crm.offer_plan:update",
                     "crm.offer_plan:approve",
+                    "crm.offer_plan:scenario",
                 )
             ],
         ])
@@ -211,6 +215,26 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert planned_offer.status_code == 201, planned_offer.text
         assert planned_offer.json()["status"] == "draft"
         assert planned_offer.json()["version"] == 1
+        scenario = await client.post(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/scenarios", headers=headers,
+            json={"name": "Low uptake", "audience_size": 80, "expected_use_rate": "12.5",
+                  "price_version": price.json()["version"], "offer_value_per_use": "25",
+                  "campaign_budget_amount": "100", "campaign_budget_currency": "USD",
+                  "assumptions": "Take-up is 12.5%; each use generates one sale."},
+        )
+        assert scenario.status_code == 201, scenario.text
+        scenario_data = scenario.json()
+        assert scenario_data["plan_version"] == 1
+        assert scenario_data["expected_uses"] == "10.0"
+        assert Decimal(scenario_data["gross_reference_revenue"]) == Decimal("2500")
+        assert Decimal(scenario_data["planned_offer_value"]) == Decimal("250")
+        assert Decimal(scenario_data["revenue_after_offer"]) == Decimal("2250")
+        assert Decimal(scenario_data["revenue_after_offer_and_campaign_budget"]) == Decimal("2150")
+        assert scenario_data["margin_estimate"] is None
+        listed_scenarios = await client.get(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/scenarios", headers=headers,
+        )
+        assert [x["id"] for x in listed_scenarios.json()["items"]] == [scenario_data["id"]]
         plan_list = await client.get("/api/v1/crm/offer-plans", headers=headers,
                                      params={"organization_unit_id": str(root_id)})
         assert plan_list.status_code == 200, plan_list.text
@@ -244,6 +268,12 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
             json={"expected_version": 5, "objective": "Approved plans are locked"},
         )
         assert stale_plan_update.status_code == 409
+        approved_scenario = await client.post(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/scenarios", headers=headers,
+            json={"name": "After approval", "audience_size": 10, "expected_use_rate": 50,
+                  "assumptions": "This must be rejected."},
+        )
+        assert approved_scenario.status_code == 409
 
         board = await client.get(
             "/api/v1/crm/opportunities",

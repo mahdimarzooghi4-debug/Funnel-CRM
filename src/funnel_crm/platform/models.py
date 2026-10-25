@@ -2465,3 +2465,48 @@ class CRMMarketingOfferPlan(Base):
     owner_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMMarketingOfferScenario(Base):
+    """Immutable, assumption-based economic scenario for one plan version."""
+
+    __tablename__ = "crm_marketing_offer_scenarios"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_offer_scenarios_tenant_id"),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 160", name="ck_crm_marketing_offer_scenarios_name"),
+        CheckConstraint("audience_size >= 0", name="ck_crm_marketing_offer_scenarios_audience"),
+        CheckConstraint("expected_use_rate >= 0 AND expected_use_rate <= 100", name="ck_crm_marketing_offer_scenarios_use_rate"),
+        CheckConstraint("plan_version >= 1 AND catalog_item_version >= 1", name="ck_crm_marketing_offer_scenarios_versions"),
+        CheckConstraint("(price_version IS NULL AND unit_amount IS NULL AND offer_value_per_use IS NULL AND currency IS NULL) OR "
+                        "(price_version IS NOT NULL AND unit_amount IS NOT NULL AND offer_value_per_use IS NOT NULL AND currency IS NOT NULL)",
+                        name="ck_crm_marketing_offer_scenarios_price_snapshot"),
+        CheckConstraint("unit_amount IS NULL OR (offer_value_per_use >= 0 AND offer_value_per_use <= unit_amount)",
+                        name="ck_crm_marketing_offer_scenarios_offer_value"),
+        CheckConstraint("(campaign_budget_amount IS NULL AND campaign_budget_currency IS NULL) OR "
+                        "(campaign_budget_amount IS NOT NULL AND campaign_budget_amount >= 0 AND campaign_budget_currency ~ '^[A-Z]{3}$')",
+                        name="ck_crm_marketing_offer_scenarios_budget_pair"),
+        CheckConstraint("length(trim(assumptions)) BETWEEN 1 AND 4000", name="ck_crm_marketing_offer_scenarios_assumptions"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_marketing_offer_scenarios_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "offer_plan_id"], ["crm_marketing_offer_plans.tenant_id", "crm_marketing_offer_plans.id"], name="fk_crm_marketing_offer_scenarios_plan", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_marketing_offer_scenarios_creator", ondelete="CASCADE"),
+        Index("ix_crm_marketing_offer_scenarios_tenant_plan", "tenant_id", "offer_plan_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    offer_plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    audience_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_use_rate: Mapped[Decimal] = mapped_column(Numeric(6, 3), nullable=False)
+    catalog_item_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    catalog_item_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    price_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    unit_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    offer_value_per_use: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    campaign_budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    campaign_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    assumptions: Mapped[str] = mapped_column(String(4000), nullable=False)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

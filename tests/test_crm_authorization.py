@@ -168,6 +168,7 @@ async def test_crm_permission_requires_matching_action_and_inherited_org_scope(
                 "crm.offer_plan:create",
                 "crm.offer_plan:update",
                 "crm.offer_plan:approve",
+                "crm.offer_plan:scenario",
             }
         )
 
