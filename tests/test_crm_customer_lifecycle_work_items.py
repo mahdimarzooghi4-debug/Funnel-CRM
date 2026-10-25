@@ -109,7 +109,11 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
                     permission_key=permission,
                 )
                 for permission in (
-                    "crm.profile:view", "crm.work_item:create", "crm.work_item:view"
+                    "crm.profile:view",
+                    "crm.work_item:create",
+                    "crm.work_item:view",
+                    "crm.work_item:record_outcome",
+                    "crm.work_item:update",
                 )
             ],
         ])
@@ -149,6 +153,31 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         untracked_item = by_profile[str(untracked_id)]
         assert "does not prove no interaction occurred" in untracked_item["description"]
 
+        outcome_payload = {
+            "request_id": str(uuid4()),
+            "outcome_code": "contact_made",
+            "channel": "phone",
+            "notes": "  Customer asked for a follow-up next week.  ",
+        }
+        outcome_url = f"/api/v1/crm/work-items/{stale_item['id']}/outcomes"
+        recorded = await client.post(outcome_url, headers=headers, json=outcome_payload)
+        assert recorded.status_code == 201, recorded.text
+        outcome = recorded.json()
+        assert outcome["outcome_code"] == "contact_made"
+        assert outcome["notes"] == "Customer asked for a follow-up next week."
+        replay = await client.post(outcome_url, headers=headers, json=outcome_payload)
+        assert replay.status_code == 201
+        assert replay.json()["id"] == outcome["id"]
+        conflicting_replay = await client.post(
+            outcome_url,
+            headers=headers,
+            json={**outcome_payload, "outcome_code": "no_contact"},
+        )
+        assert conflicting_replay.status_code == 409
+        listed = await client.get(outcome_url, headers=headers)
+        assert listed.status_code == 200
+        assert [item["id"] for item in listed.json()] == [outcome["id"]]
+
         async with tenant_session(
             runtime_session_factory,
             requested_tenant_id=tenant_id,
@@ -171,6 +200,7 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         assert readout_data["work_item_count_by_status"]["open"] == 2
         assert readout_data["recorded_activities_after_task_count"] == 1
         assert readout_data["profiles_with_recorded_activity_after_task_count"] == 1
+        assert readout_data["follow_up_outcome_count_by_code"]["contact_made"] == 1
         assert "does not establish" in readout_data["interpretation"]
 
         duplicate_ids = await client.post(

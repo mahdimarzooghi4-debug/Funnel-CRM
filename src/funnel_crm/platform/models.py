@@ -1947,6 +1947,60 @@ class CRMWorkItem(Base):
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
     )
 
+
+class CRMWorkItemOutcome(Base):
+    """Human-recorded outcome for one lifecycle follow-up attempt."""
+
+    __tablename__ = "crm_work_item_outcomes"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_work_item_outcomes_tenant_id"),
+        UniqueConstraint("tenant_id", "request_id", name="uq_crm_work_item_outcomes_request"),
+        CheckConstraint(
+            "outcome_code IN ('contact_made', 'no_contact', 'callback_requested', 'not_interested', 'other')",
+            name="ck_crm_work_item_outcomes_code",
+        ),
+        CheckConstraint(
+            "channel IN ('online', 'phone', 'store', 'field', 'support', 'campaign', 'other')",
+            name="ck_crm_work_item_outcomes_channel",
+        ),
+        CheckConstraint("notes IS NULL OR length(notes) <= 2000",
+                        name="ck_crm_work_item_outcomes_notes_length"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_work_item_outcomes_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_work_item_outcomes_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "work_item_id"],
+            ["crm_work_items.tenant_id", "crm_work_items.id"],
+            name="fk_crm_work_item_outcomes_item_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "profile_id"],
+            ["crm_profiles.tenant_id", "crm_profiles.id"],
+            name="fk_crm_work_item_outcomes_profile_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "recorded_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_work_item_outcomes_recorder_same_tenant", ondelete="RESTRICT"),
+        Index("ix_crm_work_item_outcomes_tenant_org_time",
+              "tenant_id", "organization_unit_id", "occurred_at"),
+        Index("ix_crm_work_item_outcomes_tenant_item_time",
+              "tenant_id", "work_item_id", "occurred_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    request_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    work_item_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    recorded_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    outcome_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
 class CRMProductCommerceEvent(Base):
     """Source fact for an explicitly recorded paid order or refund event."""
 
