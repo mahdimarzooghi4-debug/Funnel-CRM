@@ -198,6 +198,23 @@ class OutcomeFollowUpCreate(BaseModel):
         return value
 
 
+class OutcomeFollowUpBatchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_unit_id: UUID
+    outcome_ids: list[UUID] = Field(min_length=1, max_length=100)
+    assigned_membership_id: UUID | None = None
+    due_at: datetime | None = None
+    priority: WorkItemPriority = "normal"
+
+    @field_validator("due_at")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("due_at must include a timezone")
+        return value
+
+
 async def _require_permission(
     context: TenantSessionContext, permission_key: str, organization_unit_id: UUID
 ) -> None:
@@ -681,6 +698,93 @@ async def create_follow_up_from_outcome(
     ))
     await context.session.flush()
     return WorkItemRead.model_validate(item)
+
+
+@router.post(
+    "/outcomes/follow-up-batch",
+    response_model=dict,
+    status_code=201,
+    operation_id="createCRMLifecycleFollowUpBatch",
+)
+async def create_lifecycle_follow_up_batch(
+    payload: OutcomeFollowUpBatchCreate,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    """Create selected follow-up tasks together or reject the entire selection."""
+    if len(set(payload.outcome_ids)) != len(payload.outcome_ids):
+        raise HTTPException(status_code=422, detail="Outcome IDs must be unique")
+    tenant_id = context.access.tenant_id
+    organization_unit_id = payload.organization_unit_id
+    await _require_permission(context, "crm.work_item:create", organization_unit_id)
+    await _validate_assignee(context, payload.assigned_membership_id)
+    outcomes = list(await context.session.scalars(
+        select(CRMWorkItemOutcome).where(
+            CRMWorkItemOutcome.tenant_id == tenant_id,
+            CRMWorkItemOutcome.organization_unit_id == organization_unit_id,
+            CRMWorkItemOutcome.id.in_(payload.outcome_ids),
+        ).with_for_update()
+    ))
+    if len(outcomes) != len(payload.outcome_ids):
+        raise HTTPException(status_code=422, detail="Every outcome must belong to the authorized organization")
+    if any(outcome.outcome_code not in ("callback_requested", "no_contact") for outcome in outcomes):
+        raise HTTPException(status_code=409, detail="Every selected outcome must request another follow-up")
+    existing_task = await context.session.scalar(
+        select(AuditEvent.event_id).where(
+            AuditEvent.tenant_id == tenant_id,
+            AuditEvent.target_type == "crm_work_item_outcome",
+            AuditEvent.target_key.in_([str(outcome_id) for outcome_id in payload.outcome_ids]),
+            AuditEvent.action_key == "crm_work_item.created_from_outcome",
+        ).limit(1)
+    )
+    if existing_task is not None:
+        raise HTTPException(status_code=409, detail="A selected outcome already has a follow-up task; refresh the queue")
+    profiles = list(await context.session.scalars(
+        select(CRMProfile).where(
+            CRMProfile.tenant_id == tenant_id,
+            CRMProfile.organization_unit_id == organization_unit_id,
+            CRMProfile.id.in_([outcome.profile_id for outcome in outcomes]),
+            CRMProfile.archived_at.is_(None),
+            CRMProfile.merged_into_profile_id.is_(None),
+        ).with_for_update()
+    ))
+    active_profile_ids = {profile.id for profile in profiles}
+    if any(outcome.profile_id not in active_profile_ids for outcome in outcomes):
+        raise HTTPException(status_code=409, detail="A selected customer is no longer active; refresh the queue")
+
+    created = []
+    for outcome in outcomes:
+        reason = "callback requested" if outcome.outcome_code == "callback_requested" else "no contact"
+        item = CRMWorkItem(
+            id=uuid4(), tenant_id=tenant_id,
+            organization_unit_id=organization_unit_id,
+            profile_id=outcome.profile_id,
+            opportunity_id=None, campaign_id=None,
+            assigned_membership_id=payload.assigned_membership_id,
+            created_by_membership_id=context.access.membership_id,
+            title=f"Lifecycle follow-up: {reason}",
+            description=f"Created from recorded outcome {outcome.id}; review the outcome before contacting the customer.",
+            due_at=payload.due_at, priority=payload.priority,
+            status="open", completed_at=None,
+        )
+        context.session.add(item)
+        await context.session.flush()
+        _audit(context, item, "crm_work_item.created", None, _snapshot(item))
+        context.session.add(AuditEvent(
+            tenant_id=tenant_id,
+            actor_kind="user",
+            actor_identity_id=context.access.identity_id,
+            actor_membership_id=context.access.membership_id,
+            action_key="crm_work_item.created_from_outcome",
+            target_type="crm_work_item_outcome",
+            target_key=str(outcome.id),
+            organization_unit_id=organization_unit_id,
+            before_state=None,
+            after_state={"work_item_id": str(item.id), "outcome_code": outcome.outcome_code},
+            correlation_id=None,
+        ))
+        created.append(WorkItemRead.model_validate(item))
+    await context.session.flush()
+    return {"created_count": len(created), "items": created}
 
 
 @router.get(
