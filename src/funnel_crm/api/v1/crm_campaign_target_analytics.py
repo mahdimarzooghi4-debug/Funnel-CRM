@@ -46,10 +46,23 @@ class CampaignTargetPortfolioItem(BaseModel):
     metrics: dict[str, TargetMetricEvaluation]
 
 
+class CampaignTargetMetricVariance(BaseModel):
+    targeted_campaign_count: int
+    complete_campaign_count: int
+    incomplete_campaign_count: int
+    target_total: int
+    complete_actual_total: int
+    complete_campaign_target_total: int
+    complete_variance: int
+    incomplete_target_total: int
+    partial_actual_total: int
+
+
 class CampaignTargetPortfolioGroup(BaseModel):
     key: str
     campaign_count: int
     metric_outcomes: dict[str, TargetOutcomeCounts]
+    metric_variances: dict[str, CampaignTargetMetricVariance]
 
 
 class CampaignTargetPortfolioRead(BaseModel):
@@ -60,11 +73,54 @@ class CampaignTargetPortfolioRead(BaseModel):
     campaign_count: int
     campaign_list_truncated: bool
     metric_outcomes: dict[str, TargetOutcomeCounts]
+    metric_variances: dict[str, CampaignTargetMetricVariance]
     metric_definitions: dict[str, MetricDefinition]
     period_calendar_days: int
     coverage_basis: str
     groups: list[CampaignTargetPortfolioGroup]
     campaigns: list[CampaignTargetPortfolioItem]
+
+
+def _metric_variances(
+    items: list[CampaignTargetPortfolioItem],
+) -> dict[str, CampaignTargetMetricVariance]:
+    totals: dict[str, dict[str, int]] = defaultdict(lambda: {
+        "targeted_campaign_count": 0,
+        "complete_campaign_count": 0,
+        "incomplete_campaign_count": 0,
+        "target_total": 0,
+        "complete_actual_total": 0,
+        "complete_campaign_target_total": 0,
+        "incomplete_target_total": 0,
+        "partial_actual_total": 0,
+    })
+    for item in items:
+        for metric_name in ("impressions", "clicks", "leads", "conversions"):
+            result = item.metrics.get(metric_name)
+            if result is None:
+                continue
+            bucket = totals[metric_name]
+            target = int(result.target)
+            bucket["targeted_campaign_count"] += 1
+            bucket["target_total"] += target
+            is_complete = result.observed_days >= result.period_days
+            if not is_complete:
+                bucket["incomplete_campaign_count"] += 1
+                bucket["incomplete_target_total"] += target
+                if result.actual is not None:
+                    bucket["partial_actual_total"] += int(result.actual)
+                continue
+            bucket["complete_campaign_count"] += 1
+            bucket["complete_actual_total"] += int(result.actual or 0)
+            bucket["complete_campaign_target_total"] += target
+
+    return {
+        name: CampaignTargetMetricVariance(
+            **values,
+            complete_variance=(values["complete_actual_total"] - values["complete_campaign_target_total"]),
+        )
+        for name, values in sorted(totals.items())
+    }
 
 
 def _outcomes(
@@ -166,6 +222,7 @@ async def review_campaign_target_portfolio(
             key=key,
             campaign_count=len(group_items),
             metric_outcomes=_outcomes(group_items),
+            metric_variances=_metric_variances(group_items),
         )
         for key, group_items in sorted(grouped.items())
     ]
@@ -204,6 +261,7 @@ async def review_campaign_target_portfolio(
         campaign_count=len(items),
         campaign_list_truncated=truncated,
         metric_outcomes=metric_outcomes,
+        metric_variances=_metric_variances(items),
         metric_definitions=metric_definitions,
         period_calendar_days=(period_end - period_start).days + 1,
         coverage_basis=(

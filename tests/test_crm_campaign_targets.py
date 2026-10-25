@@ -49,7 +49,9 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
     assert isinstance(root_id, UUID)
     assert isinstance(identity, AuthenticatedIdentity)
 
-    segment_id, campaign_id = uuid4(), uuid4()
+    segment_id, campaign_id, partial_campaign_id, campaign_without_measurements_id = (
+        uuid4(), uuid4(), uuid4(), uuid4()
+    )
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
@@ -59,12 +61,27 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             criteria={"profile_kinds": ["person"]}, is_active=True,
         ))
         await context.session.flush()
-        context.session.add(CRMMarketingCampaign(
-            id=campaign_id, tenant_id=tenant_id, organization_unit_id=root_id,
-            segment_id=segment_id, name="Acquisition", objective_key="acquisition",
-            channel="web", planned_budget_amount=None, planned_budget_currency=None,
-            starts_at=None, ends_at=None, status="draft",
-        ))
+        context.session.add_all([
+            CRMMarketingCampaign(
+                id=campaign_id, tenant_id=tenant_id, organization_unit_id=root_id,
+                segment_id=segment_id, name="Acquisition", objective_key="acquisition",
+                channel="web", planned_budget_amount=None, planned_budget_currency=None,
+                starts_at=None, ends_at=None, status="draft",
+            ),
+            CRMMarketingCampaign(
+                id=partial_campaign_id, tenant_id=tenant_id, organization_unit_id=root_id,
+                segment_id=segment_id, name="Partial acquisition", objective_key="acquisition",
+                channel="web", planned_budget_amount=None, planned_budget_currency=None,
+                starts_at=None, ends_at=None, status="draft",
+            ),
+            CRMMarketingCampaign(
+                id=campaign_without_measurements_id, tenant_id=tenant_id,
+                organization_unit_id=root_id, segment_id=segment_id,
+                name="Acquisition follow-up", objective_key="acquisition",
+                channel="web", planned_budget_amount=None, planned_budget_currency=None,
+                starts_at=None, ends_at=None, status="draft",
+            ),
+        ])
         await context.session.flush()
         context.session.add_all([
             CRMMarketingCampaignMeasurement(
@@ -80,6 +97,13 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
                 source_label="analytics", impressions=500, clicks=25, leads=4, conversions=1,
                 actual_spend_amount=Decimal("10"), actual_spend_currency="EUR",
                 attributed_revenue_amount=Decimal("40"), attributed_revenue_currency="EUR",
+            ),
+            CRMMarketingCampaignMeasurement(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=partial_campaign_id, measured_on=date(2026, 10, 16),
+                source_label="analytics", impressions=None, clicks=None, leads=2,
+                conversions=None, actual_spend_amount=None, actual_spend_currency=None,
+                attributed_revenue_amount=None, attributed_revenue_currency=None,
             ),
         ])
         role = Role(tenant_id=tenant_id, name=f"Target manager {uuid4().hex[:8]}")
@@ -104,6 +128,7 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             "period_end": "2026-10-17",
             "impressions_target": 1200,
             "clicks_target": 80,
+            "leads_target": 12,
             "max_spend_amount": "40",
             "max_spend_currency": "USD",
             "max_cpl_amount": "5",
@@ -140,6 +165,28 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert metrics["roas"]["actual"] == "5.000000"
         assert metrics["roas"]["status"] == "met"
 
+        partial_campaign_target = await client.put(
+            f"/api/v1/crm/campaigns/{partial_campaign_id}/targets",
+            headers=headers,
+            json={
+                "period_start": "2026-10-16",
+                "period_end": "2026-10-17",
+                "leads_target": 8,
+            },
+        )
+        assert partial_campaign_target.status_code == 200, partial_campaign_target.text
+
+        campaign_without_measurements_target = await client.put(
+            f"/api/v1/crm/campaigns/{campaign_without_measurements_id}/targets",
+            headers=headers,
+            json={
+                "period_start": "2026-10-16",
+                "period_end": "2026-10-17",
+                "leads_target": 10,
+            },
+        )
+        assert campaign_without_measurements_target.status_code == 200, campaign_without_measurements_target.text
+
         portfolio = await client.get(
             "/api/v1/crm/analytics/campaign-target-performance/portfolio",
             headers=headers,
@@ -151,7 +198,7 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         )
         assert portfolio.status_code == 200, portfolio.text
         report = portfolio.json()
-        assert report["campaign_count"] == 1
+        assert report["campaign_count"] == 3
         assert report["metric_outcomes"]["impressions"] == {
             "evaluated": 1, "met": 1, "not_met": 0, "no_data": 0,
         }
@@ -159,6 +206,18 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             "evaluated": 1, "met": 0, "not_met": 1, "no_data": 0,
         }
         assert report["groups"][0]["key"] == "web"
+        assert report["metric_variances"]["leads"] == {
+            "targeted_campaign_count": 3,
+            "complete_campaign_count": 1,
+            "incomplete_campaign_count": 2,
+            "target_total": 30,
+            "complete_actual_total": 9,
+            "complete_campaign_target_total": 12,
+            "complete_variance": -3,
+            "incomplete_target_total": 18,
+            "partial_actual_total": 2,
+        }
+        assert report["groups"][0]["metric_variances"]["leads"]["incomplete_target_total"] == 18
         assert report["campaigns"][0]["metrics"]["roas"]["currency"] == "USD"
         assert report["period_calendar_days"] == 2
         assert report["metric_definitions"]["roas"]["key"] == "reported_roas"
