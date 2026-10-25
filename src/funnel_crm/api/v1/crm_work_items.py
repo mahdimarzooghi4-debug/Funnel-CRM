@@ -139,6 +139,7 @@ class WorkItemRead(BaseModel):
     priority: WorkItemPriority
     status: WorkItemStatus
     completed_at: datetime | None
+    source_outcome_id: UUID | None
     created_at: datetime
     updated_at: datetime
 
@@ -294,6 +295,7 @@ def _snapshot(item: CRMWorkItem) -> dict:
         "opportunity_id": str(item.opportunity_id) if item.opportunity_id else None,
         "campaign_id": str(item.campaign_id) if item.campaign_id else None,
         "source_learning_review_id": str(item.source_learning_review_id) if item.source_learning_review_id else None,
+        "source_outcome_id": str(item.source_outcome_id) if item.source_outcome_id else None,
         "assigned_membership_id": str(item.assigned_membership_id) if item.assigned_membership_id else None,
         "title": item.title,
         "due_at": item.due_at.isoformat() if item.due_at else None,
@@ -635,24 +637,13 @@ async def create_follow_up_from_outcome(
     if outcome.outcome_code not in ("callback_requested", "no_contact"):
         raise HTTPException(status_code=409, detail="This outcome does not request another follow-up")
 
-    prior = await context.session.scalar(
-        select(AuditEvent).where(
-            AuditEvent.tenant_id == tenant_id,
-            AuditEvent.target_type == "crm_work_item_outcome",
-            AuditEvent.target_key == str(outcome.id),
-            AuditEvent.action_key == "crm_work_item.created_from_outcome",
-        ).limit(1)
+    existing = await context.session.scalar(
+        select(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == tenant_id,
+            CRMWorkItem.source_outcome_id == outcome.id,
+        )
     )
-    if prior is not None:
-        work_item_id = (prior.after_state or {}).get("work_item_id")
-        existing = await context.session.scalar(
-            select(CRMWorkItem).where(
-                CRMWorkItem.tenant_id == tenant_id,
-                CRMWorkItem.id == UUID(work_item_id),
-            )
-        ) if work_item_id else None
-        if existing is None:
-            raise HTTPException(status_code=409, detail="Follow-up task already exists but is unavailable")
+    if existing is not None:
         return WorkItemRead.model_validate(existing)
 
     profile = await context.session.scalar(
@@ -679,6 +670,7 @@ async def create_follow_up_from_outcome(
         description=f"Created from recorded outcome {outcome.id}; review the outcome before contacting the customer.",
         due_at=payload.due_at, priority=payload.priority,
         status="open", completed_at=None,
+        source_outcome_id=outcome.id,
     )
     context.session.add(item)
     await context.session.flush()
@@ -729,11 +721,9 @@ async def create_lifecycle_follow_up_batch(
     if any(outcome.outcome_code not in ("callback_requested", "no_contact") for outcome in outcomes):
         raise HTTPException(status_code=409, detail="Every selected outcome must request another follow-up")
     existing_task = await context.session.scalar(
-        select(AuditEvent.event_id).where(
-            AuditEvent.tenant_id == tenant_id,
-            AuditEvent.target_type == "crm_work_item_outcome",
-            AuditEvent.target_key.in_([str(outcome_id) for outcome_id in payload.outcome_ids]),
-            AuditEvent.action_key == "crm_work_item.created_from_outcome",
+        select(CRMWorkItem.id).where(
+            CRMWorkItem.tenant_id == tenant_id,
+            CRMWorkItem.source_outcome_id.in_(payload.outcome_ids),
         ).limit(1)
     )
     if existing_task is not None:
@@ -765,6 +755,7 @@ async def create_lifecycle_follow_up_batch(
             description=f"Created from recorded outcome {outcome.id}; review the outcome before contacting the customer.",
             due_at=payload.due_at, priority=payload.priority,
             status="open", completed_at=None,
+            source_outcome_id=outcome.id,
         )
         context.session.add(item)
         await context.session.flush()
@@ -803,11 +794,10 @@ async def list_lifecycle_follow_up_action_queue(
     """List active-customer follow-up outcomes that have not yet become a task."""
     tenant_id = context.access.tenant_id
     await _require_permission(context, "crm.work_item:view", organization_unit_id)
-    has_follow_up_task = select(AuditEvent.event_id).where(
-        AuditEvent.tenant_id == tenant_id,
-        AuditEvent.target_type == "crm_work_item_outcome",
-        AuditEvent.target_key == cast(CRMWorkItemOutcome.id, String),
-        AuditEvent.action_key == "crm_work_item.created_from_outcome",
+    has_follow_up_task = select(CRMWorkItem.id).where(
+        CRMWorkItem.tenant_id == tenant_id,
+        CRMWorkItem.organization_unit_id == organization_unit_id,
+        CRMWorkItem.source_outcome_id == CRMWorkItemOutcome.id,
     ).exists()
     stmt = (
         select(
