@@ -929,6 +929,8 @@ async def _require_lifecycle_review_work_item(
 ) -> None:
     if item.profile_id is None:
         raise HTTPException(status_code=422, detail="Lifecycle follow-up outcomes require a linked customer")
+    if item.source_outcome_id is not None:
+        return
     is_lifecycle_item = await context.session.scalar(
         select(AuditEvent.event_id).where(
             AuditEvent.tenant_id == context.access.tenant_id,
