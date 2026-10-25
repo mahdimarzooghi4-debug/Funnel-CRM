@@ -71,6 +71,7 @@ const ids = [
   "variance-review-panel", "variance-review-assessment", "variance-review-action",
   "save-variance-review", "cancel-variance-review", "variance-review-next-step",
   "variance-review-created-note", "create-variance-review-work-item",
+  "assign-follow-up-to-me", "follow-up-due-at",
   "learning-portfolio-note", "learning-portfolio-counts", "learning-portfolio-items",
   "target-period-comparison-note", "target-period-comparison",
   "lead-conversion-ratio", "campaign-unit-cost", "objective-performance", "objective-budget-reconciliation", "objective-unit-cost", "scenario-objective-evidence", "objective-unit-cost-distribution",
@@ -83,6 +84,8 @@ elements.get("cancel-variance-review").tagName = "BUTTON";
 elements.get("create-variance-review-work-item").tagName = "BUTTON";
 elements.get("variance-review-panel").hidden = true;
 elements.get("variance-review-next-step").hidden = true;
+elements.get("assign-follow-up-to-me").checked = true;
+elements.get("follow-up-due-at").value = "2026-10-26T12:00";
 elements.get("period-start").value = "2026-10-01";
 elements.get("period-end").value = "2026-10-14";
 
@@ -99,7 +102,7 @@ const pageWindow = {
 const downloads = [];
 const body = { appendChild: (node) => downloads.push(node) };
 const urlApi = { createObjectURL: (blob) => { downloads.push(blob); return "blob:report"; }, revokeObjectURL: (url) => downloads.push("revoked:" + url) };
-const workspace = { id: "workspace-1", name: "Demo workspace", root_organization_id: "root-1" };
+const workspace = { id: "workspace-1", membership_id: "membership-1", name: "Demo workspace", root_organization_id: "root-1" };
 const scenarios = [
   { id: "scenario-1", name: "<img src=x onerror=alert(1)>", allocation_count: 2 },
   { id: "scenario-2", name: '=HYPERLINK("https://evil.example","open")', allocation_count: 2 },
@@ -179,7 +182,7 @@ const fetch = async (path, options = {}) => {
   } else if (path === "/api/v1/crm/marketing-learning/reviews" && options.method === "POST") {
     payload = { id: "review-1", status: "planned" };
   } else if (path === "/api/v1/crm/marketing-learning/reviews/review-1/work-item" && options.method === "POST") {
-    payload = { created: true, work_item: { id: "work-1", status: "open" } };
+    payload = { created: true, work_item: { id: "work-1", status: "open", assigned_membership_id: "membership-1", due_at: "2026-10-26T12:00:00Z" } };
   } else if (path.startsWith("/api/v1/crm/budget-scenarios/compare/performance-context?")) {
     const query = new URLSearchParams(path.split("?")[1]);
     if (query.get("period_start") === "2026-09-17") {
@@ -438,14 +441,16 @@ async function main() {
   await elements.get("create-variance-review-work-item").dispatch("click");
   assert.equal(elements.get("status").textContent, "کار پیگیری CRM آمادهٔ واگذاری است.");
   assert.equal(elements.get("variance-review-created-note").textContent,
-    "کار پیگیری در صف CRM ایجاد شد؛ مسئول و موعد هنوز تعیین نشده‌اند.");
+    "کار پیگیری در صف CRM ایجاد شد؛ به خودتان واگذار شد و موعد آن ثبت شد.");
   const workItemCall = calls.find((call) => call.path.endsWith("/reviews/review-1/work-item"));
   assert.ok(workItemCall);
   assert.equal(workItemCall.options.method, "POST");
   assert.equal(workItemCall.options.credentials, "same-origin");
   assert.equal(workItemCall.options.headers["X-Workspace-ID"], workspace.id);
   assert.deepEqual(JSON.parse(workItemCall.options.body), {
-    assigned_membership_id: null, due_at: null, priority: "normal",
+    assigned_membership_id: "membership-1",
+    due_at: new Date("2026-10-26T12:00").toISOString(),
+    priority: "normal",
   });
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.example"",""open"")"'),
     "formula-like labels must be neutralized and CSV-escaped");

@@ -15,6 +15,7 @@ router = APIRouter(prefix="/system", tags=["identity workspace context"])
 
 class WorkspaceChoice(BaseModel):
     id: UUID
+    membership_id: UUID
     name: str
     root_organization_id: UUID
 
@@ -46,7 +47,7 @@ async def list_current_user_workspaces(request: Request) -> list[WorkspaceChoice
             )
             rows = (
                 await session.execute(
-                    select(Workspace.id, Workspace.display_name, Workspace.root_organization_id)
+                    select(Workspace.id, WorkspaceMembership.id, Workspace.display_name, Workspace.root_organization_id)
                     .join(
                         WorkspaceMembership,
                         WorkspaceMembership.tenant_id == Workspace.id,
@@ -64,7 +65,7 @@ async def list_current_user_workspaces(request: Request) -> list[WorkspaceChoice
                 )
             ).all()
     return [
-        WorkspaceChoice(id=row.id, name=row.display_name,
+        WorkspaceChoice(id=row.id, membership_id=row[1], name=row.display_name,
                         root_organization_id=row.root_organization_id)
         for row in rows
     ]
