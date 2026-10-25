@@ -1582,7 +1582,7 @@ _CLIENT_SCRIPT = r"""(() => {
       ["در انتظار پیگیری نتیجه", report.planned_count],
       ["ارزیابی‌شده", report.evaluated_count],
     ];
-    if (taskCounts) summary.push(["کارهای باز", taskCounts.open], ["کارهای انجام‌شده", taskCounts.completed]);
+    if (taskCounts) summary.push(["کارهای باز", taskCounts.open], ["کارهای انجام‌شده", taskCounts.completed], ["کارهای موعدگذشته", taskCounts.overdue]);
     summary.forEach(([label, value]) => {
       const card = document.createElement("div");
       card.className = "scenario-card";

@@ -152,7 +152,7 @@ const previousTargetPortfolio = {
 };
 const learningPortfolio = {
   total_count: 1, planned_count: 1, evaluated_count: 0,
-  work_item_counts: { linked: 1, without_work_item: 0, open: 1, in_progress: 0, completed: 0, cancelled: 0 },
+  work_item_counts: { linked: 1, without_work_item: 0, open: 1, in_progress: 0, completed: 0, cancelled: 0, overdue: 0 },
   items: [{
     campaign_name: "Spring launch",
     baseline_period_start: "2026-10-01", baseline_period_end: "2026-10-14",
@@ -338,7 +338,7 @@ async function main() {
   await elements.get("compare").dispatch("click");
   assert.equal(elements.get("results").hidden, false);
   assert.equal(elements.get("status").textContent, "گزارش برای 14 روز تقویمی آماده شد.");
-  assert.equal(elements.get("learning-portfolio-counts").children.length, 5);
+  assert.equal(elements.get("learning-portfolio-counts").children.length, 6);
   assert.equal(elements.get("learning-portfolio-items").children.length, 1);
   assert.deepEqual(elements.get("learning-portfolio-items").children[0].children.map((cell) => cell.textContent), [
     "Spring launch", "2026-10-01 تا 2026-10-14", "در انتظار پیگیری نتیجه",
