@@ -139,10 +139,19 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
                 "organization_unit_id": str(org_id),
                 "name": "Store sales",
                 "rate_percent": "10",
+                "effective_start": (period_date - timedelta(days=1)).isoformat(),
+                "effective_end": (period_date + timedelta(days=1)).isoformat(),
             },
         )
         assert plan_response.status_code == 201, plan_response.text
         plan_id = plan_response.json()["id"]
+        invalid_window_plan = await client.post(
+            "/api/v1/crm/commission-plans", headers=headers,
+            json={"organization_unit_id": str(org_id), "name": "Invalid dates",
+                  "rate_percent": "10", "effective_start": period_date.isoformat(),
+                  "effective_end": (period_date - timedelta(days=1)).isoformat()},
+        )
+        assert invalid_window_plan.status_code == 422
         commission_units = await client.get(
             "/api/v1/system/commission-organization-units", headers=headers
         )
@@ -160,6 +169,13 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         assert preview["snapshot_created"] is False
         assert preview["money_transfer_or_payroll_instruction_created"] is False
         assert Decimal(next(row for row in preview["rows"] if row["currency"] == "USD" and row["seller_membership_id"] == str(seller_id))["commission_amount"]) == Decimal("8.500000")
+        expired_preview = await client.post(
+            f"/api/v1/crm/commission-plans/{plan_id}/calculations/preview",
+            headers=headers,
+            json={"period_start": (period_date + timedelta(days=2)).isoformat(),
+                  "period_end": (period_date + timedelta(days=2)).isoformat()},
+        )
+        assert expired_preview.status_code == 422
         empty_history = await client.get(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations", headers=headers
         )
@@ -261,6 +277,8 @@ async def test_commission_plan_calculation_keeps_currency_refunds_and_unattribut
         assert set(versions_by_number) == {1, 2}
         assert Decimal(versions_by_number[1]["rate_percent"]) == Decimal("10.0000")
         assert Decimal(versions_by_number[2]["rate_percent"]) == Decimal("12.0000")
+        assert versions_by_number[1]["effective_start"] == (period_date - timedelta(days=1)).isoformat()
+        assert versions_by_number[2]["effective_end"] == (period_date + timedelta(days=1)).isoformat()
 
         history = await client.get(
             f"/api/v1/crm/commission-plans/{plan_id}/calculations", headers=headers
