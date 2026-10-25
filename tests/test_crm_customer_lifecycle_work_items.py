@@ -313,6 +313,51 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         assert empty_queue.status_code == 200
         assert empty_queue.json()["total"] == 0
 
+        pending_outcome_ids = []
+        for source_item_id, code in (
+            (stale_item["id"], "no_contact"),
+            (untracked_item["id"], "callback_requested"),
+        ):
+            pending = await client.post(
+                f"/api/v1/crm/work-items/{source_item_id}/outcomes",
+                headers=headers,
+                json={"request_id": str(uuid4()), "outcome_code": code, "channel": "phone"},
+            )
+            assert pending.status_code == 201, pending.text
+            pending_outcome_ids.append(pending.json()["id"])
+        batch_url = "/api/v1/crm/work-items/outcomes/follow-up-batch"
+        batch_payload = {
+            "organization_unit_id": str(root_id),
+            "outcome_ids": pending_outcome_ids,
+        }
+        invalid_batch = await client.post(
+            batch_url,
+            headers=headers,
+            json={**batch_payload, "outcome_ids": [outcome["id"], *pending_outcome_ids]},
+        )
+        assert invalid_batch.status_code == 409
+        still_pending = await client.get(
+            queue_url,
+            headers=headers,
+            params={"organization_unit_id": str(root_id)},
+        )
+        assert still_pending.json()["total"] == 2
+
+        batch = await client.post(batch_url, headers=headers, json=batch_payload)
+        assert batch.status_code == 201, batch.text
+        assert batch.json()["created_count"] == 2
+        assert {item["profile_id"] for item in batch.json()["items"]} == {
+            str(stale_id), str(untracked_id)
+        }
+        after_batch = await client.get(
+            queue_url,
+            headers=headers,
+            params={"organization_unit_id": str(root_id)},
+        )
+        assert after_batch.json()["total"] == 0
+        repeated_batch = await client.post(batch_url, headers=headers, json=batch_payload)
+        assert repeated_batch.status_code == 409
+
         duplicate_ids = await client.post(
             endpoint,
             headers=headers,
