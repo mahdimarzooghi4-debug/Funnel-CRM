@@ -337,6 +337,10 @@ async def test_lifecycle_review_creates_only_still_eligible_scoped_work_items(
         visible_item = visible_items[untracked_outcome.json()["id"]]
         assert visible_item["follow_up_task_id"] == untracked_task.json()["id"]
         assert visible_item["follow_up_task_status"] == "open"
+        callback_queue_item = visible_items[callback.json()["id"]]
+        assert callback_queue_item["follow_up_task_id"] == next_task_data["id"]
+        assert callback_queue_item["follow_up_latest_outcome_code"] == "contact_made"
+        assert callback_queue_item["follow_up_latest_outcome_at"] is not None
 
         empty_queue = await client.get(
             queue_url,

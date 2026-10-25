@@ -797,6 +797,29 @@ async def list_lifecycle_follow_up_action_queue(
     tenant_id = context.access.tenant_id
     await _require_permission(context, "crm.work_item:view", organization_unit_id)
     follow_up_task = aliased(CRMWorkItem)
+    latest_task_outcome = aliased(CRMWorkItemOutcome)
+    latest_task_outcome_code = (
+        select(latest_task_outcome.outcome_code)
+        .where(
+            latest_task_outcome.tenant_id == tenant_id,
+            latest_task_outcome.work_item_id == follow_up_task.id,
+        )
+        .order_by(latest_task_outcome.occurred_at.desc(), latest_task_outcome.id.desc())
+        .limit(1)
+        .correlate(follow_up_task)
+        .scalar_subquery()
+    )
+    latest_task_outcome_at = (
+        select(latest_task_outcome.occurred_at)
+        .where(
+            latest_task_outcome.tenant_id == tenant_id,
+            latest_task_outcome.work_item_id == follow_up_task.id,
+        )
+        .order_by(latest_task_outcome.occurred_at.desc(), latest_task_outcome.id.desc())
+        .limit(1)
+        .correlate(follow_up_task)
+        .scalar_subquery()
+    )
     has_follow_up_task = select(follow_up_task.id).where(
         follow_up_task.tenant_id == tenant_id,
         follow_up_task.organization_unit_id == organization_unit_id,
@@ -820,6 +843,8 @@ async def list_lifecycle_follow_up_action_queue(
             follow_up_task.assigned_membership_id.label("follow_up_assigned_membership_id"),
             follow_up_task.due_at.label("follow_up_due_at"),
             follow_up_task.priority.label("follow_up_priority"),
+            latest_task_outcome_code.label("follow_up_latest_outcome_code"),
+            latest_task_outcome_at.label("follow_up_latest_outcome_at"),
         )
         .join(
             CRMWorkItem,
@@ -877,6 +902,11 @@ async def list_lifecycle_follow_up_action_queue(
             "follow_up_assigned_membership_id": (str(row.follow_up_assigned_membership_id) if row.follow_up_assigned_membership_id else None),
             "follow_up_due_at": row.follow_up_due_at.isoformat() if row.follow_up_due_at else None,
             "follow_up_priority": row.follow_up_priority,
+            "follow_up_latest_outcome_code": row.follow_up_latest_outcome_code,
+            "follow_up_latest_outcome_at": (
+                row.follow_up_latest_outcome_at.isoformat()
+                if row.follow_up_latest_outcome_at else None
+            ),
         }
         for row in rows
     ]
