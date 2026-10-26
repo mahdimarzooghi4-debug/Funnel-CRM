@@ -70,13 +70,25 @@ class CampaignExperimentCreate(BaseModel):
     period_end: date
     variants: list[ExperimentVariantWrite] = Field(min_length=2, max_length=6)
     guardrails: list[GuardrailMetricWrite] = Field(default_factory=list, max_length=8)
+    allocation_method: str = Field(min_length=1, max_length=250)
+    known_limitations: str | None = Field(default=None, max_length=1000)
 
-    @field_validator("name", "hypothesis")
+    @field_validator("name", "hypothesis", "allocation_method")
     @classmethod
     def normalize_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("value must contain a non-whitespace character")
+        return value
+
+    @field_validator("known_limitations")
+    @classmethod
+    def normalize_limitations(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("known limitations must be omitted or contain text")
         return value
 
     @model_validator(mode="after")
@@ -107,6 +119,8 @@ class CampaignExperimentRead(BaseModel):
     primary_metric: str
     currency: str | None
     guardrail_metrics: list[dict[str, str | None]]
+    allocation_method: str
+    known_limitations: str | None
     period_start: date
     period_end: date
     created_at: datetime
@@ -238,6 +252,8 @@ async def create_campaign_experiment(
         name=payload.name, hypothesis=payload.hypothesis,
         primary_metric=payload.primary_metric, currency=payload.currency,
         guardrail_metrics=[item.model_dump() for item in payload.guardrails],
+        allocation_method=payload.allocation_method,
+        known_limitations=payload.known_limitations,
         period_start=payload.period_start, period_end=payload.period_end,
     )
     context.session.add(experiment)
@@ -266,6 +282,8 @@ async def create_campaign_experiment(
             "period_end": payload.period_end.isoformat(),
             "variant_count": len(payload.variants),
             "guardrails": [item.model_dump() for item in payload.guardrails],
+            "allocation_method": payload.allocation_method,
+            "known_limitations": payload.known_limitations,
         },
         correlation_id=None,
     ))
@@ -441,5 +459,3 @@ async def read_campaign_experiment(
     await context.session.flush()
     return CampaignExperimentReadout(
         experiment=CampaignExperimentRead.model_validate(experiment),
-        variants=readouts,
-    )
