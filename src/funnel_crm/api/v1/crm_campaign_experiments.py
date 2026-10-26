@@ -46,6 +46,18 @@ class ExperimentVariantWrite(BaseModel):
         return value
 
 
+class GuardrailMetricWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metric: ExperimentMetric
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+
+    @model_validator(mode="after")
+    def validate_currency(self):
+        if (self.metric in CURRENCY_METRICS) != (self.currency is not None):
+            raise ValueError("currency is required only for cost and ROAS guardrails")
+        return self
+
+
 class CampaignExperimentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -57,6 +69,7 @@ class CampaignExperimentCreate(BaseModel):
     period_start: date
     period_end: date
     variants: list[ExperimentVariantWrite] = Field(min_length=2, max_length=6)
+    guardrails: list[GuardrailMetricWrite] = Field(default_factory=list, max_length=8)
 
     @field_validator("name", "hypothesis")
     @classmethod
@@ -76,6 +89,11 @@ class CampaignExperimentCreate(BaseModel):
             raise ValueError("each variant must use a different campaign")
         if sum(variant.is_control for variant in self.variants) != 1:
             raise ValueError("exactly one control variant is required")
+        guardrail_keys = [(item.metric, item.currency) for item in self.guardrails]
+        if len(set(guardrail_keys)) != len(guardrail_keys):
+            raise ValueError("guardrail metrics must be unique")
+        if (self.primary_metric, self.currency) in set(guardrail_keys):
+            raise ValueError("primary metric cannot also be a guardrail")
         return self
 
 
@@ -88,6 +106,7 @@ class CampaignExperimentRead(BaseModel):
     hypothesis: str
     primary_metric: str
     currency: str | None
+    guardrail_metrics: list[dict[str, str | None]]
     period_start: date
     period_end: date
     created_at: datetime
@@ -105,6 +124,17 @@ class CampaignExperimentListItem(BaseModel):
     variants: list[ExperimentVariantRead]
 
 
+class GuardrailMetricReadout(BaseModel):
+    metric: ExperimentMetric
+    currency: str | None
+    value: int | Decimal | None
+    delta_vs_control: int | Decimal | None
+    percent_change_vs_control: float | None
+    status: Literal["available", "no_data"]
+    observed_days: int
+    paired_days: int
+
+
 class VariantReadout(BaseModel):
     campaign_id: UUID
     campaign_name: str
@@ -117,6 +147,7 @@ class VariantReadout(BaseModel):
     status: Literal["available", "no_data"]
     observed_days: int
     paired_days: int
+    guardrails: list[GuardrailMetricReadout] = Field(default_factory=list)
 
 
 class CampaignExperimentReadout(BaseModel):
@@ -206,6 +237,7 @@ async def create_campaign_experiment(
         organization_unit_id=payload.organization_unit_id,
         name=payload.name, hypothesis=payload.hypothesis,
         primary_metric=payload.primary_metric, currency=payload.currency,
+        guardrail_metrics=[item.model_dump() for item in payload.guardrails],
         period_start=payload.period_start, period_end=payload.period_end,
     )
     context.session.add(experiment)
@@ -233,6 +265,7 @@ async def create_campaign_experiment(
             "period_start": payload.period_start.isoformat(),
             "period_end": payload.period_end.isoformat(),
             "variant_count": len(payload.variants),
+            "guardrails": [item.model_dump() for item in payload.guardrails],
         },
         correlation_id=None,
     ))
@@ -342,6 +375,14 @@ async def read_campaign_experiment(
             measurements_by_campaign[control_variant.campaign_id],
         )
     readouts: list[VariantReadout] = []
+    guardrail_configs = experiment.guardrail_metrics or []
+    guardrail_controls = {
+        (item["metric"], item.get("currency")): _metric_value(
+            item["metric"], item.get("currency"),
+            measurements_by_campaign[control_variant.campaign_id],
+        )[0]
+        for item in guardrail_configs
+    } if control_variant is not None else {}
     for variant, campaign_name in variant_rows:
         value, observed_days, paired_days = _metric_value(
             experiment.primary_metric, experiment.currency,
@@ -352,6 +393,24 @@ async def read_campaign_experiment(
             round(float(delta) / abs(float(control_value)) * 100, 4)
             if delta is not None and control_value != 0 else None
         )
+        guardrail_readouts = []
+        for item in guardrail_configs:
+            metric, currency = item["metric"], item.get("currency")
+            guard_value, guard_days, guard_paired = _metric_value(
+                metric, currency, measurements_by_campaign[variant.campaign_id]
+            )
+            guard_control = guardrail_controls.get((metric, currency))
+            guard_delta = guard_value - guard_control if guard_value is not None and guard_control is not None else None
+            guard_percent = (
+                round(float(guard_delta) / abs(float(guard_control)) * 100, 4)
+                if guard_delta is not None and guard_control != 0 else None
+            )
+            guardrail_readouts.append(GuardrailMetricReadout(
+                metric=metric, currency=currency, value=guard_value,
+                delta_vs_control=guard_delta, percent_change_vs_control=guard_percent,
+                status="available" if guard_value is not None else "no_data",
+                observed_days=guard_days, paired_days=guard_paired,
+            ))
         readouts.append(VariantReadout(
             campaign_id=variant.campaign_id, campaign_name=campaign_name,
             label=variant.label, is_control=variant.is_control,
@@ -359,6 +418,7 @@ async def read_campaign_experiment(
             percent_change_vs_control=percent, currency=experiment.currency,
             status="available" if value is not None else "no_data",
             observed_days=observed_days, paired_days=paired_days,
+            guardrails=guardrail_readouts,
         ))
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id,
@@ -374,6 +434,7 @@ async def read_campaign_experiment(
             "period_start": experiment.period_start.isoformat(),
             "period_end": experiment.period_end.isoformat(),
             "variant_count": len(readouts),
+            "guardrail_count": len(guardrail_configs),
         },
         correlation_id=None,
     ))
