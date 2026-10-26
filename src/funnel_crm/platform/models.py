@@ -1600,6 +1600,8 @@ class CRMMarketingCampaignExperiment(Base):
             name="ck_crm_marketing_campaign_experiments_currency",
         ),
         CheckConstraint("jsonb_typeof(guardrail_metrics) = 'array'", name="ck_crm_marketing_campaign_experiments_guardrails_array"),
+        CheckConstraint("length(trim(allocation_method)) BETWEEN 1 AND 250", name="ck_crm_marketing_campaign_experiments_allocation_method"),
+        CheckConstraint("known_limitations IS NULL OR length(trim(known_limitations)) BETWEEN 1 AND 1000", name="ck_crm_marketing_campaign_experiments_known_limitations"),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
             name="fk_crm_marketing_campaign_experiments_workspace", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
@@ -1621,6 +1623,10 @@ class CRMMarketingCampaignExperiment(Base):
     guardrail_metrics: Mapped[list[dict[str, str | None]]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    allocation_method: Mapped[str] = mapped_column(
+        String(250), nullable=False, default="unspecified", server_default=text("'unspecified'")
+    )
+    known_limitations: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     period_start: Mapped[date] = mapped_column(Date(), nullable=False)
     period_end: Mapped[date] = mapped_column(Date(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -2510,7 +2516,3 @@ class CRMMarketingOfferScenario(Base):
     offer_value_per_use: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     campaign_budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
-    campaign_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
-    assumptions: Mapped[str] = mapped_column(String(4000), nullable=False)
-    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
