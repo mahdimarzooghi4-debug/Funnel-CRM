@@ -459,3 +459,5 @@ async def read_campaign_experiment(
     await context.session.flush()
     return CampaignExperimentReadout(
         experiment=CampaignExperimentRead.model_validate(experiment),
+        variants=readouts,
+    )
