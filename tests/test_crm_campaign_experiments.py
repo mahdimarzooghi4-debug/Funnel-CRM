@@ -131,7 +131,10 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert listed.status_code == 200, listed.text
         assert len(listed.json()) == 1
         assert listed.json()[0]["experiment"]["id"] == str(experiment_id)
-        assert listed.json()[0]["experiment"]["guardrail_metrics"] == payload["guardrails"]
+        assert listed.json()[0]["experiment"]["guardrail_metrics"] == [
+            {"metric": "clicks", "currency": None},
+            {"metric": "roas", "currency": "USD"},
+        ]
 
         readout = await client.get(
             f"/api/v1/crm/campaign-experiments/{experiment_id}/readout",
