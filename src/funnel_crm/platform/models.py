@@ -2516,3 +2516,7 @@ class CRMMarketingOfferScenario(Base):
     offer_value_per_use: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     campaign_budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    campaign_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    assumptions: Mapped[str] = mapped_column(String(4000), nullable=False)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
