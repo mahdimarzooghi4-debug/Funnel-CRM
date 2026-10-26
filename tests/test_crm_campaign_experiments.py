@@ -112,6 +112,8 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "organization_unit_id": str(root_id),
             "name": "Landing page headline test",
             "hypothesis": "Variant headline may increase completed conversions.",
+            "allocation_method": "Random assignment by eligible customer ID in the execution platform.",
+            "known_limitations": "Possible cross-channel exposure is not captured.",
             "primary_metric": "conversions",
             "guardrails": [{"metric": "clicks"}, {"metric": "roas", "currency": "USD"}],
             "period_start": "2026-10-16",
@@ -135,6 +137,8 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             {"metric": "clicks", "currency": None},
             {"metric": "roas", "currency": "USD"},
         ]
+        assert listed.json()[0]["experiment"]["allocation_method"] == payload["allocation_method"]
+        assert listed.json()[0]["experiment"]["known_limitations"] == payload["known_limitations"]
 
         readout = await client.get(
             f"/api/v1/crm/campaign-experiments/{experiment_id}/readout",
@@ -143,6 +147,8 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert readout.status_code == 200, readout.text
         result = readout.json()
         assert result["readout_kind"] == "descriptive_observation"
+        assert result["experiment"]["allocation_method"] == payload["allocation_method"]
+        assert result["experiment"]["known_limitations"] == payload["known_limitations"]
         control, variant = result["variants"]
         assert control["is_control"] is True
         assert control["guardrails"][0]["value"] == 100
@@ -183,3 +189,10 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "/api/v1/crm/campaign-experiments", headers=headers, json=duplicate_guardrail
         )
         assert invalid_guardrail.status_code == 422
+
+        missing_allocation = dict(payload)
+        missing_allocation.pop("allocation_method")
+        invalid_design = await client.post(
+            "/api/v1/crm/campaign-experiments", headers=headers, json=missing_allocation
+        )
+        assert invalid_design.status_code == 422
