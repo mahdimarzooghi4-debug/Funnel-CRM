@@ -146,7 +146,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         control, variant = result["variants"]
         assert control["is_control"] is True
         assert control["guardrails"][0]["value"] == 100
-        assert control["guardrails"][1]["value"] == 3
+        assert Decimal(control["guardrails"][1]["value"]) == Decimal("3")
         assert control["value"] == 10
         assert control["delta_vs_control"] == 0
         assert variant["value"] == 15
@@ -156,8 +156,8 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert variant["guardrails"][0]["value"] == 120
         assert variant["guardrails"][0]["delta_vs_control"] == 20
         assert variant["guardrails"][0]["percent_change_vs_control"] == 20.0
-        assert variant["guardrails"][1]["value"] == 4
-        assert variant["guardrails"][1]["delta_vs_control"] == 1
+        assert Decimal(variant["guardrails"][1]["value"]) == Decimal("4")
+        assert Decimal(variant["guardrails"][1]["delta_vs_control"]) == Decimal("1")
         assert variant["guardrails"][1]["status"] == "available"
 
         missing_currency = dict(payload)
