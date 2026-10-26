@@ -1599,6 +1599,7 @@ class CRMMarketingCampaignExperiment(Base):
             "(primary_metric NOT IN ('cost_per_lead', 'cost_per_conversion', 'roas') AND currency IS NULL)",
             name="ck_crm_marketing_campaign_experiments_currency",
         ),
+        CheckConstraint("jsonb_typeof(guardrail_metrics) = 'array'", name="ck_crm_marketing_campaign_experiments_guardrails_array"),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
             name="fk_crm_marketing_campaign_experiments_workspace", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
@@ -1617,6 +1618,9 @@ class CRMMarketingCampaignExperiment(Base):
     hypothesis: Mapped[str] = mapped_column(String(1000), nullable=False)
     primary_metric: Mapped[str] = mapped_column(String(40), nullable=False)
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    guardrail_metrics: Mapped[list[dict[str, str | None]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
     period_start: Mapped[date] = mapped_column(Date(), nullable=False)
     period_end: Mapped[date] = mapped_column(Date(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
