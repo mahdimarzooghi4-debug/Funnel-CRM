@@ -194,3 +194,5 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         missing_allocation.pop("allocation_method")
         invalid_design = await client.post(
             "/api/v1/crm/campaign-experiments", headers=headers, json=missing_allocation
+        )
+        assert invalid_design.status_code == 422
