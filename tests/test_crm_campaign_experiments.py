@@ -113,6 +113,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "name": "Landing page headline test",
             "hypothesis": "Variant headline may increase completed conversions.",
             "primary_metric": "conversions",
+            "guardrails": [{"metric": "clicks"}, {"metric": "roas", "currency": "USD"}],
             "period_start": "2026-10-16",
             "period_end": "2026-10-16",
             "variants": [
@@ -130,6 +131,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert listed.status_code == 200, listed.text
         assert len(listed.json()) == 1
         assert listed.json()[0]["experiment"]["id"] == str(experiment_id)
+        assert listed.json()[0]["experiment"]["guardrail_metrics"] == payload["guardrails"]
 
         readout = await client.get(
             f"/api/v1/crm/campaign-experiments/{experiment_id}/readout",
@@ -140,12 +142,20 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert result["readout_kind"] == "descriptive_observation"
         control, variant = result["variants"]
         assert control["is_control"] is True
+        assert control["guardrails"][0]["value"] == 100
+        assert control["guardrails"][1]["value"] == 3
         assert control["value"] == 10
         assert control["delta_vs_control"] == 0
         assert variant["value"] == 15
         assert variant["delta_vs_control"] == 5
         assert variant["percent_change_vs_control"] == 50.0
         assert variant["observed_days"] == 1
+        assert variant["guardrails"][0]["value"] == 120
+        assert variant["guardrails"][0]["delta_vs_control"] == 20
+        assert variant["guardrails"][0]["percent_change_vs_control"] == 20.0
+        assert variant["guardrails"][1]["value"] == 4
+        assert variant["guardrails"][1]["delta_vs_control"] == 1
+        assert variant["guardrails"][1]["status"] == "available"
 
         missing_currency = dict(payload)
         missing_currency["primary_metric"] = "cost_per_conversion"
@@ -163,3 +173,10 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "/api/v1/crm/campaign-experiments", headers=headers, json=missing_control
         )
         assert invalid_control.status_code == 422
+
+        duplicate_guardrail = dict(payload)
+        duplicate_guardrail["guardrails"] = [{"metric": "clicks"}, {"metric": "clicks"}]
+        invalid_guardrail = await client.post(
+            "/api/v1/crm/campaign-experiments", headers=headers, json=duplicate_guardrail
+        )
+        assert invalid_guardrail.status_code == 422
