@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaign_experiments import router
-from funnel_crm.api.v1.crm_campaign_experiments import _metric_coverage
+from funnel_crm.api.v1.crm_campaign_experiments import _coverage_classification, _metric_coverage
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
@@ -42,6 +42,23 @@ def test_metric_coverage_reports_missing_days_and_qualifying_sources() -> None:
     assert (expected, missing, coverage) == (3, 2, 33.33)
     assert missing_dates == [date(2026, 10, 17), date(2026, 10, 18)]
     assert sources == ["weekly export"]
+
+
+@pytest.mark.parametrize(
+    ("minimum", "maximum", "completeness", "balance"),
+    [
+        (100.0, 100.0, "complete", "equal"),
+        (0.0, 0.0, "unavailable", "equal"),
+        (33.33, 66.67, "partial", "unequal"),
+    ],
+)
+def test_coverage_classification_uses_observed_data_only(
+    minimum: float,
+    maximum: float,
+    completeness: str,
+    balance: str,
+) -> None:
+    assert _coverage_classification(minimum, maximum) == (completeness, balance)
 
 
 def make_app(
@@ -190,7 +207,11 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "minimum_coverage_percent": 33.33,
             "maximum_coverage_percent": 66.67,
             "coverage_spread_percentage_points": 33.34,
+            "completeness": "partial", "coverage_balance": "unequal",
         }
+        clicks_coverage = result["coverage_summary"][1]
+        assert clicks_coverage["completeness"] == "partial"
+        assert clicks_coverage["coverage_balance"] == "equal"
         assert result["experiment"]["allocation_method"] == payload["allocation_method"]
         assert result["experiment"]["known_limitations"] == payload["known_limitations"]
         assert result["experiment"]["audience_snapshot"]["criteria"] == segment_criteria
