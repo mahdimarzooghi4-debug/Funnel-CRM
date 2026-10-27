@@ -112,6 +112,15 @@ class CampaignDecisionWorkspace(BaseModel):
     automatic_recommendation_issued: bool
 
 
+class DecisionQueueCommerceCurrency(BaseModel):
+    currency: str
+    paid_event_count: int
+    paid_amount: Decimal
+    refund_event_count: int
+    refunded_amount: Decimal
+    net_paid_amount: Decimal
+
+
 class CampaignPortfolioDecisionItem(BaseModel):
     campaign_id: UUID
     campaign_name: str
@@ -125,6 +134,7 @@ class CampaignPortfolioDecisionItem(BaseModel):
     no_data_metric_count: int
     recorded_day_coverage_percent: Decimal
     measurement_record_count: int
+    commerce_outcomes_by_currency: list[DecisionQueueCommerceCurrency]
 
 
 class CampaignPortfolioDecisionQueue(BaseModel):
@@ -234,6 +244,54 @@ async def get_campaign_portfolio_decision_queue(
             )
             if net_result is not None:
                 metric_results.append(net_result)
+        queue_commerce: dict[str, dict[str, object]] = {}
+        if plan.organization_unit_id in commerce_allowed_units:
+            event_start = datetime.combine(plan.period_start, time.min, tzinfo=timezone.utc)
+            event_end = datetime.combine(plan.period_end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            commerce_rows = (await context.session.execute(
+                select(
+                    CRMProductCommerceEvent.currency,
+                    CRMProductCommerceEvent.event_kind,
+                    func.count(CRMProductCommerceEvent.id).label("event_count"),
+                    func.sum(CRMProductCommerceEvent.amount).label("amount_total"),
+                )
+                .where(
+                    CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+                    CRMProductCommerceEvent.organization_unit_id == plan.organization_unit_id,
+                    CRMProductCommerceEvent.campaign_id == plan.campaign_id,
+                    CRMProductCommerceEvent.occurred_at >= event_start,
+                    CRMProductCommerceEvent.occurred_at < event_end,
+                )
+                .group_by(
+                    CRMProductCommerceEvent.currency,
+                    CRMProductCommerceEvent.event_kind,
+                )
+            )).all()
+            for commerce_row in commerce_rows:
+                state = queue_commerce.setdefault(
+                    commerce_row.currency,
+                    {
+                        "paid_event_count": 0, "paid_amount": Decimal("0"),
+                        "refund_event_count": 0, "refunded_amount": Decimal("0"),
+                    },
+                )
+                if commerce_row.event_kind == "paid":
+                    state["paid_event_count"] = int(commerce_row.event_count)
+                    state["paid_amount"] = commerce_row.amount_total or Decimal("0")
+                else:
+                    state["refund_event_count"] = int(commerce_row.event_count)
+                    state["refunded_amount"] = commerce_row.amount_total or Decimal("0")
+        queue_commerce_metrics = [
+            DecisionQueueCommerceCurrency(
+                currency=currency,
+                paid_event_count=int(state["paid_event_count"]),
+                paid_amount=state["paid_amount"],
+                refund_event_count=int(state["refund_event_count"]),
+                refunded_amount=state["refunded_amount"],
+                net_paid_amount=state["paid_amount"] - state["refunded_amount"],
+            )
+            for currency, state in sorted(queue_commerce.items())
+        ]
         missed = sum(1 for metric in metric_results if metric.status == "not_met")
         no_data = sum(1 for metric in metric_results if metric.status == "no_data")
         period_days = (plan.period_end - plan.period_start).days + 1
@@ -263,6 +321,7 @@ async def get_campaign_portfolio_decision_queue(
             no_data_metric_count=no_data,
             recorded_day_coverage_percent=coverage,
             measurement_record_count=len(measurements),
+            commerce_outcomes_by_currency=queue_commerce_metrics,
         ))
     items.sort(key=lambda item: (
         not bool(item.attention_reasons), -len(item.attention_reasons),
@@ -290,8 +349,8 @@ async def get_campaign_portfolio_decision_queue(
         items=items,
         total_count=total,
         has_more=offset + len(items) < total,
-        basis=("Target plan metric evaluations and recorded-day coverage only; no causal attribution, "
-               "budget recommendation, or automatic action is applied."),
+        basis=("Target plan evaluations, recorded-day coverage, and linked paid/refunded outcomes by "
+               "currency; no causal attribution, source-specific spend allocation, or automatic action is applied."),
         automatic_recommendation_issued=False,
     )
 
