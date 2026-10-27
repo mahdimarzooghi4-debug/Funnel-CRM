@@ -147,7 +147,7 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
                 id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
                 campaign_id=partial_campaign_id, measured_on=date(2026, 10, 16),
                 source_label="analytics", impressions=None, clicks=None, leads=2,
-                conversions=None, actual_spend_amount=None, actual_spend_currency=None,
+                conversions=None, actual_spend_amount=Decimal("30"), actual_spend_currency="USD",
                 attributed_revenue_amount=None, attributed_revenue_currency=None,
             ),
         ])
@@ -174,6 +174,13 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
                 amount=Decimal(amount), currency="USD",
                 occurred_at=datetime(2026, 10, 16, 12, tzinfo=timezone.utc),
             ))
+        context.session.add(CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            campaign_id=partial_campaign_id, profile_id=None, source_product="funnel.store",
+            source_event_id=uuid4(), event_type="commerce.order.paid", order_reference="ORDER-2",
+            event_kind="paid", amount=Decimal("300.00"), currency="USD",
+            occurred_at=datetime(2026, 10, 16, 15, tzinfo=timezone.utc),
+        ))
         await context.session.flush()
 
     app = make_app(runtime_session_factory, identity)
@@ -283,6 +290,21 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert report["period_calendar_days"] == 2
         assert report["metric_definitions"]["roas"]["key"] == "reported_roas"
         assert report["metric_outcomes"]["period_net_paid_to_spend"]["met"] == 1
+        pooled_usd = next(
+            row for row in report["commerce_outcomes_by_currency"] if row["currency"] == "USD"
+        )
+        assert pooled_usd["campaign_count"] == 2
+        assert pooled_usd["spend_amount"] == "50.000000"
+        assert pooled_usd["net_paid_amount"] == "390.000000"
+        assert pooled_usd["observed_net_paid_to_spend_multiple"] == "7.800000"
+        assert report["commerce_basis"].startswith("Only campaign-linked")
+        assert report["metric_definitions"]["net_paid_amount"]["key"] == "net_paid_amount"
+        group_usd = next(
+            row for row in report["groups"][0]["commerce_outcomes_by_currency"]
+            if row["currency"] == "USD"
+        )
+        assert group_usd["campaign_count"] == 2
+        assert group_usd["net_paid_amount_per_paid_order"] == "195.000000"
         assert report["metric_definitions"]["spend"]["key"] == "actual_spend"
         assert report["campaigns"][0]["metrics"]["spend"]["recorded_day_coverage_percent"] == "50.00"
         assert "missing days are not zero" in report["coverage_basis"]
