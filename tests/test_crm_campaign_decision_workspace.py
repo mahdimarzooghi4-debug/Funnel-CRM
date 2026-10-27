@@ -95,7 +95,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             max_cpl_amount=None, cpl_currency=None,
             max_cost_per_conversion_amount=None, conversion_cost_currency=None,
             min_roas=Decimal("1.500000"), roas_currency="USD",
-            min_net_paid_to_spend=Decimal("1.800000"), net_paid_to_spend_currency="USD",
+            min_net_paid_to_spend=Decimal("2.000000"), net_paid_to_spend_currency="USD",
         ))
         context.session.add_all([
             CRMMarketingCampaignMeasurement(
@@ -177,7 +177,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert workspace["metrics"]["paid_to_spend"]["actual"] == "2.000000"
     assert workspace["metrics"]["paid_to_spend"]["status"] == "met"
     assert workspace["metrics"]["period_net_paid_to_spend"]["actual"] == "1.833333"
-    assert workspace["metrics"]["period_net_paid_to_spend"]["status"] == "met"
+    assert workspace["metrics"]["period_net_paid_to_spend"]["status"] == "not_met"
     assert workspace["metric_definitions"]["spend"]["key"] == "actual_spend"
     assert workspace["metric_definitions"]["impressions"]["key"] == "impressions"
     assert workspace["metric_definitions"]["paid_to_spend"]["key"] == "paid_to_spend"
@@ -206,8 +206,9 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["automatic_recommendation_issued"] is False
     assert queue["items"][0]["target_plan_id"] == str(plan_id)
     assert queue["items"][0]["status"] == "review_required"
+    assert queue["items"][0]["missed_metric_count"] == 2
     assert set(queue["items"][0]["attention_reasons"]) == {
-        "target_missed", "low_recorded_day_coverage"
+        "target_missed", "net_commerce_target_missed", "low_recorded_day_coverage"
     }
 
     async with tenant_session(
