@@ -1617,7 +1617,7 @@ class CRMMarketingCampaignExperiment(Base):
         ),
         CheckConstraint(
             "primary_metric IN ('impressions', 'clicks', 'leads', 'conversions', 'return_count', 'paid_order_count', "
-            "'refunded_order_count', 'refunded_order_rate_percent', 'matched_refund_order_rate_percent', "
+            "'refunded_order_count', 'refunded_order_rate_percent', 'matched_refund_order_rate_percent', 'paid_order_refund_match_rate_percent', "
             "'unmatched_refund_order_count', 'paid_order_without_refund_count', 'click_through_rate_percent', "
             "'conversion_rate_per_click_percent', 'cost_per_lead', 'cost_per_conversion', 'roas', "
             "'incentive_cost', 'paid_amount', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount')",
