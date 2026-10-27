@@ -435,6 +435,37 @@ async def get_campaign_decision_workspace(
             ),
         ))
 
+    if plan.min_net_paid_to_spend is not None:
+        currency = plan.net_paid_to_spend_currency
+        spend_info = spend_by_currency.get(currency)
+        spend = spend_info[0] if spend_info is not None else None
+        outcome = commerce_by_currency.get(currency, {})
+        paid_count = int(outcome.get("paid_event_count", 0))
+        net_paid = outcome.get("paid_amount", Decimal("0")) - outcome.get("refunded_amount", Decimal("0"))
+        actual = (
+            (net_paid / spend).quantize(Decimal("0.000001"))
+            if paid_count and spend is not None and spend > 0
+            else None
+        )
+        metrics["period_net_paid_to_spend"] = DecisionMetric(
+            target=plan.min_net_paid_to_spend,
+            actual=actual,
+            status=_status(plan.min_net_paid_to_spend, actual, at_least=True),
+            currency=currency,
+            observed_days=spend_info[1] if spend_info is not None else 0,
+            paired_days=0,
+            period_days=period_days,
+            recorded_day_coverage_percent=_coverage_percent(
+                spend_info[1] if spend_info is not None else 0, period_days
+            ),
+            basis=NET_COMMERCE_BASIS,
+            explanation=(
+                "No linked paid event and positive same-currency spend are both available."
+                if actual is None
+                else "Full-period net paid amount divided by recorded same-currency spend is compared with the manager-entered target."
+            ),
+        )
+
     if plan.min_roas is not None:
         currency = plan.roas_currency
         spend_info = spend_by_currency.get(currency)

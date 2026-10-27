@@ -1550,9 +1550,16 @@ class CRMMarketingCampaignTargetPlan(Base):
             name="ck_crm_marketing_campaign_target_plans_roas_pair",
         ),
         CheckConstraint(
+            "(min_net_paid_to_spend IS NULL AND net_paid_to_spend_currency IS NULL) OR "
+            "(min_net_paid_to_spend IS NOT NULL AND min_net_paid_to_spend >= 0 AND "
+            "length(net_paid_to_spend_currency) = 3 AND net_paid_to_spend_currency = upper(net_paid_to_spend_currency) "
+            "AND net_paid_to_spend_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_target_plans_net_paid_to_spend_pair",
+        ),
+        CheckConstraint(
             "impressions_target IS NOT NULL OR clicks_target IS NOT NULL OR leads_target IS NOT NULL OR "
             "conversions_target IS NOT NULL OR max_spend_amount IS NOT NULL OR max_cpl_amount IS NOT NULL OR "
-            "max_cost_per_conversion_amount IS NOT NULL OR min_roas IS NOT NULL",
+            "max_cost_per_conversion_amount IS NOT NULL OR min_roas IS NOT NULL OR min_net_paid_to_spend IS NOT NULL",
             name="ck_crm_marketing_campaign_target_plans_has_goal",
         ),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
@@ -1587,6 +1594,8 @@ class CRMMarketingCampaignTargetPlan(Base):
     conversion_cost_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     min_roas: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     roas_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    min_net_paid_to_spend: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    net_paid_to_spend_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
