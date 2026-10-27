@@ -135,6 +135,7 @@ class CampaignPortfolioDecisionItem(BaseModel):
     recorded_day_coverage_percent: Decimal
     measurement_record_count: int
     commerce_outcomes_by_currency: list[DecisionQueueCommerceCurrency]
+    commerce_data_status: Literal["observed", "no_linked_events", "not_authorized"]
 
 
 class CampaignPortfolioDecisionQueue(BaseModel):
@@ -322,6 +323,13 @@ async def get_campaign_portfolio_decision_queue(
             recorded_day_coverage_percent=coverage,
             measurement_record_count=len(measurements),
             commerce_outcomes_by_currency=queue_commerce_metrics,
+            commerce_data_status=(
+                "observed"
+                if queue_commerce_metrics
+                else "no_linked_events"
+                if plan.organization_unit_id in commerce_allowed_units
+                else "not_authorized"
+            ),
         ))
     items.sort(key=lambda item: (
         not bool(item.attention_reasons), -len(item.attention_reasons),
