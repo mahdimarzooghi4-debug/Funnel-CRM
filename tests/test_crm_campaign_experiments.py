@@ -49,14 +49,16 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
 
     segment_id = uuid4()
     control_id, variant_id = uuid4(), uuid4()
+    segment_name = f"Experiment audience {uuid4().hex[:8]}"
+    segment_criteria = {"profile_kinds": ["person"]}
     experiment_id: UUID
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
         context.session.add(CRMProfileSegment(
             id=segment_id, tenant_id=tenant_id, organization_unit_id=root_id,
-            name=f"Experiment audience {uuid4().hex[:8]}",
-            criteria={"profile_kinds": ["person"]}, is_active=True,
+            name=segment_name,
+            criteria=segment_criteria, is_active=True,
         ))
         await context.session.flush()
         context.session.add_all([
@@ -139,6 +141,10 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         ]
         assert listed.json()[0]["experiment"]["allocation_method"] == payload["allocation_method"]
         assert listed.json()[0]["experiment"]["known_limitations"] == payload["known_limitations"]
+        assert listed.json()[0]["experiment"]["audience_snapshot"] == {
+            "segment_id": str(segment_id), "segment_name": segment_name,
+            "criteria": segment_criteria,
+        }
 
         readout = await client.get(
             f"/api/v1/crm/campaign-experiments/{experiment_id}/readout",
@@ -149,6 +155,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert result["readout_kind"] == "descriptive_observation"
         assert result["experiment"]["allocation_method"] == payload["allocation_method"]
         assert result["experiment"]["known_limitations"] == payload["known_limitations"]
+        assert result["experiment"]["audience_snapshot"]["criteria"] == segment_criteria
         control, variant = result["variants"]
         assert control["is_control"] is True
         assert control["guardrails"][0]["value"] == 100
