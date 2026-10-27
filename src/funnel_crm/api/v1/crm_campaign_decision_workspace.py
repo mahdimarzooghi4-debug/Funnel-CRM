@@ -22,6 +22,7 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
     CRMMarketingCampaignTargetPlan,
+    CRMMarketingLearningReview,
     CRMProductCommerceEvent,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
@@ -136,6 +137,8 @@ class CampaignPortfolioDecisionItem(BaseModel):
     measurement_record_count: int
     commerce_outcomes_by_currency: list[DecisionQueueCommerceCurrency]
     commerce_data_status: Literal["observed", "no_linked_events", "not_authorized"]
+    planned_learning_review_count: int
+    evaluated_learning_review_count: int
 
 
 class CampaignPortfolioDecisionQueue(BaseModel):
@@ -309,6 +312,20 @@ async def get_campaign_portfolio_decision_queue(
             reasons.append("net_commerce_target_without_data")
         if coverage < Decimal("80"):
             reasons.append("low_recorded_day_coverage")
+        review_status_rows = (await context.session.execute(
+            select(
+                CRMMarketingLearningReview.status,
+                func.count(CRMMarketingLearningReview.id).label("review_count"),
+            )
+            .where(
+                CRMMarketingLearningReview.tenant_id == context.access.tenant_id,
+                CRMMarketingLearningReview.organization_unit_id == plan.organization_unit_id,
+                CRMMarketingLearningReview.campaign_id == plan.campaign_id,
+                CRMMarketingLearningReview.target_plan_id == plan.id,
+            )
+            .group_by(CRMMarketingLearningReview.status)
+        )).all()
+        review_counts = {row.status: int(row.review_count) for row in review_status_rows}
         items.append(CampaignPortfolioDecisionItem(
             campaign_id=plan.campaign_id,
             campaign_name=campaign_name,
@@ -330,6 +347,8 @@ async def get_campaign_portfolio_decision_queue(
                 if plan.organization_unit_id in commerce_allowed_units
                 else "not_authorized"
             ),
+            planned_learning_review_count=review_counts.get("planned", 0),
+            evaluated_learning_review_count=review_counts.get("evaluated", 0),
         ))
     items.sort(key=lambda item: (
         not bool(item.attention_reasons), -len(item.attention_reasons),
