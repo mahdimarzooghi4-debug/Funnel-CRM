@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaign_experiments import router
+from funnel_crm.api.v1.crm_campaign_experiments import _metric_coverage
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
@@ -17,6 +18,30 @@ from funnel_crm.platform.models import (
     RolePermission,
 )
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
+
+
+def test_metric_coverage_reports_missing_days_and_qualifying_sources() -> None:
+    campaign_id = uuid4()
+    rows = [
+        CRMMarketingCampaignMeasurement(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(),
+            campaign_id=campaign_id, measured_on=date(2026, 10, 16),
+            source_label="weekly export", conversions=4,
+        ),
+        CRMMarketingCampaignMeasurement(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(),
+            campaign_id=campaign_id, measured_on=date(2026, 10, 17),
+            source_label="click-only export", clicks=8,
+        ),
+    ]
+
+    expected, missing, coverage, missing_dates, sources = _metric_coverage(
+        "conversions", None, rows, date(2026, 10, 16), date(2026, 10, 18)
+    )
+
+    assert (expected, missing, coverage) == (3, 2, 33.33)
+    assert missing_dates == [date(2026, 10, 17), date(2026, 10, 18)]
+    assert sources == ["weekly export"]
 
 
 def make_app(
@@ -119,7 +144,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "primary_metric": "conversions",
             "guardrails": [{"metric": "clicks"}, {"metric": "roas", "currency": "USD"}],
             "period_start": "2026-10-16",
-            "period_end": "2026-10-16",
+            "period_end": "2026-10-18",
             "variants": [
                 {"campaign_id": str(control_id), "label": "Existing headline", "is_control": True},
                 {"campaign_id": str(variant_id), "label": "New headline", "is_control": False},
@@ -166,9 +191,17 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert variant["delta_vs_control"] == 5
         assert variant["percent_change_vs_control"] == 50.0
         assert variant["observed_days"] == 1
+        assert variant["expected_days"] == 3
+        assert variant["missing_days"] == 2
+        assert variant["coverage_percent"] == 33.33
+        assert variant["missing_dates"] == ["2026-10-17", "2026-10-18"]
+        assert variant["source_labels"] == ["variant report"]
         assert variant["guardrails"][0]["value"] == 120
         assert variant["guardrails"][0]["delta_vs_control"] == 20
         assert variant["guardrails"][0]["percent_change_vs_control"] == 20.0
+        assert variant["guardrails"][0]["coverage_percent"] == 33.33
+        assert variant["guardrails"][0]["missing_days"] == 2
+        assert variant["guardrails"][0]["source_labels"] == ["variant report"]
         assert Decimal(variant["guardrails"][1]["value"]) == Decimal("4")
         assert Decimal(variant["guardrails"][1]["delta_vs_control"]) == Decimal("1")
         assert variant["guardrails"][1]["status"] == "available"
