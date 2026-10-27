@@ -40,6 +40,12 @@ ROAS_BASIS = (
     "recorded campaign spend in the same currency. Refunds remain separate; "
     "this is not causal or accounting revenue attribution."
 )
+NET_COMMERCE_BASIS = (
+    "Net recorded paid amount is paid events minus refunded events in the selected "
+    "currency and target period. Net amount per paid order divides by unique paid "
+    "orders; the net-to-spend multiple divides by recorded spend in that currency. "
+    "These measures are descriptive, not accounting profit or causal attribution."
+)
 
 
 class DecisionMetric(BaseModel):
@@ -62,10 +68,13 @@ class DecisionCommerceCurrency(BaseModel):
     paid_event_count: int
     paid_order_count: int
     paid_amount: Decimal
+    net_paid_amount: Decimal
+    net_paid_amount_per_paid_order: Decimal | None
     refund_event_count: int
     refunded_order_count: int
     refunded_amount: Decimal
     observed_paid_to_spend_multiple: Decimal | None
+    observed_net_paid_to_spend_multiple: Decimal | None
 
 
 class CampaignDecisionWorkspace(BaseModel):
@@ -78,6 +87,7 @@ class CampaignDecisionWorkspace(BaseModel):
     target_plan: CampaignTargetRead
     period_calendar_days: int
     coverage_basis: str
+    commerce_basis: str
     metrics: dict[str, DecisionMetric]
     metric_definitions: dict[str, MetricDefinition]
     coverage_definition: MetricDefinition
@@ -393,6 +403,9 @@ async def get_campaign_decision_workspace(
         spend = spend_info[0] if spend_info is not None else None
         state = commerce_by_currency.get(currency, {})
         paid_amount = state.get("paid_amount", Decimal("0"))
+        refunded_amount = state.get("refunded_amount", Decimal("0"))
+        net_paid_amount = paid_amount - refunded_amount
+        paid_order_count = state.get("paid_order_count", 0)
         paid_count = state.get("paid_event_count", 0)
         ratio = (
             (paid_amount / spend).quantize(Decimal("0.000001"))
@@ -404,12 +417,22 @@ async def get_campaign_decision_workspace(
             spend_amount=spend,
             spend_observed_days=spend_info[1] if spend_info is not None else 0,
             paid_event_count=paid_count,
-            paid_order_count=state.get("paid_order_count", 0),
+            paid_order_count=paid_order_count,
             paid_amount=paid_amount,
+            net_paid_amount=net_paid_amount,
+            net_paid_amount_per_paid_order=(
+                (net_paid_amount / Decimal(paid_order_count)).quantize(Decimal("0.000001"))
+                if paid_order_count else None
+            ),
             refund_event_count=state.get("refund_event_count", 0),
             refunded_order_count=state.get("refunded_order_count", 0),
-            refunded_amount=state.get("refunded_amount", Decimal("0")),
+            refunded_amount=refunded_amount,
             observed_paid_to_spend_multiple=ratio,
+            observed_net_paid_to_spend_multiple=(
+                (net_paid_amount / spend).quantize(Decimal("0.000001"))
+                if paid_count and spend is not None and spend > 0
+                else None
+            ),
         ))
 
     if plan.min_roas is not None:
@@ -470,6 +493,10 @@ async def get_campaign_decision_workspace(
         definition = get_metric_definition(metric_key)
         if definition is not None:
             metric_definitions[metric_key] = definition
+    for metric_key in ("net_paid_amount", "net_paid_amount_per_paid_order", "period_net_paid_to_spend"):
+        definition = get_metric_definition(metric_key)
+        if definition is not None:
+            metric_definitions[metric_key] = definition
     coverage_definition = get_metric_definition("recorded_day_coverage")
     assert coverage_definition is not None
 
@@ -486,6 +513,7 @@ async def get_campaign_decision_workspace(
             "Recorded-day coverage is observed measurement days divided by calendar days "
             "in the target period. It shows data presence, not channel reporting completeness."
         ),
+        commerce_basis=NET_COMMERCE_BASIS,
         metrics=metrics,
         metric_definitions=metric_definitions,
         coverage_definition=coverage_definition,
