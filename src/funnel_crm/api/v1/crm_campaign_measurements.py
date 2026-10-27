@@ -32,10 +32,13 @@ class CampaignMeasurementUpsert(BaseModel):
     conversions: int | None = Field(default=None, ge=0, le=9223372036854775807)
     assigned_count: int | None = Field(default=None, ge=0, le=9223372036854775807)
     exposure_count: int | None = Field(default=None, ge=0, le=9223372036854775807)
+    return_count: int | None = Field(default=None, ge=0, le=9223372036854775807)
     actual_spend_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     actual_spend_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     incentive_cost_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     incentive_cost_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    refunded_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
+    refunded_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     attributed_revenue_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     attributed_revenue_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
 
@@ -55,10 +58,13 @@ class CampaignMeasurementUpsert(BaseModel):
             raise ValueError("attributed revenue amount and currency must be provided together")
         if (self.incentive_cost_amount is None) != (self.incentive_cost_currency is None):
             raise ValueError("incentive cost amount and currency must be provided together")
+        if (self.refunded_amount is None) != (self.refunded_currency is None):
+            raise ValueError("refunded amount and currency must be provided together")
         if all(getattr(self, key) is None for key in (
             "impressions", "reach", "clicks", "responses", "leads", "conversions",
             "assigned_count", "exposure_count",
-            "actual_spend_amount", "incentive_cost_amount", "attributed_revenue_amount",
+            "return_count", "actual_spend_amount", "incentive_cost_amount",
+            "refunded_amount", "attributed_revenue_amount",
         )):
             raise ValueError("at least one observed metric is required")
         return self
@@ -78,10 +84,13 @@ class CampaignMeasurementRead(BaseModel):
     conversions: int | None
     assigned_count: int | None
     exposure_count: int | None
+    return_count: int | None
     actual_spend_amount: Decimal | None
     actual_spend_currency: str | None
     incentive_cost_amount: Decimal | None
     incentive_cost_currency: str | None
+    refunded_amount: Decimal | None
+    refunded_currency: str | None
     attributed_revenue_amount: Decimal | None
     attributed_revenue_currency: str | None
 
@@ -98,6 +107,7 @@ class CampaignMeasurementTotals(BaseModel):
     conversion_rate_per_click_percent: float | None
     actual_spend_by_currency: dict[str, Decimal]
     incentive_cost_by_currency: dict[str, Decimal]
+    refunded_amount_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
 
 
@@ -206,10 +216,13 @@ async def upsert_campaign_measurement(
         conversions=measurement.conversions,
         assigned_count=measurement.assigned_count,
         exposure_count=measurement.exposure_count,
+        return_count=measurement.return_count,
         actual_spend_amount=measurement.actual_spend_amount,
         actual_spend_currency=measurement.actual_spend_currency,
         incentive_cost_amount=measurement.incentive_cost_amount,
         incentive_cost_currency=measurement.incentive_cost_currency,
+        refunded_amount=measurement.refunded_amount,
+        refunded_currency=measurement.refunded_currency,
         attributed_revenue_amount=measurement.attributed_revenue_amount,
         attributed_revenue_currency=measurement.attributed_revenue_currency,
     )
@@ -248,6 +261,7 @@ async def get_campaign_measurement_summary(
     metric_keys = (
         "impressions", "reach", "clicks", "responses", "leads", "conversions",
         "assigned_count", "exposure_count",
+        "return_count",
     )
     totals: dict[str, int | None] = {}
     coverage_days: dict[str, int] = {}
@@ -268,6 +282,7 @@ async def get_campaign_measurement_summary(
 
     spend: dict[str, Decimal] = {}
     incentive_cost: dict[str, Decimal] = {}
+    refunded: dict[str, Decimal] = {}
     revenue: dict[str, Decimal] = {}
     for row in rows:
         if row.actual_spend_amount is not None and row.actual_spend_currency is not None:
@@ -276,6 +291,10 @@ async def get_campaign_measurement_summary(
             incentive_cost[row.incentive_cost_currency] = (
                 incentive_cost.get(row.incentive_cost_currency, Decimal("0"))
                 + row.incentive_cost_amount
+            )
+        if row.refunded_amount is not None and row.refunded_currency is not None:
+            refunded[row.refunded_currency] = (
+                refunded.get(row.refunded_currency, Decimal("0")) + row.refunded_amount
             )
         if row.attributed_revenue_amount is not None and row.attributed_revenue_currency is not None:
             revenue[row.attributed_revenue_currency] = revenue.get(row.attributed_revenue_currency, Decimal("0")) + row.attributed_revenue_amount
@@ -292,5 +311,6 @@ async def get_campaign_measurement_summary(
         conversion_rate_per_click_percent=paired_rate("conversions", "clicks"),
         actual_spend_by_currency=spend,
         incentive_cost_by_currency=incentive_cost,
+        refunded_amount_by_currency=refunded,
         attributed_revenue_by_currency=revenue,
     )

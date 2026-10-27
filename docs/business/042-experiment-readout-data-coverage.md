@@ -31,3 +31,7 @@ Daily campaign measurements may include `assigned_count` and `exposure_count`. T
 ## Discount and incentive cost
 
 Record discount and incentive cost separately from general campaign spend as a daily amount with its ISO currency. The experiment readout can compare its total as a primary or guardrail metric only within the selected currency. The CRM does not infer incentive cost from revenue, campaign spend, or planned discount assumptions; the value must come from the source measurement.
+
+## Returns and refunds
+
+When the source system provides daily totals, record returned-order count and refunded amount separately. Refunded amount is currency-scoped and is not subtracted from attributed revenue automatically: daily aggregate figures may not refer to the same orders or attribution window. The experiment readout can compare each as a descriptive primary or guardrail metric, with source coverage shown for the selected currency.
