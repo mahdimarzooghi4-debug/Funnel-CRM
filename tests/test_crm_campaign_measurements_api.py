@@ -106,6 +106,9 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
                 "conversions": 2,
                 "assigned_count": 120,
                 "exposure_count": 100,
+                "return_count": 2,
+                "refunded_amount": "12",
+                "refunded_currency": "USD",
                 "actual_spend_amount": "20",
                 "actual_spend_currency": "USD",
                 "incentive_cost_amount": "5",
@@ -133,6 +136,9 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
                 "conversions": 2,
                 "assigned_count": 120,
                 "exposure_count": 110,
+                "return_count": 2,
+                "refunded_amount": "15",
+                "refunded_currency": "USD",
                 "actual_spend_amount": "20",
                 "actual_spend_currency": "USD",
                 "incentive_cost_amount": "6",
@@ -157,6 +163,9 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
                 "conversions": 1,
                 "assigned_count": 50,
                 "exposure_count": 45,
+                "return_count": 1,
+                "refunded_amount": "5",
+                "refunded_currency": "EUR",
                 "actual_spend_amount": "10",
                 "actual_spend_currency": "EUR",
                 "incentive_cost_amount": "3",
@@ -185,11 +194,13 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
             "conversions": 3,
             "assigned_count": 170,
             "exposure_count": 155,
+            "return_count": 3,
         }
         assert report["coverage_days"]["responses"] == 1
         assert report["coverage_days"]["assigned_count"] == 2
         assert report["coverage_days"]["exposure_count"] == 2
         assert report["incentive_cost_by_currency"] == {"EUR": "3.000000", "USD": "6.000000"}
+        assert report["refunded_amount_by_currency"] == {"EUR": "5.000000", "USD": "15.000000"}
         assert report["click_through_rate_percent"] == 5.0
         assert report["lead_rate_per_click_percent"] == 12.0
         assert report["conversion_rate_per_click_percent"] == 4.0
@@ -219,6 +230,20 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
             json={"source_label": "incomplete incentive", "incentive_cost_amount": "2"},
         )
         assert invalid_incentive_pair.status_code == 422
+
+        invalid_refund_pair = await client.put(
+            f"/api/v1/crm/campaigns/{campaign_id}/measurements/{date(2026, 10, 21).isoformat()}",
+            headers=headers,
+            json={"source_label": "incomplete refund", "refunded_amount": "2"},
+        )
+        assert invalid_refund_pair.status_code == 422
+
+        invalid_return_count = await client.put(
+            f"/api/v1/crm/campaigns/{campaign_id}/measurements/{date(2026, 10, 22).isoformat()}",
+            headers=headers,
+            json={"source_label": "invalid returns report", "return_count": -1},
+        )
+        assert invalid_return_count.status_code == 422
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity

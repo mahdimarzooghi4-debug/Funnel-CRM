@@ -949,7 +949,8 @@ class CRMMarketingCampaignMeasurement(Base):
             "(leads IS NULL OR leads >= 0) AND "
             "(conversions IS NULL OR conversions >= 0) AND "
             "(assigned_count IS NULL OR assigned_count >= 0) AND "
-            "(exposure_count IS NULL OR exposure_count >= 0)",
+            "(exposure_count IS NULL OR exposure_count >= 0) AND "
+            "(return_count IS NULL OR return_count >= 0)",
             name="ck_crm_marketing_campaign_measurements_counts",
         ),
         CheckConstraint(
@@ -977,11 +978,20 @@ class CRMMarketingCampaignMeasurement(Base):
             name="ck_crm_marketing_campaign_measurements_incentive_cost",
         ),
         CheckConstraint(
+            "(refunded_amount IS NULL AND refunded_currency IS NULL) OR "
+            "(refunded_amount IS NOT NULL AND refunded_amount >= 0 "
+            "AND length(refunded_currency) = 3 "
+            "AND refunded_currency = upper(refunded_currency) "
+            "AND refunded_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_measurements_refunded_amount",
+        ),
+        CheckConstraint(
             "impressions IS NOT NULL OR reach IS NOT NULL OR clicks IS NOT NULL OR "
             "responses IS NOT NULL OR leads IS NOT NULL OR conversions IS NOT NULL OR "
             "assigned_count IS NOT NULL OR exposure_count IS NOT NULL OR "
             "actual_spend_amount IS NOT NULL OR attributed_revenue_amount IS NOT NULL OR "
-            "incentive_cost_amount IS NOT NULL",
+            "incentive_cost_amount IS NOT NULL OR return_count IS NOT NULL OR "
+            "refunded_amount IS NOT NULL",
             name="ck_crm_marketing_campaign_measurements_has_observation",
         ),
         ForeignKeyConstraint(
@@ -1019,12 +1029,15 @@ class CRMMarketingCampaignMeasurement(Base):
     conversions: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     assigned_count: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     exposure_count: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    return_count: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     actual_spend_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     actual_spend_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     attributed_revenue_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     attributed_revenue_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     incentive_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     incentive_cost_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    refunded_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    refunded_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
         default=lambda: datetime.now(timezone.utc), server_default=text("now()"),

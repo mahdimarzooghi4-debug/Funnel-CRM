@@ -31,17 +31,19 @@ MAX_ROWS = 366
 MAX_COUNT = 9223372036854775807
 COUNT_COLUMNS = (
     "impressions", "reach", "clicks", "responses", "leads", "conversions",
-    "assigned_count", "exposure_count",
+    "assigned_count", "exposure_count", "return_count",
 )
 MONEY_PAIRS = (
     ("actual_spend_amount", "actual_spend_currency"),
     ("incentive_cost_amount", "incentive_cost_currency"),
+    ("refunded_amount", "refunded_currency"),
     ("attributed_revenue_amount", "attributed_revenue_currency"),
 )
 ALLOWED_COLUMNS = {
     "measured_on", "source_label", *COUNT_COLUMNS,
     "actual_spend_amount", "actual_spend_currency",
     "incentive_cost_amount", "incentive_cost_currency",
+    "refunded_amount", "refunded_currency",
     "attributed_revenue_amount", "attributed_revenue_currency",
 }
 
@@ -79,10 +81,13 @@ class ParsedMeasurementRow(BaseModel):
     conversions: int | None
     assigned_count: int | None
     exposure_count: int | None
+    return_count: int | None
     actual_spend_amount: Decimal | None
     actual_spend_currency: str | None
     incentive_cost_amount: Decimal | None
     incentive_cost_currency: str | None
+    refunded_amount: Decimal | None
+    refunded_currency: str | None
     attributed_revenue_amount: Decimal | None
     attributed_revenue_currency: str | None
 
@@ -122,7 +127,7 @@ def _parse_csv(csv_content: str) -> tuple[list[dict[str, object]], list[CSVRowEr
         if missing:
             return [], [CSVRowError(row_number=1, detail=f"Required columns missing: {', '.join(sorted(missing))}")]
         if not (set(COUNT_COLUMNS) & set(normalized_headers)) and not (
-            {"actual_spend_amount", "attributed_revenue_amount"} & set(normalized_headers)
+            {"actual_spend_amount", "attributed_revenue_amount", "incentive_cost_amount", "refunded_amount"} & set(normalized_headers)
         ):
             return [], [CSVRowError(row_number=1, detail="CSV must include at least one metric column")]
         for amount_key, currency_key in MONEY_PAIRS:
@@ -234,7 +239,8 @@ async def get_campaign_measurement_import_template(
     )
     template = (
         "measured_on,source_label,impressions,reach,clicks,responses,leads,conversions,assigned_count,exposure_count,"
-        "actual_spend_amount,actual_spend_currency,incentive_cost_amount,incentive_cost_currency,"
+        "actual_spend_amount,actual_spend_currency,incentive_cost_amount,incentive_cost_currency,return_count,"
+        "refunded_amount,refunded_currency,"
         "attributed_revenue_amount,attributed_revenue_currency\n"
     )
     return Response(content=template, media_type="text/csv; charset=utf-8")

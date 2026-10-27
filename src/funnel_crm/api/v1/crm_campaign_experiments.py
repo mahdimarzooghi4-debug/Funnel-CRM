@@ -26,12 +26,12 @@ from funnel_crm.platform.tenant_context import TenantSessionContext
 
 router = APIRouter(prefix="/crm/campaign-experiments", tags=["CRM marketing experiments"])
 ExperimentMetric = Literal[
-    "impressions", "clicks", "leads", "conversions",
+    "impressions", "clicks", "leads", "conversions", "return_count",
     "click_through_rate_percent", "conversion_rate_per_click_percent",
-    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost",
+    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "refunded_amount",
 ]
 COUNT_METRICS = {"impressions", "clicks", "leads", "conversions"}
-CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost"}
+CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "refunded_amount"}
 
 
 class ExperimentVariantWrite(BaseModel):
@@ -362,6 +362,10 @@ def _metric_value(
         ]
         value = sum((row.incentive_cost_amount for row in paired), Decimal("0")) if paired else None
         return value, len(paired), len(paired)
+    if metric == "refunded_amount":
+        paired = [row for row in rows if row.refunded_amount is not None and row.refunded_currency == currency]
+        value = sum((row.refunded_amount for row in paired), Decimal("0")) if paired else None
+        return value, len(paired), len(paired)
     raise ValueError("Unsupported experiment metric")
 
 
@@ -398,6 +402,8 @@ def _metric_coverage(
             if row.incentive_cost_amount is not None
             and row.incentive_cost_currency == currency
         ]
+    elif metric == "refunded_amount":
+        qualifying = [row for row in rows if row.refunded_amount is not None and row.refunded_currency == currency]
     else:
         raise ValueError("Unsupported experiment metric")
     available_dates = {row.measured_on for row in qualifying}

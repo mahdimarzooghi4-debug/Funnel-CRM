@@ -101,6 +101,25 @@ def test_incentive_cost_metric_uses_only_matching_currency_rows() -> None:
     assert coverage == (1, 0, 100.0, [], ["promotion ledger"])
 
 
+def test_refunded_amount_metric_uses_matching_currency_and_sources() -> None:
+    rows = [
+        CRMMarketingCampaignMeasurement(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            measured_on=date(2026, 10, 16), source_label="returns ledger",
+            refunded_amount=Decimal("12.50"), refunded_currency="USD",
+        ),
+        CRMMarketingCampaignMeasurement(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            measured_on=date(2026, 10, 16), source_label="other currency",
+            refunded_amount=Decimal("30"), refunded_currency="EUR",
+        ),
+    ]
+    assert _metric_value("refunded_amount", "USD", rows) == (Decimal("12.50"), 1, 1)
+    assert _metric_coverage(
+        "refunded_amount", "USD", rows, date(2026, 10, 16), date(2026, 10, 16)
+    ) == (1, 0, 100.0, [], ["returns ledger"])
+
+
 def make_app(
     session_factory: async_sessionmaker[AsyncSession],
     identity: AuthenticatedIdentity,
@@ -165,6 +184,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 source_label="control report", impressions=1000, clicks=100,
                 leads=40, conversions=10, assigned_count=100, exposure_count=80,
                 incentive_cost_amount=Decimal("20"), incentive_cost_currency="USD",
+                return_count=2, refunded_amount=Decimal("30"), refunded_currency="USD",
                 actual_spend_amount=Decimal("100"), actual_spend_currency="USD",
                 attributed_revenue_amount=Decimal("300"), attributed_revenue_currency="USD",
             ),
@@ -174,6 +194,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 source_label="variant report", impressions=1000, clicks=120,
                 leads=50, conversions=15, assigned_count=100, exposure_count=90,
                 incentive_cost_amount=Decimal("10"), incentive_cost_currency="USD",
+                return_count=1, refunded_amount=Decimal("12"), refunded_currency="USD",
                 actual_spend_amount=Decimal("90"), actual_spend_currency="USD",
                 attributed_revenue_amount=Decimal("360"), attributed_revenue_currency="USD",
             ),
@@ -210,6 +231,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "guardrails": [
                 {"metric": "clicks"}, {"metric": "roas", "currency": "USD"},
                 {"metric": "incentive_cost", "currency": "USD"},
+                {"metric": "refunded_amount", "currency": "USD"},
             ],
             "period_start": "2026-10-16",
             "period_end": "2026-10-18",
@@ -232,6 +254,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             {"metric": "clicks", "currency": None},
             {"metric": "roas", "currency": "USD"},
             {"metric": "incentive_cost", "currency": "USD"},
+            {"metric": "refunded_amount", "currency": "USD"},
         ]
         assert listed.json()[0]["experiment"]["allocation_method"] == payload["allocation_method"]
         assert listed.json()[0]["experiment"]["known_limitations"] == payload["known_limitations"]
@@ -309,7 +332,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert csv_response.headers["content-type"].startswith("text/csv")
         assert "attachment; filename=\"campaign-experiment-" in csv_response.headers["content-disposition"]
         csv_rows = list(csv.DictReader(io.StringIO(csv_response.text.lstrip("\ufeff"))))
-        assert len(csv_rows) == 12
+        assert len(csv_rows) == 14
         variant_csv = next(
             row for row in csv_rows
             if row["variant_campaign_id"] == str(variant_id) and row["metric_role"] == "primary"
@@ -331,11 +354,14 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         )
         assert variant_incentive_csv["value"] == "10.000000"
         assert variant_incentive_csv["currency"] == "USD"
+        variant_refund_csv = next(row for row in csv_rows if row["variant_campaign_id"] == str(variant_id) and row["metric"] == "refunded_amount")
+        assert variant_refund_csv["value"] == "12.000000"
         control, variant = result["variants"]
         assert control["is_control"] is True
         assert control["guardrails"][0]["value"] == 100
         assert Decimal(control["guardrails"][1]["value"]) == Decimal("3")
         assert Decimal(control["guardrails"][2]["value"]) == Decimal("20")
+        assert Decimal(control["guardrails"][3]["value"]) == Decimal("30")
         assert control["value"] == 10
         assert control["delta_vs_control"] == 0
         assert control["coverage_percent"] == 66.67
@@ -370,6 +396,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert variant["guardrails"][1]["status"] == "available"
         assert Decimal(variant["guardrails"][2]["value"]) == Decimal("10")
         assert Decimal(variant["guardrails"][2]["delta_vs_control"]) == Decimal("-10")
+        assert Decimal(variant["guardrails"][3]["delta_vs_control"]) == Decimal("-18")
 
         missing_currency = dict(payload)
         missing_currency["primary_metric"] = "cost_per_conversion"
