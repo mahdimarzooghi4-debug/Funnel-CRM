@@ -1616,17 +1616,17 @@ class CRMMarketingCampaignExperiment(Base):
             name="ck_crm_marketing_campaign_experiments_period",
         ),
         CheckConstraint(
-            "primary_metric IN ('impressions', 'clicks', 'leads', 'conversions', 'return_count', "
+            "primary_metric IN ('impressions', 'clicks', 'leads', 'conversions', 'return_count', 'paid_order_count', "
             "'refunded_order_count', 'refunded_order_rate_percent', 'click_through_rate_percent', "
             "'conversion_rate_per_click_percent', 'cost_per_lead', 'cost_per_conversion', 'roas', "
-            "'incentive_cost', 'refunded_amount', 'refund_amount')",
+            "'incentive_cost', 'paid_amount', 'refunded_amount', 'refund_amount')",
             name="ck_crm_marketing_campaign_experiments_metric",
         ),
         CheckConstraint(
-            "(primary_metric IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'incentive_cost', 'refunded_amount', 'refund_amount') "
+            "(primary_metric IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'incentive_cost', 'paid_amount', 'refunded_amount', 'refund_amount') "
             "AND currency IS NOT NULL AND length(currency) = 3 AND currency = upper(currency) "
             "AND currency ~ '^[A-Z][A-Z][A-Z]') OR "
-            "(primary_metric NOT IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'incentive_cost', 'refunded_amount', 'refund_amount') AND currency IS NULL)",
+            "(primary_metric NOT IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'incentive_cost', 'paid_amount', 'refunded_amount', 'refund_amount') AND currency IS NULL)",
             name="ck_crm_marketing_campaign_experiments_currency",
         ),
         CheckConstraint("jsonb_typeof(guardrail_metrics) = 'array'", name="ck_crm_marketing_campaign_experiments_guardrails_array"),
