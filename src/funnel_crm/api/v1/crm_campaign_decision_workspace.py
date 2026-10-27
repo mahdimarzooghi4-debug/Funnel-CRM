@@ -13,6 +13,7 @@ from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_metric_catalog import MetricDefinition, get_metric_definition
 from funnel_crm.api.v1.crm_campaign_targets import (
     CampaignTargetRead,
+    evaluate_net_paid_to_spend_target,
     evaluate_plan_metrics,
 )
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
@@ -160,6 +161,9 @@ async def get_campaign_portfolio_decision_queue(
     allowed_units = sorted(set((await context.session.scalars(
         crm_scope_ids(context, permission_key="crm.campaign:view")
     )).all()), key=str)
+    commerce_allowed_units = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.commerce_event:view")
+    )).all())
     if organization_unit_id is not None:
         if organization_unit_id not in allowed_units:
             raise HTTPException(status_code=403, detail="Campaign decision queue is not authorized")
@@ -198,8 +202,24 @@ async def get_campaign_portfolio_decision_queue(
         )).all())
         evaluated = evaluate_plan_metrics(plan, measurements)
         metric_results = [value for key, value in evaluated.items() if key != "roas"]
-        # ROAS is omitted here because it requires commerce joins; the per-campaign
-        # decision workspace remains the authoritative source for that metric.
+        net_result = None
+        if plan.min_net_paid_to_spend is not None and plan.organization_unit_id in commerce_allowed_units:
+            event_start = datetime.combine(plan.period_start, time.min, tzinfo=timezone.utc)
+            event_end = datetime.combine(plan.period_end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            commerce_events = (await context.session.scalars(
+                select(CRMProductCommerceEvent).where(
+                    CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+                    CRMProductCommerceEvent.organization_unit_id == plan.organization_unit_id,
+                    CRMProductCommerceEvent.campaign_id == plan.campaign_id,
+                    CRMProductCommerceEvent.occurred_at >= event_start,
+                    CRMProductCommerceEvent.occurred_at < event_end,
+                )
+            )).all()
+            net_result = evaluate_net_paid_to_spend_target(
+                plan, measurements, list(commerce_events)
+            )
+            if net_result is not None:
+                metric_results.append(net_result)
         missed = sum(1 for metric in metric_results if metric.status == "not_met")
         no_data = sum(1 for metric in metric_results if metric.status == "no_data")
         period_days = (plan.period_end - plan.period_start).days + 1
@@ -208,8 +228,12 @@ async def get_campaign_portfolio_decision_queue(
         reasons = []
         if missed:
             reasons.append("target_missed")
+        if net_result is not None and net_result.status == "not_met":
+            reasons.append("net_commerce_target_missed")
         if no_data:
             reasons.append("target_metrics_without_data")
+        if net_result is not None and net_result.status == "no_data":
+            reasons.append("net_commerce_target_without_data")
         if coverage < Decimal("80"):
             reasons.append("low_recorded_day_coverage")
         items.append(CampaignPortfolioDecisionItem(
