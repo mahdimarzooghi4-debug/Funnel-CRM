@@ -247,6 +247,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["evaluated_learning_review_count"] == 0
     assert queue["items"][0]["open_learning_action_count"] == 1
     assert queue["items"][0]["overdue_learning_action_count"] == 1
+    assert queue["items"][0]["unassigned_learning_action_count"] == 1
     queue_currency = {
         row["currency"]: row for row in queue["items"][0]["commerce_outcomes_by_currency"]
     }
