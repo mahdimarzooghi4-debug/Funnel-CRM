@@ -186,6 +186,8 @@ class CoverageMetricSummary(BaseModel):
     minimum_coverage_percent: float
     maximum_coverage_percent: float
     coverage_spread_percentage_points: float
+    completeness: Literal["complete", "partial", "unavailable"]
+    coverage_balance: Literal["equal", "unequal"]
 
 
 class CampaignExperimentReadout(BaseModel):
@@ -193,6 +195,21 @@ class CampaignExperimentReadout(BaseModel):
     readout_kind: Literal["descriptive_observation"] = "descriptive_observation"
     variants: list[VariantReadout]
     coverage_summary: list[CoverageMetricSummary]
+
+
+def _coverage_classification(
+    minimum_coverage_percent: float,
+    maximum_coverage_percent: float,
+) -> tuple[Literal["complete", "partial", "unavailable"], Literal["equal", "unequal"]]:
+    completeness: Literal["complete", "partial", "unavailable"] = (
+        "unavailable" if maximum_coverage_percent == 0
+        else "complete" if minimum_coverage_percent == 100
+        else "partial"
+    )
+    balance: Literal["equal", "unequal"] = (
+        "equal" if minimum_coverage_percent == maximum_coverage_percent else "unequal"
+    )
+    return completeness, balance
 
 
 async def _require_permission(
@@ -591,6 +608,9 @@ async def read_campaign_experiment(
         ]
         minimum_coverage = min(coverage_values)
         maximum_coverage = max(coverage_values)
+        completeness, coverage_balance = _coverage_classification(
+            minimum_coverage, maximum_coverage
+        )
         coverage_summary.append(CoverageMetricSummary(
             metric=metric, currency=currency,
             variant_count=len(readouts),
@@ -598,6 +618,8 @@ async def read_campaign_experiment(
             minimum_coverage_percent=minimum_coverage,
             maximum_coverage_percent=maximum_coverage,
             coverage_spread_percentage_points=round(maximum_coverage - minimum_coverage, 2),
+            completeness=completeness,
+            coverage_balance=coverage_balance,
         ))
     return CampaignExperimentReadout(
         experiment=CampaignExperimentRead.model_validate(experiment),
