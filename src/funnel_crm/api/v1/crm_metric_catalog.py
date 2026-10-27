@@ -194,7 +194,7 @@ _METRICS.extend([
         unit="money", currency_behavior="هر ارز جدا؛ تبدیل ارز انجام نمی‌شود.",
         missing_data_behavior="بدون رویداد paid یا refunded در ارز انتخاب‌شده مقدار ناموجود است؛ مقدار منفی ممکن است.",
         limitations="شاخص جریان ثبت‌شده در پنجره است، نه درآمد حسابداری یا سود؛ پیوند کمپین اثبات اثر علّی نیست.",
-        endpoint="/api/v1/crm/campaign-experiments/{experiment_id}/readout",
+        endpoint="/api/v1/crm/campaigns/{campaign_id}/decision-workspace/{target_id}",
         required_permissions=["crm.campaign:view", COMMERCE_PERMISSION],
     ),
     MetricDefinition(
@@ -207,7 +207,7 @@ _METRICS.extend([
         unit="money per paid order", currency_behavior="هر ارز جدا؛ تبدیل ارز انجام نمی‌شود.",
         missing_data_behavior="بدون سفارش پرداخت‌شده در ارز انتخاب‌شده مقدار ناموجود است؛ مقدار منفی ممکن است.",
         limitations="بازپرداخت‌های بدون پرداخت متناظر نیز از صورت کسر می‌شوند؛ این معیار مبلغ ثبت‌شده است، نه سود حسابداری.",
-        endpoint="/api/v1/crm/campaign-experiments/{experiment_id}/readout",
+        endpoint="/api/v1/crm/campaigns/{campaign_id}/decision-workspace/{target_id}",
         required_permissions=["crm.campaign:view", COMMERCE_PERMISSION],
     ),
     MetricDefinition(
@@ -390,6 +390,19 @@ _METRICS.extend([
         missing_data_behavior="بدون روز جفت‌شده یا با هزینهٔ مجموع صفر، مقدار ناموجود است.",
         limitations="مبنای آن مبالغ ثبت‌شده است، نه سود حسابداری یا بازده علّی؛ با ROAS گزارش‌شده تفاوت دارد.",
         endpoint="/api/v1/crm/campaign-experiments/{experiment_id}/readout",
+        required_permissions=["crm.campaign:view", COMMERCE_PERMISSION],
+    ),
+    MetricDefinition(
+        key="period_net_paid_to_spend", name="نسبت خالص پرداخت دوره به هزینه", category="commerce",
+        description="نسبت خالص پرداخت ثبت‌شده به هزینهٔ ثبت‌شده در کل دوره و ارز یکسان.",
+        formula="(جمع paid − جمع refunded در دوره) ÷ جمع actual_spend در دوره",
+        source="CRMProductCommerceEvent و CRMMarketingCampaignMeasurement",
+        aggregation="مجموع رویدادهای پرداخت و بازپرداخت و مجموع هزینه برای کل بازه، جداگانه به‌ازای هر ارز.",
+        dimensions=["campaign", "currency", "date range", "source product"],
+        unit="multiple", currency_behavior="فقط ارزهای یکسان؛ تبدیل ارز انجام نمی‌شود.",
+        missing_data_behavior="بدون سفارش پرداخت‌شده و هزینهٔ مثبت در همان ارز، مقدار ناموجود است.",
+        limitations="مبنای آن مبالغ ثبت‌شده در کل دوره است، نه سود حسابداری یا بازده علّی.",
+        endpoint="/api/v1/crm/campaigns/{campaign_id}/decision-workspace/{target_id}",
         required_permissions=["crm.campaign:view", COMMERCE_PERMISSION],
     ),
     MetricDefinition(
