@@ -1,3 +1,5 @@
+import csv
+import io
 from datetime import date
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -8,7 +10,11 @@ from fastapi import FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaign_experiments import router
-from funnel_crm.api.v1.crm_campaign_experiments import _coverage_classification, _metric_coverage
+from funnel_crm.api.v1.crm_campaign_experiments import (
+    _coverage_classification,
+    _metric_coverage,
+    _spreadsheet_safe,
+)
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
@@ -59,6 +65,13 @@ def test_coverage_classification_uses_observed_data_only(
     balance: str,
 ) -> None:
     assert _coverage_classification(minimum, maximum) == (completeness, balance)
+
+
+def test_csv_cells_are_safe_for_spreadsheet_import() -> None:
+    assert _spreadsheet_safe("=1+1") == "'=1+1"
+    assert _spreadsheet_safe("  @SUM(A1:A2)") == "'  @SUM(A1:A2)"
+    assert _spreadsheet_safe("campaign name") == "campaign name"
+    assert _spreadsheet_safe(Decimal("-33.34")) == Decimal("-33.34")
 
 
 def make_app(
@@ -231,6 +244,23 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert result["experiment"]["allocation_method"] == payload["allocation_method"]
         assert result["experiment"]["known_limitations"] == payload["known_limitations"]
         assert result["experiment"]["audience_snapshot"]["criteria"] == segment_criteria
+
+        csv_response = await client.get(
+            f"/api/v1/crm/campaign-experiments/{experiment_id}/readout.csv",
+            headers=headers,
+        )
+        assert csv_response.status_code == 200, csv_response.text
+        assert csv_response.headers["content-type"].startswith("text/csv")
+        assert "attachment; filename=\"campaign-experiment-" in csv_response.headers["content-disposition"]
+        csv_rows = list(csv.DictReader(io.StringIO(csv_response.text.lstrip("\ufeff"))))
+        assert len(csv_rows) == 6
+        variant_csv = next(
+            row for row in csv_rows
+            if row["variant_campaign_id"] == str(variant_id) and row["metric_role"] == "primary"
+        )
+        assert variant_csv["missing_dates"] == '["2026-10-17", "2026-10-18"]'
+        assert variant_csv["source_labels"] == '["variant report"]'
+        assert variant_csv["coverage_delta_vs_control_percentage_points"] == "-33.34"
         control, variant = result["variants"]
         assert control["is_control"] is True
         assert control["guardrails"][0]["value"] == 100
