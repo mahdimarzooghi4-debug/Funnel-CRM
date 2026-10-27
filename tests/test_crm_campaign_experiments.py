@@ -208,6 +208,22 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "maximum_coverage_percent": 66.67,
             "coverage_spread_percentage_points": 33.34,
             "completeness": "partial", "coverage_balance": "unequal",
+            "variants": [
+                {
+                    "campaign_id": str(control_id), "label": "Existing headline",
+                    "is_control": True, "coverage_percent": 66.67,
+                    "expected_days": 3, "missing_days": 1,
+                    "missing_dates": ["2026-10-18"],
+                    "source_labels": ["control report"],
+                },
+                {
+                    "campaign_id": str(variant_id), "label": "New headline",
+                    "is_control": False, "coverage_percent": 33.33,
+                    "expected_days": 3, "missing_days": 2,
+                    "missing_dates": ["2026-10-17", "2026-10-18"],
+                    "source_labels": ["variant report"],
+                },
+            ],
         }
         clicks_coverage = result["coverage_summary"][1]
         assert clicks_coverage["completeness"] == "partial"
