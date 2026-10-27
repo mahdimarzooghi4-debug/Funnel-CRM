@@ -178,10 +178,21 @@ class VariantReadout(BaseModel):
     guardrails: list[GuardrailMetricReadout] = Field(default_factory=list)
 
 
+class CoverageMetricSummary(BaseModel):
+    metric: ExperimentMetric
+    currency: str | None
+    variant_count: int
+    variants_with_missing_days: int
+    minimum_coverage_percent: float
+    maximum_coverage_percent: float
+    coverage_spread_percentage_points: float
+
+
 class CampaignExperimentReadout(BaseModel):
     experiment: CampaignExperimentRead
     readout_kind: Literal["descriptive_observation"] = "descriptive_observation"
     variants: list[VariantReadout]
+    coverage_summary: list[CoverageMetricSummary]
 
 
 async def _require_permission(
@@ -565,7 +576,31 @@ async def read_campaign_experiment(
         correlation_id=None,
     ))
     await context.session.flush()
+    coverage_summary = []
+    metric_configs = [(experiment.primary_metric, experiment.currency)] + [
+        (item["metric"], item.get("currency")) for item in guardrail_configs
+    ]
+    for metric, currency in metric_configs:
+        coverage_values = [
+            variant.coverage_percent if metric == experiment.primary_metric and currency == experiment.currency
+            else next(
+                guardrail.coverage_percent for guardrail in variant.guardrails
+                if guardrail.metric == metric and guardrail.currency == currency
+            )
+            for variant in readouts
+        ]
+        minimum_coverage = min(coverage_values)
+        maximum_coverage = max(coverage_values)
+        coverage_summary.append(CoverageMetricSummary(
+            metric=metric, currency=currency,
+            variant_count=len(readouts),
+            variants_with_missing_days=sum(value < 100 for value in coverage_values),
+            minimum_coverage_percent=minimum_coverage,
+            maximum_coverage_percent=maximum_coverage,
+            coverage_spread_percentage_points=round(maximum_coverage - minimum_coverage, 2),
+        ))
     return CampaignExperimentReadout(
         experiment=CampaignExperimentRead.model_validate(experiment),
         variants=readouts,
+        coverage_summary=coverage_summary,
     )
