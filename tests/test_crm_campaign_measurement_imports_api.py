@@ -109,7 +109,7 @@ async def test_campaign_measurement_csv_preview_atomic_import_and_idempotent_rep
         "refunded_amount,refunded_currency,"
         "attributed_revenue_amount,attributed_revenue_currency\n"
         "2026-10-16,Social report,100,80,10,3,2,1,95,90,15,USD,4,USD,2,12,USD,75,USD\n"
-        "2026-10-17,Store report,,50,,4,,1,,,8,EUR,,,1,5,EUR,,,\n"
+        "2026-10-17,Store report,,50,,4,,1,,,8,EUR,,,1,5,EUR,,\n"
     )
     app = make_app(runtime_session_factory, identity)
     headers = {"X-Workspace-ID": str(tenant_id)}
