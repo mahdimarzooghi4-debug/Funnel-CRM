@@ -122,6 +122,16 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             priority="normal", status="open", completed_at=None,
             source_learning_review_id=learning_review_id, source_outcome_id=None,
         ))
+        context.session.add(CRMWorkItem(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            profile_id=None, opportunity_id=None, campaign_id=campaign_id,
+            assigned_membership_id=context.access.membership_id,
+            created_by_membership_id=context.access.membership_id,
+            title="Completed campaign follow-up", description=None,
+            due_at=None, priority="normal", status="completed",
+            completed_at=datetime.now(timezone.utc),
+            source_learning_review_id=learning_review_id, source_outcome_id=None,
+        ))
         context.session.add_all([
             CRMMarketingCampaignMeasurement(
                 id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
@@ -248,6 +258,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["open_learning_action_count"] == 1
     assert queue["items"][0]["overdue_learning_action_count"] == 1
     assert queue["items"][0]["unassigned_learning_action_count"] == 1
+    assert queue["items"][0]["completed_learning_action_count"] == 1
     queue_currency = {
         row["currency"]: row for row in queue["items"][0]["commerce_outcomes_by_currency"]
     }
