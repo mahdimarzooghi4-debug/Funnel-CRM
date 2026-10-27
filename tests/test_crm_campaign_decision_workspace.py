@@ -14,6 +14,7 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
     CRMMarketingCampaignTargetPlan,
+    CRMMarketingLearningReview,
     CRMProfileSegment,
     CRMProductCommerceEvent,
     Role,
@@ -96,6 +97,14 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             max_cost_per_conversion_amount=None, conversion_cost_currency=None,
             min_roas=Decimal("1.500000"), roas_currency="USD",
             min_net_paid_to_spend=Decimal("2.000000"), net_paid_to_spend_currency="USD",
+        ))
+        await context.session.flush()
+        context.session.add(CRMMarketingLearningReview(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            campaign_id=campaign_id, target_plan_id=plan_id,
+            assessment="Initial campaign review",
+            corrective_action="Review landing page changes",
+            status="planned",
         ))
         context.session.add_all([
             CRMMarketingCampaignMeasurement(
@@ -218,6 +227,8 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["status"] == "review_required"
     assert queue["items"][0]["missed_metric_count"] == 2
     assert queue["items"][0]["commerce_data_status"] == "observed"
+    assert queue["items"][0]["planned_learning_review_count"] == 1
+    assert queue["items"][0]["evaluated_learning_review_count"] == 0
     queue_currency = {
         row["currency"]: row for row in queue["items"][0]["commerce_outcomes_by_currency"]
     }
