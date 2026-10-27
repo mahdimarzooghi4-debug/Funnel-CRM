@@ -227,10 +227,12 @@ def _coverage_classification(
     return completeness, balance
 
 
-def _spreadsheet_safe(value: Any) -> str:
+def _spreadsheet_safe(value: Any) -> Any:
     """Prevent user-controlled CSV text from being evaluated as a spreadsheet formula."""
     if value is None:
         return ""
+    if isinstance(value, (int, float, Decimal)):
+        return value
     text_value = str(value)
     if text_value.lstrip(" \t\r\n")[:1] in {"=", "+", "-", "@", "\t", "\r", "\n"}:
         return "'" + text_value

@@ -71,6 +71,7 @@ def test_csv_cells_are_safe_for_spreadsheet_import() -> None:
     assert _spreadsheet_safe("=1+1") == "'=1+1"
     assert _spreadsheet_safe("  @SUM(A1:A2)") == "'  @SUM(A1:A2)"
     assert _spreadsheet_safe("campaign name") == "campaign name"
+    assert _spreadsheet_safe(Decimal("-33.34")) == Decimal("-33.34")
 
 
 def make_app(
