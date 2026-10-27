@@ -1,6 +1,6 @@
 """Plan and describe campaign variant experiments without claiming causality."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -149,6 +149,11 @@ class GuardrailMetricReadout(BaseModel):
     status: Literal["available", "no_data"]
     observed_days: int
     paired_days: int
+    expected_days: int
+    missing_days: int
+    coverage_percent: float
+    missing_dates: list[date]
+    source_labels: list[str]
 
 
 class VariantReadout(BaseModel):
@@ -163,6 +168,11 @@ class VariantReadout(BaseModel):
     status: Literal["available", "no_data"]
     observed_days: int
     paired_days: int
+    expected_days: int
+    missing_days: int
+    coverage_percent: float
+    missing_dates: list[date]
+    source_labels: list[str]
     guardrails: list[GuardrailMetricReadout] = Field(default_factory=list)
 
 
@@ -223,6 +233,48 @@ def _metric_value(
         value = (revenue / spend).quantize(Decimal("0.000001")) if paired and spend > 0 else None
         return value, len(paired), len(paired)
     raise ValueError("Unsupported experiment metric")
+
+
+def _metric_coverage(
+    metric: str,
+    currency: str | None,
+    rows: list[CRMMarketingCampaignMeasurement],
+    period_start: date,
+    period_end: date,
+) -> tuple[int, int, float, list[date], list[str]]:
+    """Describe daily source coverage for the observations used by one metric."""
+    if metric in COUNT_METRICS:
+        qualifying = [row for row in rows if getattr(row, metric) is not None]
+    elif metric == "click_through_rate_percent":
+        qualifying = [row for row in rows if row.clicks is not None and row.impressions is not None]
+    elif metric == "conversion_rate_per_click_percent":
+        qualifying = [row for row in rows if row.conversions is not None and row.clicks is not None]
+    elif metric in {"cost_per_lead", "cost_per_conversion"}:
+        outcome = "leads" if metric == "cost_per_lead" else "conversions"
+        qualifying = [
+            row for row in rows
+            if row.actual_spend_amount is not None and row.actual_spend_currency == currency
+            and getattr(row, outcome) is not None
+        ]
+    elif metric == "roas":
+        qualifying = [
+            row for row in rows
+            if row.actual_spend_amount is not None and row.actual_spend_currency == currency
+            and row.attributed_revenue_amount is not None and row.attributed_revenue_currency == currency
+        ]
+    else:
+        raise ValueError("Unsupported experiment metric")
+    available_dates = {row.measured_on for row in qualifying}
+    expected_dates = [period_start + timedelta(days=index)
+                      for index in range((period_end - period_start).days + 1)]
+    missing_dates = [day for day in expected_dates if day not in available_dates]
+    expected_days = len(expected_dates)
+    observed_days = len(available_dates)
+    coverage_percent = round(observed_days * 100 / expected_days, 2) if expected_days else 0.0
+    return (
+        expected_days, len(missing_dates), coverage_percent, missing_dates,
+        sorted({row.source_label for row in qualifying}),
+    )
 
 
 @router.post("", response_model=CampaignExperimentRead, status_code=201,
@@ -430,8 +482,10 @@ async def read_campaign_experiment(
         guardrail_readouts = []
         for item in guardrail_configs:
             metric, currency = item["metric"], item.get("currency")
-            guard_value, guard_days, guard_paired = _metric_value(
-                metric, currency, measurements_by_campaign[variant.campaign_id]
+            metric_rows = measurements_by_campaign[variant.campaign_id]
+            guard_value, guard_days, guard_paired = _metric_value(metric, currency, metric_rows)
+            expected_days, missing_days, coverage_percent, missing_dates, source_labels = _metric_coverage(
+                metric, currency, metric_rows, experiment.period_start, experiment.period_end
             )
             guard_control = guardrail_controls.get((metric, currency))
             guard_delta = guard_value - guard_control if guard_value is not None and guard_control is not None else None
@@ -444,7 +498,15 @@ async def read_campaign_experiment(
                 delta_vs_control=guard_delta, percent_change_vs_control=guard_percent,
                 status="available" if guard_value is not None else "no_data",
                 observed_days=guard_days, paired_days=guard_paired,
+                expected_days=expected_days, missing_days=missing_days,
+                coverage_percent=coverage_percent, missing_dates=missing_dates,
+                source_labels=source_labels,
             ))
+        expected_days, missing_days, coverage_percent, missing_dates, source_labels = _metric_coverage(
+            experiment.primary_metric, experiment.currency,
+            measurements_by_campaign[variant.campaign_id],
+            experiment.period_start, experiment.period_end,
+        )
         readouts.append(VariantReadout(
             campaign_id=variant.campaign_id, campaign_name=campaign_name,
             label=variant.label, is_control=variant.is_control,
@@ -452,6 +514,9 @@ async def read_campaign_experiment(
             percent_change_vs_control=percent, currency=experiment.currency,
             status="available" if value is not None else "no_data",
             observed_days=observed_days, paired_days=paired_days,
+            expected_days=expected_days, missing_days=missing_days,
+            coverage_percent=coverage_percent, missing_dates=missing_dates,
+            source_labels=source_labels,
             guardrails=guardrail_readouts,
         ))
     context.session.add(AuditEvent(
