@@ -37,10 +37,13 @@ class CampaignCommerceCurrencyMetric(BaseModel):
     paid_event_count: int
     paid_order_count: int
     paid_amount: Decimal
+    net_paid_amount: Decimal
+    net_paid_amount_per_paid_order: Decimal | None
     refund_event_count: int
     refunded_order_count: int
     refunded_amount: Decimal
     observed_paid_to_spend_multiple: Decimal | None
+    observed_net_paid_to_spend_multiple: Decimal | None
     observed_refunds_to_spend_multiple: Decimal | None
 
 
@@ -241,17 +244,25 @@ async def get_campaign_commerce_efficiency(
             state = commerce_by_campaign[campaign.id].get(currency, {})
             paid_amount = state.get("paid_amount", Decimal("0"))
             refunded_amount = state.get("refunded_amount", Decimal("0"))
+            net_paid_amount = paid_amount - refunded_amount
+            paid_order_count = state.get("paid_order_count", 0)
             metrics.append(CampaignCommerceCurrencyMetric(
                 currency=currency,
                 spend_amount=spend,
                 spend_observed_days=spend_info[1] if spend_info is not None else 0,
                 paid_event_count=state.get("paid_event_count", 0),
-                paid_order_count=state.get("paid_order_count", 0),
+                paid_order_count=paid_order_count,
                 paid_amount=paid_amount,
+                net_paid_amount=net_paid_amount,
+                net_paid_amount_per_paid_order=(
+                    (net_paid_amount / Decimal(paid_order_count)).quantize(Decimal("0.000001"))
+                    if paid_order_count else None
+                ),
                 refund_event_count=state.get("refund_event_count", 0),
                 refunded_order_count=state.get("refunded_order_count", 0),
                 refunded_amount=refunded_amount,
                 observed_paid_to_spend_multiple=_multiple(paid_amount, spend),
+                observed_net_paid_to_spend_multiple=_multiple(net_paid_amount, spend),
                 observed_refunds_to_spend_multiple=_multiple(refunded_amount, spend),
             ))
         items.append(CampaignCommerceItem(
