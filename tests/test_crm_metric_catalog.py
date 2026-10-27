@@ -35,9 +35,9 @@ def test_metric_catalog_distinguishes_commerce_evidence_and_filters_by_permissio
         _METRICS, has_commerce_permission=True, category=None, search=None
     )
     assert {metric.key for metric in campaign_only}.isdisjoint(
-        {"paid_amount", "refund_amount", "refunded_order_count", "paid_to_spend"}
+        {"paid_amount", "refund_amount", "refunded_order_count", "refunded_order_rate_percent", "paid_to_spend"}
     )
-    assert {"paid_amount", "refund_amount", "refunded_order_count", "paid_to_spend"} <= {
+    assert {"paid_amount", "refund_amount", "refunded_order_count", "refunded_order_rate_percent", "paid_to_spend"} <= {
         metric.key for metric in with_commerce
     }
     reported_roas = next(metric for metric in with_commerce if metric.key == "reported_roas")
@@ -95,7 +95,7 @@ async def test_metric_catalog_is_scoped_searchable_and_audited(
         body = response.json()
         assert body["catalog_version"] == "1.0"
         assert {metric["key"] for metric in body["metrics"]} == {
-            "paid_amount", "refund_amount", "refunded_order_count", "paid_to_spend",
+            "paid_amount", "refund_amount", "refunded_order_count", "refunded_order_rate_percent", "paid_to_spend",
         }
         assert all(
             "crm.commerce_event:view" in metric["required_permissions"]
