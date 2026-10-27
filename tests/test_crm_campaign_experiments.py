@@ -183,6 +183,14 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert readout.status_code == 200, readout.text
         result = readout.json()
         assert result["readout_kind"] == "descriptive_observation"
+        primary_coverage = result["coverage_summary"][0]
+        assert primary_coverage == {
+            "metric": "conversions", "currency": None,
+            "variant_count": 2, "variants_with_missing_days": 2,
+            "minimum_coverage_percent": 33.33,
+            "maximum_coverage_percent": 66.67,
+            "coverage_spread_percentage_points": 33.34,
+        }
         assert result["experiment"]["allocation_method"] == payload["allocation_method"]
         assert result["experiment"]["known_limitations"] == payload["known_limitations"]
         assert result["experiment"]["audience_snapshot"]["criteria"] == segment_criteria
