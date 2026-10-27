@@ -121,6 +121,45 @@ def test_refunded_amount_metric_uses_matching_currency_and_sources() -> None:
     ) == (1, 0, 100.0, [], ["returns ledger"])
 
 
+def test_net_paid_to_spend_uses_only_same_currency_paired_days() -> None:
+    day = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
+    events = [
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.paid",
+            order_reference="O-1", event_kind="paid", amount=Decimal("300"), currency="USD", occurred_at=day,
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.refunded",
+            order_reference="O-1", event_kind="refunded", amount=Decimal("50"), currency="USD",
+            occurred_at=day.replace(hour=14),
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.paid",
+            order_reference="O-2", event_kind="paid", amount=Decimal("400"), currency="USD",
+            occurred_at=day.replace(day=17),
+        ),
+    ]
+    rows = [
+        CRMMarketingCampaignMeasurement(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            measured_on=date(2026, 10, 16), source_label="spend ledger",
+            actual_spend_amount=Decimal("100"), actual_spend_currency="USD",
+        ),
+        CRMMarketingCampaignMeasurement(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            measured_on=date(2026, 10, 17), source_label="other currency",
+            actual_spend_amount=Decimal("10"), actual_spend_currency="EUR",
+        ),
+    ]
+    assert _metric_value("net_paid_to_spend", "USD", rows, events) == (Decimal("2.500000"), 1, 1)
+    assert _metric_coverage(
+        "net_paid_to_spend", "USD", rows, date(2026, 10, 16), date(2026, 10, 17), events
+    ) == (2, 1, 50.0, [date(2026, 10, 17)], ["spend ledger", "store"])
+
+
 def test_order_linked_refund_metrics_deduplicate_orders_but_sum_partial_refunds() -> None:
     day = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
     events = [
