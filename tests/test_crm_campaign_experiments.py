@@ -136,7 +136,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
                 campaign_id=control_id, measured_on=date(2026, 10, 16),
                 source_label="control report", impressions=1000, clicks=100,
-                leads=40, conversions=10,
+                leads=40, conversions=10, assigned_count=100, exposure_count=80,
                 actual_spend_amount=Decimal("100"), actual_spend_currency="USD",
                 attributed_revenue_amount=Decimal("300"), attributed_revenue_currency="USD",
             ),
@@ -144,7 +144,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
                 campaign_id=variant_id, measured_on=date(2026, 10, 16),
                 source_label="variant report", impressions=1000, clicks=120,
-                leads=50, conversions=15,
+                leads=50, conversions=15, assigned_count=100, exposure_count=90,
                 actual_spend_amount=Decimal("90"), actual_spend_currency="USD",
                 attributed_revenue_amount=Decimal("360"), attributed_revenue_currency="USD",
             ),
@@ -152,6 +152,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
                 campaign_id=control_id, measured_on=date(2026, 10, 17),
                 source_label="control report", conversions=0,
+                assigned_count=25, exposure_count=20,
             ),
         ])
         role = Role(tenant_id=tenant_id, name=f"Experiment manager {uuid4().hex[:8]}")
@@ -253,7 +254,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert csv_response.headers["content-type"].startswith("text/csv")
         assert "attachment; filename=\"campaign-experiment-" in csv_response.headers["content-disposition"]
         csv_rows = list(csv.DictReader(io.StringIO(csv_response.text.lstrip("\ufeff"))))
-        assert len(csv_rows) == 6
+        assert len(csv_rows) == 10
         variant_csv = next(
             row for row in csv_rows
             if row["variant_campaign_id"] == str(variant_id) and row["metric_role"] == "primary"
@@ -261,6 +262,13 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert variant_csv["missing_dates"] == '["2026-10-17", "2026-10-18"]'
         assert variant_csv["source_labels"] == '["variant report"]'
         assert variant_csv["coverage_delta_vs_control_percentage_points"] == "-33.34"
+        variant_assignment_csv = next(
+            row for row in csv_rows
+            if row["variant_campaign_id"] == str(variant_id)
+            and row["metric_role"] == "assignment"
+        )
+        assert variant_assignment_csv["value"] == "100"
+        assert variant_assignment_csv["coverage_percent"] == "33.33"
         control, variant = result["variants"]
         assert control["is_control"] is True
         assert control["guardrails"][0]["value"] == 100
@@ -269,6 +277,10 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert control["delta_vs_control"] == 0
         assert control["coverage_percent"] == 66.67
         assert control["coverage_delta_vs_control_percentage_points"] == 0.0
+        assert control["assignment"]["count"] == 125
+        assert control["assignment"]["coverage_percent"] == 66.67
+        assert control["assignment"]["missing_dates"] == ["2026-10-18"]
+        assert control["exposure"]["count"] == 100
         assert variant["value"] == 15
         assert variant["delta_vs_control"] == 5
         assert variant["percent_change_vs_control"] == 50.0
@@ -277,6 +289,10 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert variant["missing_days"] == 2
         assert variant["coverage_percent"] == 33.33
         assert variant["coverage_delta_vs_control_percentage_points"] == -33.34
+        assert variant["assignment"]["count"] == 100
+        assert variant["assignment"]["coverage_percent"] == 33.33
+        assert variant["assignment"]["missing_dates"] == ["2026-10-17", "2026-10-18"]
+        assert variant["exposure"]["count"] == 90
         assert variant["missing_dates"] == ["2026-10-17", "2026-10-18"]
         assert variant["source_labels"] == ["variant report"]
         assert variant["guardrails"][0]["value"] == 120

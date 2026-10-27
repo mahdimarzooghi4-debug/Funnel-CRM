@@ -160,6 +160,17 @@ class GuardrailMetricReadout(BaseModel):
     source_labels: list[str]
 
 
+class DeliveryCountReadout(BaseModel):
+    count: int | None
+    status: Literal["available", "no_data"]
+    observed_days: int
+    expected_days: int
+    missing_days: int
+    coverage_percent: float
+    missing_dates: list[date]
+    source_labels: list[str]
+
+
 class VariantReadout(BaseModel):
     campaign_id: UUID
     campaign_name: str
@@ -178,6 +189,8 @@ class VariantReadout(BaseModel):
     coverage_delta_vs_control_percentage_points: float | None
     missing_dates: list[date]
     source_labels: list[str]
+    assignment: DeliveryCountReadout
+    exposure: DeliveryCountReadout
     guardrails: list[GuardrailMetricReadout] = Field(default_factory=list)
 
 
@@ -269,6 +282,22 @@ def _readout_csv_content(readout: CampaignExperimentReadout) -> str:
                 observation.expected_days, observation.missing_days,
                 observation.coverage_percent,
                 observation.coverage_delta_vs_control_percentage_points,
+                json.dumps([day.isoformat() for day in observation.missing_dates]),
+                json.dumps(observation.source_labels, ensure_ascii=False),
+            ])
+        for role, metric, observation in (
+            ("assignment", "assigned_count", variant.assignment),
+            ("exposure", "exposure_count", variant.exposure),
+        ):
+            writer.writerow(_spreadsheet_safe(value) for value in [
+                experiment.id, experiment.name, readout.readout_kind,
+                experiment.period_start, experiment.period_end,
+                experiment.allocation_method, experiment.known_limitations,
+                variant.campaign_id, variant.campaign_name, variant.label,
+                variant.is_control, role, metric, None, observation.count,
+                None, None, observation.status, observation.observed_days, 0,
+                observation.expected_days, observation.missing_days,
+                observation.coverage_percent, None,
                 json.dumps([day.isoformat() for day in observation.missing_dates]),
                 json.dumps(observation.source_labels, ensure_ascii=False),
             ])
@@ -367,6 +396,33 @@ def _metric_coverage(
     return (
         expected_days, len(missing_dates), coverage_percent, missing_dates,
         sorted({row.source_label for row in qualifying}),
+    )
+
+
+def _delivery_count_readout(
+    field: Literal["assigned_count", "exposure_count"],
+    rows: list[CRMMarketingCampaignMeasurement],
+    period_start: date,
+    period_end: date,
+) -> DeliveryCountReadout:
+    qualifying = [row for row in rows if getattr(row, field) is not None]
+    available_dates = {row.measured_on for row in qualifying}
+    expected_dates = [
+        period_start + timedelta(days=index)
+        for index in range((period_end - period_start).days + 1)
+    ]
+    missing_dates = [day for day in expected_dates if day not in available_dates]
+    expected_days = len(expected_dates)
+    observed_days = len(available_dates)
+    return DeliveryCountReadout(
+        count=sum(getattr(row, field) for row in qualifying) if qualifying else None,
+        status="available" if qualifying else "no_data",
+        observed_days=observed_days,
+        expected_days=expected_days,
+        missing_days=len(missing_dates),
+        coverage_percent=round(observed_days * 100 / expected_days, 2) if expected_days else 0.0,
+        missing_dates=missing_dates,
+        source_labels=sorted({row.source_label for row in qualifying}),
     )
 
 
@@ -635,6 +691,14 @@ async def read_campaign_experiment(
             ),
             missing_dates=missing_dates,
             source_labels=source_labels,
+            assignment=_delivery_count_readout(
+                "assigned_count", measurements_by_campaign[variant.campaign_id],
+                experiment.period_start, experiment.period_end,
+            ),
+            exposure=_delivery_count_readout(
+                "exposure_count", measurements_by_campaign[variant.campaign_id],
+                experiment.period_start, experiment.period_end,
+            ),
             guardrails=guardrail_readouts,
         ))
     context.session.add(AuditEvent(
