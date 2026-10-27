@@ -31,11 +31,11 @@ ExperimentMetric = Literal[
     "refunded_order_rate_percent", "matched_refund_order_rate_percent", "matched_paid_refund_order_count", "paid_order_refund_match_rate_percent", "unmatched_refund_order_count",
     "paid_order_without_refund_count",
     "click_through_rate_percent", "conversion_rate_per_click_percent",
-    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "net_paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount",
+    "cost_per_lead", "cost_per_conversion", "roas", "net_paid_to_spend", "incentive_cost", "paid_amount", "net_paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount",
 ]
 COUNT_METRICS = {"impressions", "clicks", "leads", "conversions", "return_count"}
-CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "net_paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount"}
-COMMERCE_METRICS = {"paid_order_count", "paid_amount", "net_paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_order_count", "refunded_order_rate_percent", "matched_refund_order_rate_percent", "matched_paid_refund_order_count", "paid_order_refund_match_rate_percent", "unmatched_refund_order_count", "paid_order_without_refund_count", "refund_amount"}
+CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "net_paid_to_spend", "incentive_cost", "paid_amount", "net_paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount"}
+COMMERCE_METRICS = {"paid_order_count", "paid_amount", "net_paid_amount", "net_paid_to_spend", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_order_count", "refunded_order_rate_percent", "matched_refund_order_rate_percent", "matched_paid_refund_order_count", "paid_order_refund_match_rate_percent", "unmatched_refund_order_count", "paid_order_without_refund_count", "refund_amount"}
 
 
 class ExperimentVariantWrite(BaseModel):
@@ -463,6 +463,23 @@ def _metric_value(
         revenue = sum((row.attributed_revenue_amount for row in paired), Decimal("0"))
         value = (revenue / spend).quantize(Decimal("0.000001")) if paired and spend > 0 else None
         return value, len(paired), len(paired)
+    if metric == "net_paid_to_spend":
+        net_by_day: dict[date, Decimal] = {}
+        for event in commerce_events:
+            if event.currency == currency and event.event_kind in {"paid", "refunded"}:
+                net_by_day[event.occurred_at.date()] = net_by_day.get(event.occurred_at.date(), Decimal("0")) + (
+                    event.amount if event.event_kind == "paid" else -event.amount
+                )
+        spend_by_day = {
+            row.measured_on: row.actual_spend_amount
+            for row in rows
+            if row.actual_spend_amount is not None and row.actual_spend_currency == currency
+        }
+        paired_days = net_by_day.keys() & spend_by_day.keys()
+        spend = sum((spend_by_day[day] for day in paired_days), Decimal("0"))
+        net = sum((net_by_day[day] for day in paired_days), Decimal("0"))
+        value = (net / spend).quantize(Decimal("0.000001")) if paired_days and spend > 0 else None
+        return value, len(paired_days), len(paired_days)
     if metric == "incentive_cost":
         paired = [
             row for row in rows
@@ -636,6 +653,28 @@ def _metric_coverage(
             if row.actual_spend_amount is not None and row.actual_spend_currency == currency
             and row.attributed_revenue_amount is not None and row.attributed_revenue_currency == currency
         ]
+    elif metric == "net_paid_to_spend":
+        commerce_days = {
+            event.occurred_at.date()
+            for event in commerce_events
+            if event.currency == currency and event.event_kind in {"paid", "refunded"}
+        }
+        qualifying = [
+            row for row in rows
+            if row.actual_spend_amount is not None and row.actual_spend_currency == currency
+            and row.measured_on in commerce_days
+        ]
+        available_dates = {row.measured_on for row in qualifying}
+        expected_dates = [period_start + timedelta(days=index) for index in range((period_end - period_start).days + 1)]
+        missing_dates = [day for day in expected_dates if day not in available_dates]
+        expected_days = len(expected_dates)
+        sources = {row.source_label for row in qualifying} | {
+            event.source_product for event in commerce_events
+            if event.currency == currency and event.event_kind in {"paid", "refunded"}
+            and event.occurred_at.date() in available_dates
+        }
+        return (expected_days, len(missing_dates), round(len(available_dates) * 100 / expected_days, 2) if expected_days else 0.0,
+                missing_dates, sorted(sources))
     elif metric == "incentive_cost":
         qualifying = [
             row for row in rows
