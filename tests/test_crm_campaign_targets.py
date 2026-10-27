@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -7,17 +7,62 @@ import pytest
 from fastapi import FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from funnel_crm.api.v1.crm_campaign_targets import router
+from funnel_crm.api.v1.crm_campaign_targets import evaluate_net_paid_to_spend_target, router
 from funnel_crm.api.v1.crm_campaign_target_analytics import router as target_analytics_router
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
+    CRMMarketingCampaignTargetPlan,
+    CRMProductCommerceEvent,
     CRMProfileSegment,
     Role,
     RoleAssignment,
     RolePermission,
 )
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
+
+
+def test_net_paid_to_spend_target_subtracts_refunds_and_keeps_currencies_separate() -> None:
+    tenant_id, organization_unit_id, campaign_id = uuid4(), uuid4(), uuid4()
+    plan = CRMMarketingCampaignTargetPlan(
+        id=uuid4(), tenant_id=tenant_id, organization_unit_id=organization_unit_id,
+        campaign_id=campaign_id, period_start=date(2026, 10, 16), period_end=date(2026, 10, 17),
+        min_net_paid_to_spend=Decimal("4.5"), net_paid_to_spend_currency="USD",
+    )
+    measurement = CRMMarketingCampaignMeasurement(
+        id=uuid4(), tenant_id=tenant_id, organization_unit_id=organization_unit_id,
+        campaign_id=campaign_id, measured_on=date(2026, 10, 16), source_label="test",
+        actual_spend_amount=Decimal("20"), actual_spend_currency="USD",
+    )
+    events = [
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=organization_unit_id,
+            campaign_id=campaign_id, profile_id=None, source_product="funnel.store",
+            source_event_id=uuid4(), event_type="commerce.order.paid", order_reference="A",
+            event_kind="paid", amount=Decimal("100"), currency="USD",
+            occurred_at=datetime(2026, 10, 16, 12, tzinfo=timezone.utc),
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=organization_unit_id,
+            campaign_id=campaign_id, profile_id=None, source_product="funnel.store",
+            source_event_id=uuid4(), event_type="commerce.order.refunded", order_reference="A",
+            event_kind="refunded", amount=Decimal("10"), currency="USD",
+            occurred_at=datetime(2026, 10, 16, 13, tzinfo=timezone.utc),
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=organization_unit_id,
+            campaign_id=campaign_id, profile_id=None, source_product="funnel.store",
+            source_event_id=uuid4(), event_type="commerce.order.paid", order_reference="B",
+            event_kind="paid", amount=Decimal("1000"), currency="EUR",
+            occurred_at=datetime(2026, 10, 16, 14, tzinfo=timezone.utc),
+        ),
+    ]
+
+    result = evaluate_net_paid_to_spend_target(plan, [measurement], events)
+
+    assert result is not None
+    assert result.actual == Decimal("4.500000")
+    assert result.status == "met"
 
 
 def make_app(
@@ -116,7 +161,19 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             ),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.commerce_event:view"),
         ])
+        await context.session.flush()
+        for kind, amount, order_ref in (("paid", "100.00", "ORDER-1"), ("refunded", "10.00", "ORDER-1")):
+            context.session.add(CRMProductCommerceEvent(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=campaign_id, profile_id=None, source_product="funnel.store",
+                source_event_id=uuid4(), event_type=(
+                    "commerce.order.paid" if kind == "paid" else "commerce.order.refunded"
+                ), order_reference=order_ref, event_kind=kind,
+                amount=Decimal(amount), currency="USD",
+                occurred_at=datetime(2026, 10, 16, 12, tzinfo=timezone.utc),
+            ))
         await context.session.flush()
 
     app = make_app(runtime_session_factory, identity)
@@ -137,6 +194,8 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             "conversion_cost_currency": "USD",
             "min_roas": "4",
             "roas_currency": "USD",
+            "min_net_paid_to_spend": "4.5",
+            "net_paid_to_spend_currency": "USD",
         }
         saved = await client.put(base, headers=headers, json=payload)
         assert saved.status_code == 200, saved.text
@@ -164,6 +223,8 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert metrics["cost_per_conversion"]["actual"] == "10.000000"
         assert metrics["roas"]["actual"] == "5.000000"
         assert metrics["roas"]["status"] == "met"
+        assert metrics["period_net_paid_to_spend"]["actual"] == "4.500000"
+        assert metrics["period_net_paid_to_spend"]["status"] == "met"
 
         partial_campaign_target = await client.put(
             f"/api/v1/crm/campaigns/{partial_campaign_id}/targets",
@@ -221,6 +282,7 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert report["campaigns"][0]["metrics"]["roas"]["currency"] == "USD"
         assert report["period_calendar_days"] == 2
         assert report["metric_definitions"]["roas"]["key"] == "reported_roas"
+        assert report["metric_outcomes"]["period_net_paid_to_spend"]["met"] == 1
         assert report["metric_definitions"]["spend"]["key"] == "actual_spend"
         assert report["campaigns"][0]["metrics"]["spend"]["recorded_day_coverage_percent"] == "50.00"
         assert "missing days are not zero" in report["coverage_basis"]
