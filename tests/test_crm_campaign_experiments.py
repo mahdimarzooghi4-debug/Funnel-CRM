@@ -151,6 +151,41 @@ def test_order_linked_refund_metrics_deduplicate_orders_but_sum_partial_refunds(
     ) == (2, 1, 50.0, [date(2026, 10, 17)], ["store"])
 
 
+def test_refunded_order_rate_matches_unique_paid_orders_and_counts_paid_event_days() -> None:
+    day = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
+    events = [
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.paid",
+            order_reference="O-1", event_kind="paid", amount=Decimal("20"), currency="USD", occurred_at=day,
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.paid.duplicate",
+            order_reference="O-1", event_kind="paid", amount=Decimal("20"), currency="USD", occurred_at=day,
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.refunded",
+            order_reference="O-1", event_kind="refunded", amount=Decimal("5"), currency="USD", occurred_at=day,
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.paid",
+            order_reference="O-2", event_kind="paid", amount=Decimal("30"), currency="USD", occurred_at=day,
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.refunded",
+            order_reference="O-3", event_kind="refunded", amount=Decimal("4"), currency="USD", occurred_at=day,
+        ),
+    ]
+    assert _metric_value("refunded_order_rate_percent", None, [], events) == (Decimal("50.0000"), 1, 0)
+    assert _metric_coverage(
+        "refunded_order_rate_percent", None, [], date(2026, 10, 16), date(2026, 10, 17), events
+    ) == (2, 1, 50.0, [date(2026, 10, 17)], ["store"])
+
+
 def make_app(
     session_factory: async_sessionmaker[AsyncSession],
     identity: AuthenticatedIdentity,
