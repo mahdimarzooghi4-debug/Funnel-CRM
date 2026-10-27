@@ -152,6 +152,7 @@ class GuardrailMetricReadout(BaseModel):
     expected_days: int
     missing_days: int
     coverage_percent: float
+    coverage_delta_vs_control_percentage_points: float | None
     missing_dates: list[date]
     source_labels: list[str]
 
@@ -171,6 +172,7 @@ class VariantReadout(BaseModel):
     expected_days: int
     missing_days: int
     coverage_percent: float
+    coverage_delta_vs_control_percentage_points: float | None
     missing_dates: list[date]
     source_labels: list[str]
     guardrails: list[GuardrailMetricReadout] = Field(default_factory=list)
@@ -455,11 +457,17 @@ async def read_campaign_experiment(
 
     control_variant = next((variant for variant, _ in variant_rows if variant.is_control), None)
     control_value: int | Decimal | None = None
+    control_coverage_percent: float | None = None
     if control_variant is not None:
         control_value, _, _ = _metric_value(
             experiment.primary_metric, experiment.currency,
             measurements_by_campaign[control_variant.campaign_id],
         )
+        control_coverage_percent = _metric_coverage(
+            experiment.primary_metric, experiment.currency,
+            measurements_by_campaign[control_variant.campaign_id],
+            experiment.period_start, experiment.period_end,
+        )[2]
     readouts: list[VariantReadout] = []
     guardrail_configs = experiment.guardrail_metrics or []
     guardrail_controls = {
@@ -467,6 +475,14 @@ async def read_campaign_experiment(
             item["metric"], item.get("currency"),
             measurements_by_campaign[control_variant.campaign_id],
         )[0]
+        for item in guardrail_configs
+    } if control_variant is not None else {}
+    guardrail_control_coverage = {
+        (item["metric"], item.get("currency")): _metric_coverage(
+            item["metric"], item.get("currency"),
+            measurements_by_campaign[control_variant.campaign_id],
+            experiment.period_start, experiment.period_end,
+        )[2]
         for item in guardrail_configs
     } if control_variant is not None else {}
     for variant, campaign_name in variant_rows:
@@ -487,6 +503,7 @@ async def read_campaign_experiment(
             expected_days, missing_days, coverage_percent, missing_dates, source_labels = _metric_coverage(
                 metric, currency, metric_rows, experiment.period_start, experiment.period_end
             )
+            control_guard_coverage = guardrail_control_coverage.get((metric, currency))
             guard_control = guardrail_controls.get((metric, currency))
             guard_delta = guard_value - guard_control if guard_value is not None and guard_control is not None else None
             guard_percent = (
@@ -499,7 +516,12 @@ async def read_campaign_experiment(
                 status="available" if guard_value is not None else "no_data",
                 observed_days=guard_days, paired_days=guard_paired,
                 expected_days=expected_days, missing_days=missing_days,
-                coverage_percent=coverage_percent, missing_dates=missing_dates,
+                coverage_percent=coverage_percent,
+                coverage_delta_vs_control_percentage_points=(
+                    round(coverage_percent - control_guard_coverage, 2)
+                    if control_guard_coverage is not None else None
+                ),
+                missing_dates=missing_dates,
                 source_labels=source_labels,
             ))
         expected_days, missing_days, coverage_percent, missing_dates, source_labels = _metric_coverage(
@@ -515,7 +537,12 @@ async def read_campaign_experiment(
             status="available" if value is not None else "no_data",
             observed_days=observed_days, paired_days=paired_days,
             expected_days=expected_days, missing_days=missing_days,
-            coverage_percent=coverage_percent, missing_dates=missing_dates,
+            coverage_percent=coverage_percent,
+            coverage_delta_vs_control_percentage_points=(
+                round(coverage_percent - control_coverage_percent, 2)
+                if control_coverage_percent is not None else None
+            ),
+            missing_dates=missing_dates,
             source_labels=source_labels,
             guardrails=guardrail_readouts,
         ))

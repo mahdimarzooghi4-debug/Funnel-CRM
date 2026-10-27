@@ -7,6 +7,7 @@ Campaign experiment results must show how much source data supports each reporte
 ## Readout requirements
 
 - For the experiment's complete inclusive date range, show expected calendar days, days with qualifying observations, missing days, coverage percentage, and the exact missing dates for each primary metric and guardrail, per variant.
+- Show each variant's coverage difference from control in percentage points for the same metric, so unequal reporting coverage is visible without introducing an arbitrary pass/fail threshold.
 - A day counts as observed only when that day's measurement row contains the field or fields needed to calculate that metric. For rates, both numerator and denominator are required. For cost and ROAS metrics, the relevant amount and outcome fields must be present in the selected currency.
 - Show the source labels associated with qualifying observations so the reviewer can trace the reported values to the inputs recorded in the CRM.
 - Keep the result descriptive. Coverage does not establish that groups were comparable or that an observed difference was caused by the campaign variant.
