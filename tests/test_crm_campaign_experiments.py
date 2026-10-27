@@ -142,10 +142,17 @@ def test_order_linked_refund_metrics_deduplicate_orders_but_sum_partial_refunds(
             order_reference="O-2", event_kind="refunded", amount=Decimal("20"), currency="EUR",
             occurred_at=day,
         ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.refunded",
+            order_reference="O-3", event_kind="refunded", amount=Decimal("4"), currency="USD",
+            occurred_at=day,
+        ),
     ]
     rows: list[CRMMarketingCampaignMeasurement] = []
-    assert _metric_value("refunded_order_count", None, rows, events) == (2, 1, 0)
-    assert _metric_value("refund_amount", "USD", rows, events) == (Decimal("5"), 1, 0)
+    assert _metric_value("refunded_order_count", None, rows, events) == (3, 1, 0)
+    assert _metric_value("refund_amount", "USD", rows, events) == (Decimal("9"), 1, 0)
+    assert _metric_value("average_refund_per_order", "USD", rows, events) == (Decimal("4.500000"), 1, 0)
     assert _metric_coverage(
         "refund_amount", "USD", rows, date(2026, 10, 16), date(2026, 10, 17), events
     ) == (2, 1, 50.0, [date(2026, 10, 17)], ["store"])
