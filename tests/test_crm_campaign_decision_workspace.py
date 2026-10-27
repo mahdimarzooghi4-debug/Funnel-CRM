@@ -15,6 +15,7 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaignMeasurement,
     CRMMarketingCampaignTargetPlan,
     CRMMarketingLearningReview,
+    CRMWorkItem,
     CRMProfileSegment,
     CRMProductCommerceEvent,
     Role,
@@ -85,6 +86,10 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 tenant_id=tenant_id, role_id=role.id,
                 permission_key="crm.commerce_event:view",
             ),
+            RolePermission(
+                tenant_id=tenant_id, role_id=role.id,
+                permission_key="crm.work_item:view",
+            ),
         ])
         await context.session.flush()
         context.session.add(CRMMarketingCampaignTargetPlan(
@@ -99,12 +104,22 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             min_net_paid_to_spend=Decimal("2.000000"), net_paid_to_spend_currency="USD",
         ))
         await context.session.flush()
+        learning_review_id = uuid4()
         context.session.add(CRMMarketingLearningReview(
-            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            id=learning_review_id, tenant_id=tenant_id, organization_unit_id=root_id,
             campaign_id=campaign_id, target_plan_id=plan_id,
             assessment="Initial campaign review",
             corrective_action="Review landing page changes",
             status="planned",
+        ))
+        await context.session.flush()
+        context.session.add(CRMWorkItem(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            profile_id=None, opportunity_id=None, campaign_id=campaign_id,
+            assigned_membership_id=None, created_by_membership_id=context.access.membership_id,
+            title="Follow up on campaign review", description=None, due_at=None,
+            priority="normal", status="open", completed_at=None,
+            source_learning_review_id=learning_review_id, source_outcome_id=None,
         ))
         context.session.add_all([
             CRMMarketingCampaignMeasurement(
@@ -229,6 +244,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["commerce_data_status"] == "observed"
     assert queue["items"][0]["planned_learning_review_count"] == 1
     assert queue["items"][0]["evaluated_learning_review_count"] == 0
+    assert queue["items"][0]["open_learning_action_count"] == 1
     queue_currency = {
         row["currency"]: row for row in queue["items"][0]["commerce_outcomes_by_currency"]
     }
@@ -306,6 +322,10 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         await context.session.execute(delete(CRMMarketingCampaignMeasurement).where(
             CRMMarketingCampaignMeasurement.tenant_id == tenant_id,
             CRMMarketingCampaignMeasurement.campaign_id == campaign_id,
+        ))
+        await context.session.execute(delete(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == tenant_id,
+            CRMWorkItem.source_learning_review_id == learning_review_id,
         ))
         await context.session.execute(delete(CRMMarketingLearningReview).where(
             CRMMarketingLearningReview.tenant_id == tenant_id,
