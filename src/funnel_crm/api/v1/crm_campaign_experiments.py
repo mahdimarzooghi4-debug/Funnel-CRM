@@ -30,11 +30,11 @@ ExperimentMetric = Literal[
     "impressions", "clicks", "leads", "conversions", "return_count", "paid_order_count", "refunded_order_count",
     "refunded_order_rate_percent",
     "click_through_rate_percent", "conversion_rate_per_click_percent",
-    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "average_paid_order_value", "average_refund_per_order", "refunded_amount", "refund_amount",
+    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount",
 ]
 COUNT_METRICS = {"impressions", "clicks", "leads", "conversions", "return_count"}
-CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "average_paid_order_value", "average_refund_per_order", "refunded_amount", "refund_amount"}
-COMMERCE_METRICS = {"paid_order_count", "paid_amount", "average_paid_order_value", "average_refund_per_order", "refunded_order_count", "refunded_order_rate_percent", "refund_amount"}
+CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount"}
+COMMERCE_METRICS = {"paid_order_count", "paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_order_count", "refunded_order_rate_percent", "refund_amount"}
 
 
 class ExperimentVariantWrite(BaseModel):
@@ -358,6 +358,27 @@ def _metric_value(
             if order_amounts else None
         )
         return value, len({event.occurred_at.date() for event in commerce_events if event.event_kind == "refunded" and event.currency == currency}), 0
+    if metric == "refund_to_paid_amount_percent":
+        paid: dict[tuple[str, str], Decimal] = {}
+        refunded: dict[tuple[str, str], Decimal] = {}
+        for event in commerce_events:
+            if event.currency != currency:
+                continue
+            key = (event.source_product, event.order_reference)
+            if event.event_kind == "paid":
+                paid[key] = paid.get(key, Decimal("0")) + event.amount
+            elif event.event_kind == "refunded":
+                refunded[key] = refunded.get(key, Decimal("0")) + event.amount
+        matched = paid.keys() & refunded.keys()
+        paid_total = sum((paid[key] for key in matched), Decimal("0"))
+        refund_total = sum((refunded[key] for key in matched), Decimal("0"))
+        value = (refund_total * 100 / paid_total).quantize(Decimal("0.0001")) if paid_total > 0 else None
+        paired_events = [
+            event for event in commerce_events
+            if event.currency == currency
+            and (event.source_product, event.order_reference) in matched
+        ]
+        return value, len({event.occurred_at.date() for event in paired_events}), 0
     if metric == "refunded_order_rate_percent":
         paid = {(event.source_product, event.order_reference) for event in commerce_events if event.event_kind == "paid"}
         refunded = {(event.source_product, event.order_reference) for event in commerce_events if event.event_kind == "refunded"}
@@ -469,6 +490,18 @@ def _metric_coverage(
         )
     if metric == "average_refund_per_order":
         qualifying = [event for event in commerce_events if event.event_kind == "refunded" and event.currency == currency]
+        available_dates = {event.occurred_at.date() for event in qualifying}
+        expected_dates = [period_start + timedelta(days=index) for index in range((period_end - period_start).days + 1)]
+        missing_dates = [day for day in expected_dates if day not in available_dates]
+        expected_days = len(expected_dates)
+        return (expected_days, len(missing_dates), round(len(available_dates) * 100 / expected_days, 2) if expected_days else 0.0,
+                missing_dates, sorted({event.source_product for event in qualifying}))
+    if metric == "refund_to_paid_amount_percent":
+        currency_events = [event for event in commerce_events if event.currency == currency]
+        paid_orders = {(event.source_product, event.order_reference) for event in currency_events if event.event_kind == "paid"}
+        refunded_orders = {(event.source_product, event.order_reference) for event in currency_events if event.event_kind == "refunded"}
+        matched = paid_orders & refunded_orders
+        qualifying = [event for event in currency_events if (event.source_product, event.order_reference) in matched]
         available_dates = {event.occurred_at.date() for event in qualifying}
         expected_dates = [period_start + timedelta(days=index) for index in range((period_end - period_start).days + 1)]
         missing_dates = [day for day in expected_dates if day not in available_dates]
