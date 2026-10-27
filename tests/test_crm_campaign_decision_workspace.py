@@ -302,6 +302,10 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             CRMMarketingCampaignMeasurement.tenant_id == tenant_id,
             CRMMarketingCampaignMeasurement.campaign_id == campaign_id,
         ))
+        await context.session.execute(delete(CRMMarketingLearningReview).where(
+            CRMMarketingLearningReview.tenant_id == tenant_id,
+            CRMMarketingLearningReview.target_plan_id == plan_id,
+        ))
         await context.session.execute(delete(CRMMarketingCampaignTargetPlan).where(
             CRMMarketingCampaignTargetPlan.tenant_id == tenant_id,
             CRMMarketingCampaignTargetPlan.id == plan_id,
