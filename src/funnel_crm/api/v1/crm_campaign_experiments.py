@@ -2,7 +2,7 @@
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +17,7 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaignExperiment,
     CRMMarketingCampaignExperimentVariant,
     CRMMarketingCampaignMeasurement,
+    CRMProfileSegment,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -121,6 +122,7 @@ class CampaignExperimentRead(BaseModel):
     guardrail_metrics: list[dict[str, str | None]]
     allocation_method: str
     known_limitations: str | None
+    audience_snapshot: dict[str, Any] | None
     period_start: date
     period_end: date
     created_at: datetime
@@ -245,6 +247,18 @@ async def create_campaign_experiment(
             status_code=422,
             detail="Experiment variants must share the same segment, objective, and channel",
         )
+    segment = await context.session.scalar(select(CRMProfileSegment).where(
+        CRMProfileSegment.tenant_id == context.access.tenant_id,
+        CRMProfileSegment.id == campaigns[0].segment_id,
+        CRMProfileSegment.organization_unit_id == payload.organization_unit_id,
+    ))
+    if segment is None:
+        raise HTTPException(status_code=422, detail="The shared experiment audience segment is unavailable")
+    audience_snapshot = {
+        "segment_id": str(segment.id),
+        "segment_name": segment.name,
+        "criteria": segment.criteria,
+    }
 
     experiment = CRMMarketingCampaignExperiment(
         id=uuid4(), tenant_id=context.access.tenant_id,
@@ -254,6 +268,7 @@ async def create_campaign_experiment(
         guardrail_metrics=[item.model_dump() for item in payload.guardrails],
         allocation_method=payload.allocation_method,
         known_limitations=payload.known_limitations,
+        audience_snapshot=audience_snapshot,
         period_start=payload.period_start, period_end=payload.period_end,
     )
     context.session.add(experiment)
@@ -284,6 +299,7 @@ async def create_campaign_experiment(
             "guardrails": [item.model_dump() for item in payload.guardrails],
             "allocation_method": payload.allocation_method,
             "known_limitations": payload.known_limitations,
+            "audience_segment_id": str(segment.id),
         },
         correlation_id=None,
     ))
