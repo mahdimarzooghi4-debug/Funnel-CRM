@@ -116,10 +116,13 @@ class CampaignDecisionWorkspace(BaseModel):
 class DecisionQueueCommerceCurrency(BaseModel):
     currency: str
     paid_event_count: int
+    paid_order_count: int
     paid_amount: Decimal
     refund_event_count: int
+    refunded_order_count: int
     refunded_amount: Decimal
     net_paid_amount: Decimal
+    net_paid_amount_per_paid_order: Decimal | None
 
 
 class CampaignPortfolioDecisionItem(BaseModel):
@@ -257,6 +260,7 @@ async def get_campaign_portfolio_decision_queue(
                     CRMProductCommerceEvent.currency,
                     CRMProductCommerceEvent.event_kind,
                     func.count(CRMProductCommerceEvent.id).label("event_count"),
+                    func.count(func.distinct(CRMProductCommerceEvent.order_reference)).label("order_count"),
                     func.sum(CRMProductCommerceEvent.amount).label("amount_total"),
                 )
                 .where(
@@ -275,24 +279,34 @@ async def get_campaign_portfolio_decision_queue(
                 state = queue_commerce.setdefault(
                     commerce_row.currency,
                     {
-                        "paid_event_count": 0, "paid_amount": Decimal("0"),
-                        "refund_event_count": 0, "refunded_amount": Decimal("0"),
+                        "paid_event_count": 0, "paid_order_count": 0,
+                        "paid_amount": Decimal("0"), "refund_event_count": 0,
+                        "refunded_order_count": 0, "refunded_amount": Decimal("0"),
                     },
                 )
                 if commerce_row.event_kind == "paid":
                     state["paid_event_count"] = int(commerce_row.event_count)
+                    state["paid_order_count"] = int(commerce_row.order_count)
                     state["paid_amount"] = commerce_row.amount_total or Decimal("0")
                 else:
                     state["refund_event_count"] = int(commerce_row.event_count)
+                    state["refunded_order_count"] = int(commerce_row.order_count)
                     state["refunded_amount"] = commerce_row.amount_total or Decimal("0")
         queue_commerce_metrics = [
             DecisionQueueCommerceCurrency(
                 currency=currency,
                 paid_event_count=int(state["paid_event_count"]),
+                paid_order_count=int(state["paid_order_count"]),
                 paid_amount=state["paid_amount"],
                 refund_event_count=int(state["refund_event_count"]),
+                refunded_order_count=int(state["refunded_order_count"]),
                 refunded_amount=state["refunded_amount"],
                 net_paid_amount=state["paid_amount"] - state["refunded_amount"],
+                net_paid_amount_per_paid_order=(
+                    ((state["paid_amount"] - state["refunded_amount"])
+                     / Decimal(int(state["paid_order_count"]))).quantize(Decimal("0.000001"))
+                    if state["paid_order_count"] else None
+                ),
             )
             for currency, state in sorted(queue_commerce.items())
         ]
