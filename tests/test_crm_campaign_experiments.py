@@ -240,13 +240,13 @@ def test_refund_to_paid_amount_ratio_uses_only_orders_with_both_events() -> None
     assert _metric_value("paid_order_without_refund_count", None, [], events) == (1, 1, 0)
     assert _metric_coverage(
         "refund_to_paid_amount_percent", "USD", [], date(2026, 10, 16), date(2026, 10, 18), events
-    ) == (3, 2, 33.33, [date(2026, 10, 17), date(2026, 10, 18)], ["store"])
+    ) == (3, 1, 66.67, [date(2026, 10, 18)], ["store"])
     assert _metric_coverage(
         "matched_refund_order_rate_percent", None, [], date(2026, 10, 16), date(2026, 10, 18), events
     ) == (3, 1, 66.67, [date(2026, 10, 16)], ["store"])
     assert _metric_coverage(
         "paid_order_refund_match_rate_percent", None, [], date(2026, 10, 16), date(2026, 10, 18), events
-    ) == (3, 1, 66.67, [date(2026, 10, 18)], ["store"])
+    ) == (3, 2, 33.33, [date(2026, 10, 17), date(2026, 10, 18)], ["store"])
     assert _metric_coverage(
         "unmatched_refund_order_count", None, [], date(2026, 10, 16), date(2026, 10, 18), events
     ) == (3, 2, 33.33, [date(2026, 10, 16), date(2026, 10, 17)], ["store"])
