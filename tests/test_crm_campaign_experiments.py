@@ -13,6 +13,7 @@ from funnel_crm.api.v1.crm_campaign_experiments import router
 from funnel_crm.api.v1.crm_campaign_experiments import (
     _coverage_classification,
     _metric_coverage,
+    _metric_value,
     _spreadsheet_safe,
 )
 from funnel_crm.platform.models import (
@@ -72,6 +73,32 @@ def test_csv_cells_are_safe_for_spreadsheet_import() -> None:
     assert _spreadsheet_safe("  @SUM(A1:A2)") == "'  @SUM(A1:A2)"
     assert _spreadsheet_safe("campaign name") == "campaign name"
     assert _spreadsheet_safe(Decimal("-33.34")) == Decimal("-33.34")
+
+
+def test_incentive_cost_metric_uses_only_matching_currency_rows() -> None:
+    rows = [
+        CRMMarketingCampaignMeasurement(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(),
+            campaign_id=uuid4(), measured_on=date(2026, 10, 16),
+            source_label="promotion ledger", incentive_cost_amount=Decimal("4.25"),
+            incentive_cost_currency="USD",
+        ),
+        CRMMarketingCampaignMeasurement(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(),
+            campaign_id=uuid4(), measured_on=date(2026, 10, 16),
+            source_label="other currency ledger", incentive_cost_amount=Decimal("9"),
+            incentive_cost_currency="EUR",
+        ),
+    ]
+
+    value, observed_days, paired_days = _metric_value("incentive_cost", "USD", rows)
+    coverage = _metric_coverage(
+        "incentive_cost", "USD", rows, date(2026, 10, 16), date(2026, 10, 16)
+    )
+
+    assert value == Decimal("4.25")
+    assert observed_days == paired_days == 1
+    assert coverage == (1, 0, 100.0, [], ["promotion ledger"])
 
 
 def make_app(
@@ -137,6 +164,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 campaign_id=control_id, measured_on=date(2026, 10, 16),
                 source_label="control report", impressions=1000, clicks=100,
                 leads=40, conversions=10, assigned_count=100, exposure_count=80,
+                incentive_cost_amount=Decimal("20"), incentive_cost_currency="USD",
                 actual_spend_amount=Decimal("100"), actual_spend_currency="USD",
                 attributed_revenue_amount=Decimal("300"), attributed_revenue_currency="USD",
             ),
@@ -145,6 +173,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 campaign_id=variant_id, measured_on=date(2026, 10, 16),
                 source_label="variant report", impressions=1000, clicks=120,
                 leads=50, conversions=15, assigned_count=100, exposure_count=90,
+                incentive_cost_amount=Decimal("10"), incentive_cost_currency="USD",
                 actual_spend_amount=Decimal("90"), actual_spend_currency="USD",
                 attributed_revenue_amount=Decimal("360"), attributed_revenue_currency="USD",
             ),
@@ -178,7 +207,10 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "allocation_method": "Random assignment by eligible customer ID in the execution platform.",
             "known_limitations": "Possible cross-channel exposure is not captured.",
             "primary_metric": "conversions",
-            "guardrails": [{"metric": "clicks"}, {"metric": "roas", "currency": "USD"}],
+            "guardrails": [
+                {"metric": "clicks"}, {"metric": "roas", "currency": "USD"},
+                {"metric": "incentive_cost", "currency": "USD"},
+            ],
             "period_start": "2026-10-16",
             "period_end": "2026-10-18",
             "variants": [
@@ -199,6 +231,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert listed.json()[0]["experiment"]["guardrail_metrics"] == [
             {"metric": "clicks", "currency": None},
             {"metric": "roas", "currency": "USD"},
+            {"metric": "incentive_cost", "currency": "USD"},
         ]
         assert listed.json()[0]["experiment"]["allocation_method"] == payload["allocation_method"]
         assert listed.json()[0]["experiment"]["known_limitations"] == payload["known_limitations"]
@@ -246,6 +279,28 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert result["experiment"]["known_limitations"] == payload["known_limitations"]
         assert result["experiment"]["audience_snapshot"]["criteria"] == segment_criteria
 
+        incentive_primary_payload = dict(payload)
+        incentive_primary_payload.update({
+            "name": "Promotion cost review",
+            "primary_metric": "incentive_cost",
+            "currency": "USD",
+            "guardrails": [{"metric": "clicks"}],
+        })
+        incentive_primary = await client.post(
+            "/api/v1/crm/campaign-experiments",
+            headers=headers,
+            json=incentive_primary_payload,
+        )
+        assert incentive_primary.status_code == 201, incentive_primary.text
+        incentive_readout = await client.get(
+            f"/api/v1/crm/campaign-experiments/{incentive_primary.json()['id']}/readout",
+            headers=headers,
+        )
+        assert incentive_readout.status_code == 200, incentive_readout.text
+        assert [Decimal(item["value"]) for item in incentive_readout.json()["variants"]] == [
+            Decimal("20"), Decimal("10"),
+        ]
+
         csv_response = await client.get(
             f"/api/v1/crm/campaign-experiments/{experiment_id}/readout.csv",
             headers=headers,
@@ -254,7 +309,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert csv_response.headers["content-type"].startswith("text/csv")
         assert "attachment; filename=\"campaign-experiment-" in csv_response.headers["content-disposition"]
         csv_rows = list(csv.DictReader(io.StringIO(csv_response.text.lstrip("\ufeff"))))
-        assert len(csv_rows) == 10
+        assert len(csv_rows) == 12
         variant_csv = next(
             row for row in csv_rows
             if row["variant_campaign_id"] == str(variant_id) and row["metric_role"] == "primary"
@@ -269,10 +324,18 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         )
         assert variant_assignment_csv["value"] == "100"
         assert variant_assignment_csv["coverage_percent"] == "33.33"
+        variant_incentive_csv = next(
+            row for row in csv_rows
+            if row["variant_campaign_id"] == str(variant_id)
+            and row["metric"] == "incentive_cost"
+        )
+        assert variant_incentive_csv["value"] == "10.000000"
+        assert variant_incentive_csv["currency"] == "USD"
         control, variant = result["variants"]
         assert control["is_control"] is True
         assert control["guardrails"][0]["value"] == 100
         assert Decimal(control["guardrails"][1]["value"]) == Decimal("3")
+        assert Decimal(control["guardrails"][2]["value"]) == Decimal("20")
         assert control["value"] == 10
         assert control["delta_vs_control"] == 0
         assert control["coverage_percent"] == 66.67
@@ -305,6 +368,8 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert Decimal(variant["guardrails"][1]["value"]) == Decimal("4")
         assert Decimal(variant["guardrails"][1]["delta_vs_control"]) == Decimal("1")
         assert variant["guardrails"][1]["status"] == "available"
+        assert Decimal(variant["guardrails"][2]["value"]) == Decimal("10")
+        assert Decimal(variant["guardrails"][2]["delta_vs_control"]) == Decimal("-10")
 
         missing_currency = dict(payload)
         missing_currency["primary_metric"] = "cost_per_conversion"
@@ -312,6 +377,15 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "/api/v1/crm/campaign-experiments", headers=headers, json=missing_currency
         )
         assert invalid.status_code == 422
+
+        missing_incentive_currency = dict(payload)
+        missing_incentive_currency["primary_metric"] = "incentive_cost"
+        invalid_incentive_design = await client.post(
+            "/api/v1/crm/campaign-experiments",
+            headers=headers,
+            json=missing_incentive_currency,
+        )
+        assert invalid_incentive_design.status_code == 422
 
         missing_control = dict(payload)
         missing_control["variants"] = [

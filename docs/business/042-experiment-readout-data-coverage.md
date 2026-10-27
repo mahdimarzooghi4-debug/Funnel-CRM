@@ -27,3 +27,7 @@ Authorized campaign viewers can download the readout as UTF-8 CSV for spreadshee
 ## Assignment and exposure counts
 
 Daily campaign measurements may include `assigned_count` and `exposure_count`. The experiment readout reports each count separately by variant, along with observed days, missing dates, coverage, and source labels; the CSV includes the same two rows per variant. Totals are the sum of reported daily values. The CRM does not infer assignments or exposures and does not deduplicate people across days, so a source that repeats the same person on multiple days may produce a repeated-person total. Managers should interpret each count using the source system's counting rule.
+
+## Discount and incentive cost
+
+Record discount and incentive cost separately from general campaign spend as a daily amount with its ISO currency. The experiment readout can compare its total as a primary or guardrail metric only within the selected currency. The CRM does not infer incentive cost from revenue, campaign spend, or planned discount assumptions; the value must come from the source measurement.
