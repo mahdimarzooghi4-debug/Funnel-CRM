@@ -1,7 +1,7 @@
 """Portfolio view of campaign target attainment for one exact period."""
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -13,6 +13,7 @@ from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_metric_catalog import MetricDefinition, get_metric_definition
 from funnel_crm.api.v1.crm_campaign_targets import (
     TargetMetricEvaluation,
+    evaluate_net_paid_to_spend_target,
     evaluate_plan_metrics,
 )
 from funnel_crm.platform.crm_authorization import crm_scope_ids
@@ -21,7 +22,9 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
     CRMMarketingCampaignTargetPlan,
+    CRMProductCommerceEvent,
 )
+from funnel_crm.platform.crm_authorization import has_crm_permission
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
 router = APIRouter(
@@ -202,16 +205,45 @@ async def review_campaign_target_portfolio(
     for measurement in measurements:
         measurements_by_campaign[measurement.campaign_id].append(measurement)
 
+    commerce_by_campaign: dict[UUID, list[CRMProductCommerceEvent]] = defaultdict(list)
+    net_target_campaigns = [
+        row[1] for row in result_rows
+        if row[0].min_net_paid_to_spend is not None
+        and await has_crm_permission(
+            context, permission_key="crm.commerce_event:view", organization_unit_id=row[3]
+        )
+    ]
+    if net_target_campaigns:
+        commerce_start = datetime.combine(period_start, time.min, tzinfo=timezone.utc)
+        commerce_end = datetime.combine(period_end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        commerce_rows = (await context.session.scalars(
+            select(CRMProductCommerceEvent).where(
+                CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+                CRMProductCommerceEvent.campaign_id.in_(net_target_campaigns),
+                CRMProductCommerceEvent.occurred_at >= commerce_start,
+                CRMProductCommerceEvent.occurred_at < commerce_end,
+            ).order_by(CRMProductCommerceEvent.occurred_at)
+        )).all()
+        for event in commerce_rows:
+            commerce_by_campaign[event.campaign_id].append(event)
+
     items: list[CampaignTargetPortfolioItem] = []
     for plan, campaign_id, name, unit_id, channel, objective in result_rows:
         group_key = channel if grouped_by == "channel" else objective
+        item_metrics = evaluate_plan_metrics(plan, measurements_by_campaign[campaign_id])
+        if plan.min_net_paid_to_spend is not None and campaign_id in net_target_campaigns:
+            net_result = evaluate_net_paid_to_spend_target(
+                plan, measurements_by_campaign[campaign_id], commerce_by_campaign[campaign_id]
+            )
+            if net_result is not None:
+                item_metrics["period_net_paid_to_spend"] = net_result
         items.append(CampaignTargetPortfolioItem(
             campaign_id=campaign_id,
             target_plan_id=plan.id,
             name=name,
             organization_unit_id=unit_id,
             group_key=group_key,
-            metrics=evaluate_plan_metrics(plan, measurements_by_campaign[campaign_id]),
+            metrics=item_metrics,
         ))
 
     grouped: dict[str, list[CampaignTargetPortfolioItem]] = defaultdict(list)
