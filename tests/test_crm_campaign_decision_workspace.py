@@ -178,6 +178,10 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert workspace["metric_definitions"]["spend"]["key"] == "actual_spend"
     assert workspace["metric_definitions"]["impressions"]["key"] == "impressions"
     assert workspace["metric_definitions"]["paid_to_spend"]["key"] == "paid_to_spend"
+    assert workspace["metric_definitions"]["net_paid_amount"]["key"] == "net_paid_amount"
+    assert workspace["metric_definitions"]["net_paid_amount_per_paid_order"]["key"] == "net_paid_amount_per_paid_order"
+    assert workspace["metric_definitions"]["period_net_paid_to_spend"]["key"] == "period_net_paid_to_spend"
+    assert "not accounting profit" in workspace["commerce_basis"]
     assert "بازده علّی تبلیغ" in workspace["metric_definitions"]["paid_to_spend"]["limitations"]
     assert workspace["coverage_definition"]["key"] == "recorded_day_coverage"
     currency_rows = {
@@ -188,8 +192,13 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert currency_rows["USD"]["paid_order_count"] == 2
     assert currency_rows["USD"]["paid_amount"] == "120.000000"
     assert currency_rows["USD"]["refunded_amount"] == "10.000000"
+    assert currency_rows["USD"]["net_paid_amount"] == "110.000000"
+    assert currency_rows["USD"]["net_paid_amount_per_paid_order"] == "55.000000"
     assert currency_rows["USD"]["observed_paid_to_spend_multiple"] == "2.000000"
+    assert currency_rows["USD"]["observed_net_paid_to_spend_multiple"] == "1.833333"
     assert currency_rows["EUR"]["paid_amount"] == "6.000000"
+    assert currency_rows["EUR"]["net_paid_amount"] == "6.000000"
+    assert currency_rows["EUR"]["net_paid_amount_per_paid_order"] == "6.000000"
     assert queue["total_count"] == 1
     assert queue["automatic_recommendation_issued"] is False
     assert queue["items"][0]["target_plan_id"] == str(plan_id)
