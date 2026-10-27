@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -117,7 +117,8 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
             profile_id=None, opportunity_id=None, campaign_id=campaign_id,
             assigned_membership_id=None, created_by_membership_id=context.access.membership_id,
-            title="Follow up on campaign review", description=None, due_at=None,
+            title="Follow up on campaign review", description=None,
+            due_at=datetime.now(timezone.utc) - timedelta(hours=1),
             priority="normal", status="open", completed_at=None,
             source_learning_review_id=learning_review_id, source_outcome_id=None,
         ))
@@ -245,6 +246,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["planned_learning_review_count"] == 1
     assert queue["items"][0]["evaluated_learning_review_count"] == 0
     assert queue["items"][0]["open_learning_action_count"] == 1
+    assert queue["items"][0]["overdue_learning_action_count"] == 1
     queue_currency = {
         row["currency"]: row for row in queue["items"][0]["commerce_outcomes_by_currency"]
     }
