@@ -947,7 +947,9 @@ class CRMMarketingCampaignMeasurement(Base):
             "(clicks IS NULL OR clicks >= 0) AND "
             "(responses IS NULL OR responses >= 0) AND "
             "(leads IS NULL OR leads >= 0) AND "
-            "(conversions IS NULL OR conversions >= 0)",
+            "(conversions IS NULL OR conversions >= 0) AND "
+            "(assigned_count IS NULL OR assigned_count >= 0) AND "
+            "(exposure_count IS NULL OR exposure_count >= 0)",
             name="ck_crm_marketing_campaign_measurements_counts",
         ),
         CheckConstraint(
@@ -969,6 +971,7 @@ class CRMMarketingCampaignMeasurement(Base):
         CheckConstraint(
             "impressions IS NOT NULL OR reach IS NOT NULL OR clicks IS NOT NULL OR "
             "responses IS NOT NULL OR leads IS NOT NULL OR conversions IS NOT NULL OR "
+            "assigned_count IS NOT NULL OR exposure_count IS NOT NULL OR "
             "actual_spend_amount IS NOT NULL OR attributed_revenue_amount IS NOT NULL",
             name="ck_crm_marketing_campaign_measurements_has_observation",
         ),
@@ -1005,6 +1008,8 @@ class CRMMarketingCampaignMeasurement(Base):
     responses: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     leads: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     conversions: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    assigned_count: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    exposure_count: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     actual_spend_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     actual_spend_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     attributed_revenue_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)

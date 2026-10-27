@@ -23,3 +23,7 @@ Missing dates indicate that no qualifying daily observation was recorded for tha
 ## Export
 
 Authorized campaign viewers can download the readout as UTF-8 CSV for spreadsheet review. Each row represents one metric for one variant and includes experiment context, observed values, coverage, missing dates, and source labels. The export uses the same tenant and organization authorization as the readout, records an export audit event, and protects user-entered text from spreadsheet formula execution.
+
+## Assignment and exposure counts
+
+Daily campaign measurements may include `assigned_count` and `exposure_count`. The experiment readout reports each count separately by variant, along with observed days, missing dates, coverage, and source labels; the CSV includes the same two rows per variant. Totals are the sum of reported daily values. The CRM does not infer assignments or exposures and does not deduplicate people across days, so a source that repeats the same person on multiple days may produce a repeated-person total. Managers should interpret each count using the source system's counting rule.

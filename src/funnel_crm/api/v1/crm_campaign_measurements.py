@@ -30,6 +30,8 @@ class CampaignMeasurementUpsert(BaseModel):
     responses: int | None = Field(default=None, ge=0, le=9223372036854775807)
     leads: int | None = Field(default=None, ge=0, le=9223372036854775807)
     conversions: int | None = Field(default=None, ge=0, le=9223372036854775807)
+    assigned_count: int | None = Field(default=None, ge=0, le=9223372036854775807)
+    exposure_count: int | None = Field(default=None, ge=0, le=9223372036854775807)
     actual_spend_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     actual_spend_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     attributed_revenue_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
@@ -51,6 +53,7 @@ class CampaignMeasurementUpsert(BaseModel):
             raise ValueError("attributed revenue amount and currency must be provided together")
         if all(getattr(self, key) is None for key in (
             "impressions", "reach", "clicks", "responses", "leads", "conversions",
+            "assigned_count", "exposure_count",
             "actual_spend_amount", "attributed_revenue_amount",
         )):
             raise ValueError("at least one observed metric is required")
@@ -69,6 +72,8 @@ class CampaignMeasurementRead(BaseModel):
     responses: int | None
     leads: int | None
     conversions: int | None
+    assigned_count: int | None
+    exposure_count: int | None
     actual_spend_amount: Decimal | None
     actual_spend_currency: str | None
     attributed_revenue_amount: Decimal | None
@@ -192,6 +197,8 @@ async def upsert_campaign_measurement(
         responses=measurement.responses,
         leads=measurement.leads,
         conversions=measurement.conversions,
+        assigned_count=measurement.assigned_count,
+        exposure_count=measurement.exposure_count,
         actual_spend_amount=measurement.actual_spend_amount,
         actual_spend_currency=measurement.actual_spend_currency,
         attributed_revenue_amount=measurement.attributed_revenue_amount,
@@ -229,7 +236,10 @@ async def get_campaign_measurement_summary(
         ).order_by(CRMMarketingCampaignMeasurement.measured_on)
     )).all()
 
-    metric_keys = ("impressions", "reach", "clicks", "responses", "leads", "conversions")
+    metric_keys = (
+        "impressions", "reach", "clicks", "responses", "leads", "conversions",
+        "assigned_count", "exposure_count",
+    )
     totals: dict[str, int | None] = {}
     coverage_days: dict[str, int] = {}
     for key in metric_keys:

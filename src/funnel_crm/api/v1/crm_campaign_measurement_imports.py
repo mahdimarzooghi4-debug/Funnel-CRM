@@ -29,7 +29,10 @@ router = APIRouter(prefix="/crm/campaigns", tags=["CRM campaign measurement impo
 MAX_CSV_CHARS = 1_000_000
 MAX_ROWS = 366
 MAX_COUNT = 9223372036854775807
-COUNT_COLUMNS = ("impressions", "reach", "clicks", "responses", "leads", "conversions")
+COUNT_COLUMNS = (
+    "impressions", "reach", "clicks", "responses", "leads", "conversions",
+    "assigned_count", "exposure_count",
+)
 MONEY_PAIRS = (
     ("actual_spend_amount", "actual_spend_currency"),
     ("attributed_revenue_amount", "attributed_revenue_currency"),
@@ -72,6 +75,8 @@ class ParsedMeasurementRow(BaseModel):
     responses: int | None
     leads: int | None
     conversions: int | None
+    assigned_count: int | None
+    exposure_count: int | None
     actual_spend_amount: Decimal | None
     actual_spend_currency: str | None
     attributed_revenue_amount: Decimal | None
@@ -224,7 +229,7 @@ async def get_campaign_measurement_import_template(
         organization_unit_id=campaign.organization_unit_id,
     )
     template = (
-        "measured_on,source_label,impressions,reach,clicks,responses,leads,conversions,"
+        "measured_on,source_label,impressions,reach,clicks,responses,leads,conversions,assigned_count,exposure_count,"
         "actual_spend_amount,actual_spend_currency,attributed_revenue_amount,attributed_revenue_currency\n"
     )
     return Response(content=template, media_type="text/csv; charset=utf-8")
