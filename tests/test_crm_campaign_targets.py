@@ -176,7 +176,7 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             ))
         context.session.add(CRMProductCommerceEvent(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
-            campaign_id=partial_campaign_id, profile_id=None, source_product="funnel.store",
+            campaign_id=partial_campaign_id, profile_id=None, source_product="funnel.marketplace",
             source_event_id=uuid4(), event_type="commerce.order.paid", order_reference="ORDER-2",
             event_kind="paid", amount=Decimal("300.00"), currency="USD",
             occurred_at=datetime(2026, 10, 16, 15, tzinfo=timezone.utc),
@@ -305,6 +305,13 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         )
         assert group_usd["campaign_count"] == 2
         assert group_usd["net_paid_amount_per_paid_order"] == "195.000000"
+        source_usd = {
+            (row["source_product"], row["currency"]): row
+            for row in report["commerce_outcomes_by_source_product"]
+        }
+        assert source_usd[("funnel.store", "USD")]["net_paid_amount"] == "90.000000"
+        assert source_usd[("funnel.marketplace", "USD")]["net_paid_amount"] == "300.000000"
+        assert source_usd[("funnel.marketplace", "USD")]["net_paid_amount_per_paid_order"] == "300.000000"
         assert report["metric_definitions"]["spend"]["key"] == "actual_spend"
         assert report["campaigns"][0]["metrics"]["spend"]["recorded_day_coverage_percent"] == "50.00"
         assert "missing days are not zero" in report["coverage_basis"]

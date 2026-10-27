@@ -56,6 +56,20 @@ class PortfolioCommerceOutcome(BaseModel):
     observed_net_paid_to_spend_multiple: Decimal | None
 
 
+class PortfolioCommerceSourceOutcome(BaseModel):
+    source_product: str
+    currency: str
+    campaign_count: int
+    paid_event_count: int
+    paid_order_count: int
+    paid_amount: Decimal
+    refund_event_count: int
+    refunded_order_count: int
+    refunded_amount: Decimal
+    net_paid_amount: Decimal
+    net_paid_amount_per_paid_order: Decimal | None
+
+
 class CampaignTargetPortfolioItem(BaseModel):
     campaign_id: UUID
     target_plan_id: UUID
@@ -64,6 +78,7 @@ class CampaignTargetPortfolioItem(BaseModel):
     group_key: str
     commerce_access_granted: bool
     commerce_outcomes_by_currency: list[PortfolioCommerceOutcome]
+    commerce_outcomes_by_source_product: list[PortfolioCommerceSourceOutcome]
     metrics: dict[str, TargetMetricEvaluation]
 
 
@@ -85,6 +100,7 @@ class CampaignTargetPortfolioGroup(BaseModel):
     metric_outcomes: dict[str, TargetOutcomeCounts]
     metric_variances: dict[str, CampaignTargetMetricVariance]
     commerce_outcomes_by_currency: list[PortfolioCommerceOutcome]
+    commerce_outcomes_by_source_product: list[PortfolioCommerceSourceOutcome]
 
 
 class CampaignTargetPortfolioRead(BaseModel):
@@ -97,6 +113,7 @@ class CampaignTargetPortfolioRead(BaseModel):
     metric_outcomes: dict[str, TargetOutcomeCounts]
     metric_variances: dict[str, CampaignTargetMetricVariance]
     commerce_outcomes_by_currency: list[PortfolioCommerceOutcome]
+    commerce_outcomes_by_source_product: list[PortfolioCommerceSourceOutcome]
     commerce_basis: str
     metric_definitions: dict[str, MetricDefinition]
     period_calendar_days: int
@@ -278,6 +295,95 @@ def _aggregate_commerce_outcomes(
     return results
 
 
+def _campaign_commerce_source_outcomes(
+    events: list[CRMProductCommerceEvent],
+) -> list[PortfolioCommerceSourceOutcome]:
+    buckets: dict[tuple[str, str], dict[str, object]] = {}
+    orders: dict[tuple[str, str, str], set[tuple[str, str]]] = defaultdict(set)
+    for event in events:
+        key = (event.source_product, event.currency)
+        bucket = buckets.setdefault(key, {
+            "paid_event_count": 0,
+            "paid_amount": Decimal("0"),
+            "refund_event_count": 0,
+            "refunded_amount": Decimal("0"),
+        })
+        kind_key = "paid" if event.event_kind == "paid" else "refunded"
+        count_key = "paid_event_count" if kind_key == "paid" else "refund_event_count"
+        amount_key = "paid_amount" if kind_key == "paid" else "refunded_amount"
+        bucket[count_key] = int(bucket[count_key]) + 1
+        bucket[amount_key] = Decimal(bucket[amount_key]) + event.amount
+        orders[(event.source_product, event.currency, kind_key)].add(
+            (event.source_product, event.order_reference)
+        )
+
+    results = []
+    for (source_product, currency), bucket in sorted(buckets.items()):
+        paid_amount = Decimal(bucket["paid_amount"])
+        refunded_amount = Decimal(bucket["refunded_amount"])
+        net_paid_amount = paid_amount - refunded_amount
+        paid_order_count = len(orders[(source_product, currency, "paid")])
+        results.append(PortfolioCommerceSourceOutcome(
+            source_product=source_product,
+            currency=currency,
+            campaign_count=1,
+            paid_event_count=int(bucket["paid_event_count"]),
+            paid_order_count=paid_order_count,
+            paid_amount=paid_amount,
+            refund_event_count=int(bucket["refund_event_count"]),
+            refunded_order_count=len(orders[(source_product, currency, "refunded")]),
+            refunded_amount=refunded_amount,
+            net_paid_amount=net_paid_amount,
+            net_paid_amount_per_paid_order=(
+                (net_paid_amount / Decimal(paid_order_count)).quantize(Decimal("0.000001"))
+                if paid_order_count else None
+            ),
+        ))
+    return results
+
+
+def _aggregate_commerce_source_outcomes(
+    outcomes: list[PortfolioCommerceSourceOutcome],
+) -> list[PortfolioCommerceSourceOutcome]:
+    totals: dict[tuple[str, str], dict[str, object]] = {}
+    for outcome in outcomes:
+        key = (outcome.source_product, outcome.currency)
+        total = totals.setdefault(key, {
+            "campaign_count": 0,
+            "paid_event_count": 0,
+            "paid_order_count": 0,
+            "paid_amount": Decimal("0"),
+            "refund_event_count": 0,
+            "refunded_order_count": 0,
+            "refunded_amount": Decimal("0"),
+            "net_paid_amount": Decimal("0"),
+        })
+        for field in total:
+            total[field] = total[field] + getattr(outcome, field)
+
+    results = []
+    for (source_product, currency), total in sorted(totals.items()):
+        paid_order_count = int(total["paid_order_count"])
+        net_paid_amount = Decimal(total["net_paid_amount"])
+        results.append(PortfolioCommerceSourceOutcome(
+            source_product=source_product,
+            currency=currency,
+            campaign_count=int(total["campaign_count"]),
+            paid_event_count=int(total["paid_event_count"]),
+            paid_order_count=paid_order_count,
+            paid_amount=Decimal(total["paid_amount"]),
+            refund_event_count=int(total["refund_event_count"]),
+            refunded_order_count=int(total["refunded_order_count"]),
+            refunded_amount=Decimal(total["refunded_amount"]),
+            net_paid_amount=net_paid_amount,
+            net_paid_amount_per_paid_order=(
+                (net_paid_amount / Decimal(paid_order_count)).quantize(Decimal("0.000001"))
+                if paid_order_count else None
+            ),
+        ))
+    return results
+
+
 @router.get(
     "/portfolio",
     response_model=CampaignTargetPortfolioRead,
@@ -390,6 +496,10 @@ async def review_campaign_target_portfolio(
                 _campaign_commerce_outcomes(campaign_measurements, campaign_events)
                 if commerce_access_granted else []
             ),
+            commerce_outcomes_by_source_product=(
+                _campaign_commerce_source_outcomes(campaign_events)
+                if commerce_access_granted else []
+            ),
             metrics=item_metrics,
         ))
 
@@ -404,6 +514,9 @@ async def review_campaign_target_portfolio(
             metric_variances=_metric_variances(group_items),
             commerce_outcomes_by_currency=_aggregate_commerce_outcomes([
                 outcome for item in group_items for outcome in item.commerce_outcomes_by_currency
+            ]),
+            commerce_outcomes_by_source_product=_aggregate_commerce_source_outcomes([
+                outcome for item in group_items for outcome in item.commerce_outcomes_by_source_product
             ]),
         )
         for key, group_items in sorted(grouped.items())
@@ -452,9 +565,13 @@ async def review_campaign_target_portfolio(
         commerce_outcomes_by_currency=_aggregate_commerce_outcomes([
             outcome for item in items for outcome in item.commerce_outcomes_by_currency
         ]),
+        commerce_outcomes_by_source_product=_aggregate_commerce_source_outcomes([
+            outcome for item in items for outcome in item.commerce_outcomes_by_source_product
+        ]),
         commerce_basis=(
             "Only campaign-linked paid and refunded events are included. Spend and commerce are kept in the same currency; "
-            "portfolio multiples divide pooled full-period sums and are descriptive, not causal or accounting profit."
+            "portfolio multiples divide pooled full-period sums and are descriptive, not causal or accounting profit. "
+            "Source-product outcomes show commerce amounts only; spend is not attributed to source products."
         ),
         metric_definitions=metric_definitions,
         period_calendar_days=(period_end - period_start).days + 1,
