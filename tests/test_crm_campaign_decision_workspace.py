@@ -231,6 +231,28 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
+        await context.session.execute(delete(RolePermission).where(
+            RolePermission.tenant_id == tenant_id,
+            RolePermission.role_id == role.id,
+            RolePermission.permission_key == "crm.commerce_event:view",
+        ))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        restricted_queue_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id)},
+        )
+        assert restricted_queue_response.status_code == 200, restricted_queue_response.text
+        restricted_item = restricted_queue_response.json()["items"][0]
+        assert restricted_item["commerce_outcomes_by_currency"] == []
+
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
         audits = (await context.session.scalars(select(AuditEvent).where(
             AuditEvent.tenant_id == tenant_id,
             AuditEvent.action_key == "crm_campaign.decision_workspace_viewed",
