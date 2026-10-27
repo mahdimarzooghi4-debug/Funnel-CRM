@@ -105,9 +105,10 @@ async def test_campaign_measurement_csv_preview_atomic_import_and_idempotent_rep
 
     csv_content = chr(65279) + (
         "measured_on,source_label,impressions,reach,clicks,responses,leads,conversions,assigned_count,exposure_count,"
-        "actual_spend_amount,actual_spend_currency,attributed_revenue_amount,attributed_revenue_currency\n"
-        "2026-10-16,Social report,100,80,10,3,2,1,95,90,15,USD,75,USD\n"
-        "2026-10-17,Store report,,50,,4,,1,,,8,EUR,,\n"
+        "actual_spend_amount,actual_spend_currency,incentive_cost_amount,incentive_cost_currency,"
+        "attributed_revenue_amount,attributed_revenue_currency\n"
+        "2026-10-16,Social report,100,80,10,3,2,1,95,90,15,USD,4,USD,75,USD\n"
+        "2026-10-17,Store report,,50,,4,,1,,,8,EUR,,,,\n"
     )
     app = make_app(runtime_session_factory, identity)
     headers = {"X-Workspace-ID": str(tenant_id)}
@@ -119,6 +120,7 @@ async def test_campaign_measurement_csv_preview_atomic_import_and_idempotent_rep
         assert template.status_code == 200
         assert template.text.startswith("measured_on,source_label")
         assert "assigned_count,exposure_count" in template.text
+        assert "incentive_cost_amount,incentive_cost_currency" in template.text
 
         preview = await client.post(
             f"{base}/import-preview",
@@ -132,6 +134,19 @@ async def test_campaign_measurement_csv_preview_atomic_import_and_idempotent_rep
         assert preview.json()["would_update"] == 1
         assert preview.json()["rows"][0]["assigned_count"] == 95
         assert preview.json()["rows"][0]["exposure_count"] == 90
+        assert preview.json()["rows"][0]["incentive_cost_amount"] == "4"
+        assert preview.json()["rows"][0]["incentive_cost_currency"] == "USD"
+
+        invalid_incentive_csv = csv_content.replace(",4,USD,75,USD", ",4,,75,USD")
+        invalid_incentive_preview = await client.post(
+            f"{base}/import-preview",
+            headers=headers,
+            json={"csv_content": invalid_incentive_csv},
+        )
+        assert invalid_incentive_preview.status_code == 200
+        assert invalid_incentive_preview.json()["valid"] is False
+        assert any("incentive cost amount and currency" in error["detail"]
+                   for error in invalid_incentive_preview.json()["errors"])
 
         imported = await client.post(
             f"{base}/import",
@@ -210,6 +225,8 @@ async def test_campaign_measurement_csv_preview_atomic_import_and_idempotent_rep
         assert corrected.impressions == 100
         assert corrected.assigned_count == 95
         assert corrected.exposure_count == 90
+        assert corrected.incentive_cost_amount == Decimal("4")
+        assert corrected.incentive_cost_currency == "USD"
         assert corrected.actual_spend_currency == "USD"
         batch_count = await context.session.scalar(
             select(func.count()).select_from(CRMMarketingMeasurementImportBatch).where(

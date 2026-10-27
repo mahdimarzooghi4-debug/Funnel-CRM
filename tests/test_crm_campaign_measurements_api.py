@@ -108,6 +108,8 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
                 "exposure_count": 100,
                 "actual_spend_amount": "20",
                 "actual_spend_currency": "USD",
+                "incentive_cost_amount": "5",
+                "incentive_cost_currency": "USD",
                 "attributed_revenue_amount": "100",
                 "attributed_revenue_currency": "USD",
             },
@@ -116,6 +118,7 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         measurement_id = first.json()["id"]
         assert first.json()["assigned_count"] == 120
         assert first.json()["exposure_count"] == 100
+        assert Decimal(first.json()["incentive_cost_amount"]) == Decimal("5")
 
         updated = await client.put(
             f"/api/v1/crm/campaigns/{campaign_id}/measurements/{first_day.isoformat()}",
@@ -132,6 +135,8 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
                 "exposure_count": 110,
                 "actual_spend_amount": "20",
                 "actual_spend_currency": "USD",
+                "incentive_cost_amount": "6",
+                "incentive_cost_currency": "USD",
                 "attributed_revenue_amount": "100",
                 "attributed_revenue_currency": "USD",
             },
@@ -154,6 +159,8 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
                 "exposure_count": 45,
                 "actual_spend_amount": "10",
                 "actual_spend_currency": "EUR",
+                "incentive_cost_amount": "3",
+                "incentive_cost_currency": "EUR",
                 "attributed_revenue_amount": "40",
                 "attributed_revenue_currency": "EUR",
             },
@@ -182,6 +189,7 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         assert report["coverage_days"]["responses"] == 1
         assert report["coverage_days"]["assigned_count"] == 2
         assert report["coverage_days"]["exposure_count"] == 2
+        assert report["incentive_cost_by_currency"] == {"EUR": "3.000000", "USD": "6.000000"}
         assert report["click_through_rate_percent"] == 5.0
         assert report["lead_rate_per_click_percent"] == 12.0
         assert report["conversion_rate_per_click_percent"] == 4.0
@@ -204,6 +212,13 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
             json={"source_label": "invalid export", "assigned_count": -1},
         )
         assert invalid_delivery_count.status_code == 422
+
+        invalid_incentive_pair = await client.put(
+            f"/api/v1/crm/campaigns/{campaign_id}/measurements/{date(2026, 10, 20).isoformat()}",
+            headers=headers,
+            json={"source_label": "incomplete incentive", "incentive_cost_amount": "2"},
+        )
+        assert invalid_incentive_pair.status_code == 422
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity

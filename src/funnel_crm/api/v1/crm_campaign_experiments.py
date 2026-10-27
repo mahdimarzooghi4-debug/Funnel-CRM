@@ -28,10 +28,10 @@ router = APIRouter(prefix="/crm/campaign-experiments", tags=["CRM marketing expe
 ExperimentMetric = Literal[
     "impressions", "clicks", "leads", "conversions",
     "click_through_rate_percent", "conversion_rate_per_click_percent",
-    "cost_per_lead", "cost_per_conversion", "roas",
+    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost",
 ]
 COUNT_METRICS = {"impressions", "clicks", "leads", "conversions"}
-CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas"}
+CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost"}
 
 
 class ExperimentVariantWrite(BaseModel):
@@ -354,6 +354,14 @@ def _metric_value(
         revenue = sum((row.attributed_revenue_amount for row in paired), Decimal("0"))
         value = (revenue / spend).quantize(Decimal("0.000001")) if paired and spend > 0 else None
         return value, len(paired), len(paired)
+    if metric == "incentive_cost":
+        paired = [
+            row for row in rows
+            if row.incentive_cost_amount is not None
+            and row.incentive_cost_currency == currency
+        ]
+        value = sum((row.incentive_cost_amount for row in paired), Decimal("0")) if paired else None
+        return value, len(paired), len(paired)
     raise ValueError("Unsupported experiment metric")
 
 
@@ -383,6 +391,12 @@ def _metric_coverage(
             row for row in rows
             if row.actual_spend_amount is not None and row.actual_spend_currency == currency
             and row.attributed_revenue_amount is not None and row.attributed_revenue_currency == currency
+        ]
+    elif metric == "incentive_cost":
+        qualifying = [
+            row for row in rows
+            if row.incentive_cost_amount is not None
+            and row.incentive_cost_currency == currency
         ]
     else:
         raise ValueError("Unsupported experiment metric")
