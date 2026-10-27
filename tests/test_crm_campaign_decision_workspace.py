@@ -217,6 +217,13 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["target_plan_id"] == str(plan_id)
     assert queue["items"][0]["status"] == "review_required"
     assert queue["items"][0]["missed_metric_count"] == 2
+    queue_currency = {
+        row["currency"]: row for row in queue["items"][0]["commerce_outcomes_by_currency"]
+    }
+    assert queue_currency["USD"]["paid_amount"] == "120.000000"
+    assert queue_currency["USD"]["refunded_amount"] == "10.000000"
+    assert queue_currency["USD"]["net_paid_amount"] == "110.000000"
+    assert queue_currency["EUR"]["net_paid_amount"] == "6.000000"
     assert set(queue["items"][0]["attention_reasons"]) == {
         "target_missed", "net_commerce_target_missed", "low_recorded_day_coverage"
     }
