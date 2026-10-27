@@ -235,7 +235,12 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue_currency["USD"]["paid_amount"] == "120.000000"
     assert queue_currency["USD"]["refunded_amount"] == "10.000000"
     assert queue_currency["USD"]["net_paid_amount"] == "110.000000"
+    assert queue_currency["USD"]["paid_order_count"] == 2
+    assert queue_currency["USD"]["refunded_order_count"] == 1
+    assert queue_currency["USD"]["net_paid_amount_per_paid_order"] == "55.000000"
     assert queue_currency["EUR"]["net_paid_amount"] == "6.000000"
+    assert queue_currency["EUR"]["paid_order_count"] == 1
+    assert queue_currency["EUR"]["net_paid_amount_per_paid_order"] == "6.000000"
     assert set(queue["items"][0]["attention_reasons"]) == {
         "target_missed", "net_commerce_target_missed", "low_recorded_day_coverage"
     }
