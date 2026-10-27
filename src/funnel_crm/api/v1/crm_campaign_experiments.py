@@ -31,11 +31,11 @@ ExperimentMetric = Literal[
     "refunded_order_rate_percent", "matched_refund_order_rate_percent", "matched_paid_refund_order_count", "paid_order_refund_match_rate_percent", "unmatched_refund_order_count",
     "paid_order_without_refund_count",
     "click_through_rate_percent", "conversion_rate_per_click_percent",
-    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount",
+    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "net_paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount",
 ]
 COUNT_METRICS = {"impressions", "clicks", "leads", "conversions", "return_count"}
-CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount"}
-COMMERCE_METRICS = {"paid_order_count", "paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_order_count", "refunded_order_rate_percent", "matched_refund_order_rate_percent", "matched_paid_refund_order_count", "paid_order_refund_match_rate_percent", "unmatched_refund_order_count", "paid_order_without_refund_count", "refund_amount"}
+CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "paid_amount", "net_paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_amount", "refund_amount"}
+COMMERCE_METRICS = {"paid_order_count", "paid_amount", "net_paid_amount", "average_paid_order_value", "average_refund_per_order", "refund_to_paid_amount_percent", "refunded_order_count", "refunded_order_rate_percent", "matched_refund_order_rate_percent", "matched_paid_refund_order_count", "paid_order_refund_match_rate_percent", "unmatched_refund_order_count", "paid_order_without_refund_count", "refund_amount"}
 
 
 class ExperimentVariantWrite(BaseModel):
@@ -334,6 +334,15 @@ def _metric_value(
             len({event.occurred_at.date() for event in matching}),
             0,
         )
+    if metric == "net_paid_amount":
+        matching = [event for event in commerce_events if event.currency == currency and event.event_kind in {"paid", "refunded"}]
+        if not matching:
+            return None, 0, 0
+        value = sum(
+            (event.amount if event.event_kind == "paid" else -event.amount for event in matching),
+            Decimal("0"),
+        )
+        return value, len({event.occurred_at.date() for event in matching}), 0
     if metric == "average_paid_order_value":
         order_amounts: dict[tuple[str, str], Decimal] = {}
         for event in commerce_events:
@@ -489,6 +498,14 @@ def _metric_coverage(
                 missing_dates, sorted({event.source_product for event in qualifying}))
     if metric == "paid_amount":
         qualifying = [event for event in commerce_events if event.event_kind == "paid" and event.currency == currency]
+        available_dates = {event.occurred_at.date() for event in qualifying}
+        expected_dates = [period_start + timedelta(days=index) for index in range((period_end - period_start).days + 1)]
+        missing_dates = [day for day in expected_dates if day not in available_dates]
+        expected_days = len(expected_dates)
+        return (expected_days, len(missing_dates), round(len(available_dates) * 100 / expected_days, 2) if expected_days else 0.0,
+                missing_dates, sorted({event.source_product for event in qualifying}))
+    if metric == "net_paid_amount":
+        qualifying = [event for event in commerce_events if event.currency == currency and event.event_kind in {"paid", "refunded"}]
         available_dates = {event.occurred_at.date() for event in qualifying}
         expected_dates = [period_start + timedelta(days=index) for index in range((period_end - period_start).days + 1)]
         missing_dates = [day for day in expected_dates if day not in available_dates]
