@@ -146,6 +146,7 @@ class CampaignPortfolioDecisionItem(BaseModel):
     open_learning_action_count: int | None
     overdue_learning_action_count: int | None
     unassigned_learning_action_count: int | None
+    completed_learning_action_count: int | None
 
 
 class CampaignPortfolioDecisionQueue(BaseModel):
@@ -350,6 +351,7 @@ async def get_campaign_portfolio_decision_queue(
         open_learning_action_count = None
         overdue_learning_action_count = None
         unassigned_learning_action_count = None
+        completed_learning_action_count = None
         if plan.organization_unit_id in work_item_allowed_units:
             open_action_status = CRMWorkItem.status.in_(("open", "in_progress"))
             action_counts = (await context.session.execute(
@@ -363,6 +365,9 @@ async def get_campaign_portfolio_decision_queue(
                     func.count(CRMWorkItem.id).filter(
                         open_action_status & CRMWorkItem.assigned_membership_id.is_(None)
                     ).label("unassigned_count"),
+                    func.count(CRMWorkItem.id).filter(
+                        CRMWorkItem.status == "completed"
+                    ).label("completed_count"),
                 )
                 .select_from(CRMWorkItem)
                 .join(
@@ -380,6 +385,7 @@ async def get_campaign_portfolio_decision_queue(
             open_learning_action_count = int(action_counts.open_count or 0)
             overdue_learning_action_count = int(action_counts.overdue_count or 0)
             unassigned_learning_action_count = int(action_counts.unassigned_count or 0)
+            completed_learning_action_count = int(action_counts.completed_count or 0)
         items.append(CampaignPortfolioDecisionItem(
             campaign_id=plan.campaign_id,
             campaign_name=campaign_name,
@@ -406,6 +412,7 @@ async def get_campaign_portfolio_decision_queue(
             open_learning_action_count=open_learning_action_count,
             overdue_learning_action_count=overdue_learning_action_count,
             unassigned_learning_action_count=unassigned_learning_action_count,
+            completed_learning_action_count=completed_learning_action_count,
         ))
     items.sort(key=lambda item: (
         not bool(item.attention_reasons), -len(item.attention_reasons),
