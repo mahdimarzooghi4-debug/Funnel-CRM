@@ -118,6 +118,11 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 actual_spend_amount=Decimal("90"), actual_spend_currency="USD",
                 attributed_revenue_amount=Decimal("360"), attributed_revenue_currency="USD",
             ),
+            CRMMarketingCampaignMeasurement(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=control_id, measured_on=date(2026, 10, 17),
+                source_label="control report", conversions=0,
+            ),
         ])
         role = Role(tenant_id=tenant_id, name=f"Experiment manager {uuid4().hex[:8]}")
         context.session.add(role)
@@ -187,6 +192,8 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert Decimal(control["guardrails"][1]["value"]) == Decimal("3")
         assert control["value"] == 10
         assert control["delta_vs_control"] == 0
+        assert control["coverage_percent"] == 66.67
+        assert control["coverage_delta_vs_control_percentage_points"] == 0.0
         assert variant["value"] == 15
         assert variant["delta_vs_control"] == 5
         assert variant["percent_change_vs_control"] == 50.0
@@ -194,12 +201,14 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert variant["expected_days"] == 3
         assert variant["missing_days"] == 2
         assert variant["coverage_percent"] == 33.33
+        assert variant["coverage_delta_vs_control_percentage_points"] == -33.34
         assert variant["missing_dates"] == ["2026-10-17", "2026-10-18"]
         assert variant["source_labels"] == ["variant report"]
         assert variant["guardrails"][0]["value"] == 120
         assert variant["guardrails"][0]["delta_vs_control"] == 20
         assert variant["guardrails"][0]["percent_change_vs_control"] == 20.0
         assert variant["guardrails"][0]["coverage_percent"] == 33.33
+        assert variant["guardrails"][0]["coverage_delta_vs_control_percentage_points"] == 0.0
         assert variant["guardrails"][0]["missing_days"] == 2
         assert variant["guardrails"][0]["source_labels"] == ["variant report"]
         assert Decimal(variant["guardrails"][1]["value"]) == Decimal("4")
