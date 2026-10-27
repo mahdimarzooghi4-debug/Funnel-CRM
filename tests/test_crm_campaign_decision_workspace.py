@@ -135,7 +135,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             context.session.add(CRMProductCommerceEvent(
                 id=event_fact_ids[index], tenant_id=tenant_id,
                 organization_unit_id=root_id, campaign_id=campaign_id,
-                profile_id=None, source_product="funnel.store",
+                profile_id=None, source_product="funnel.marketplace" if order_ref == "USD-2" else "funnel.store",
                 source_event_id=uuid4(),
                 event_type="commerce.order.refunded" if kind == "refunded" else "commerce.order.paid",
                 order_reference=order_ref, event_kind=kind,
@@ -202,6 +202,16 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert currency_rows["EUR"]["paid_amount"] == "6.000000"
     assert currency_rows["EUR"]["net_paid_amount"] == "6.000000"
     assert currency_rows["EUR"]["net_paid_amount_per_paid_order"] == "6.000000"
+    source_rows = {
+        (row["source_product"], row["currency"]): row
+        for row in workspace["commerce_outcomes_by_source_product"]
+    }
+    assert source_rows[("funnel.store", "USD")]["net_paid_amount"] == "70.000000"
+    assert source_rows[("funnel.store", "USD")]["net_paid_amount_per_paid_order"] == "70.000000"
+    assert source_rows[("funnel.marketplace", "USD")]["paid_amount"] == "40.000000"
+    assert source_rows[("funnel.marketplace", "USD")]["net_paid_amount"] == "40.000000"
+    assert source_rows[("funnel.marketplace", "USD")]["net_paid_amount_per_paid_order"] == "40.000000"
+    assert source_rows[("funnel.store", "EUR")]["net_paid_amount"] == "6.000000"
     assert queue["total_count"] == 1
     assert queue["automatic_recommendation_issued"] is False
     assert queue["items"][0]["target_plan_id"] == str(plan_id)

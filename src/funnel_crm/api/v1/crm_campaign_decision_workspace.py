@@ -78,6 +78,19 @@ class DecisionCommerceCurrency(BaseModel):
     observed_net_paid_to_spend_multiple: Decimal | None
 
 
+class DecisionCommerceSourceOutcome(BaseModel):
+    source_product: str
+    currency: str
+    paid_event_count: int
+    paid_order_count: int
+    paid_amount: Decimal
+    refund_event_count: int
+    refunded_order_count: int
+    refunded_amount: Decimal
+    net_paid_amount: Decimal
+    net_paid_amount_per_paid_order: Decimal | None
+
+
 class CampaignDecisionWorkspace(BaseModel):
     campaign_id: UUID
     campaign_name: str
@@ -93,6 +106,7 @@ class CampaignDecisionWorkspace(BaseModel):
     metric_definitions: dict[str, MetricDefinition]
     coverage_definition: MetricDefinition
     commerce_outcomes_by_currency: list[DecisionCommerceCurrency]
+    commerce_outcomes_by_source_product: list[DecisionCommerceSourceOutcome]
     interpretation: str
     causal_attribution_applied: bool
     automatic_recommendation_issued: bool
@@ -387,6 +401,74 @@ async def get_campaign_decision_workspace(
         )
     )).all()
 
+    source_commerce_rows = (await context.session.execute(
+        select(
+            CRMProductCommerceEvent.source_product,
+            CRMProductCommerceEvent.currency,
+            CRMProductCommerceEvent.event_kind,
+            func.count(CRMProductCommerceEvent.id).label("event_count"),
+            func.count(func.distinct(CRMProductCommerceEvent.order_reference)).label("order_count"),
+            func.sum(CRMProductCommerceEvent.amount).label("amount_total"),
+        )
+        .where(
+            CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+            CRMProductCommerceEvent.organization_unit_id == campaign.organization_unit_id,
+            CRMProductCommerceEvent.campaign_id == campaign.id,
+            CRMProductCommerceEvent.occurred_at >= event_start,
+            CRMProductCommerceEvent.occurred_at < event_end,
+        )
+        .group_by(
+            CRMProductCommerceEvent.source_product,
+            CRMProductCommerceEvent.currency,
+            CRMProductCommerceEvent.event_kind,
+        )
+        .order_by(
+            CRMProductCommerceEvent.source_product,
+            CRMProductCommerceEvent.currency,
+        )
+    )).all()
+
+    source_outcomes: dict[tuple[str, str], dict[str, object]] = {}
+    for row in source_commerce_rows:
+        state = source_outcomes.setdefault(
+            (row.source_product, row.currency),
+            {
+                "paid_event_count": 0, "paid_order_count": 0,
+                "paid_amount": Decimal("0"), "refund_event_count": 0,
+                "refunded_order_count": 0, "refunded_amount": Decimal("0"),
+            },
+        )
+        if row.event_kind == "paid":
+            state["paid_event_count"] = int(row.event_count)
+            state["paid_order_count"] = int(row.order_count)
+            state["paid_amount"] = row.amount_total or Decimal("0")
+        else:
+            state["refund_event_count"] = int(row.event_count)
+            state["refunded_order_count"] = int(row.order_count)
+            state["refunded_amount"] = row.amount_total or Decimal("0")
+
+    source_metrics = []
+    for (source_product, currency), state in sorted(source_outcomes.items()):
+        paid_amount = state["paid_amount"]
+        refunded_amount = state["refunded_amount"]
+        paid_order_count = int(state["paid_order_count"])
+        net_paid_amount = paid_amount - refunded_amount
+        source_metrics.append(DecisionCommerceSourceOutcome(
+            source_product=source_product,
+            currency=currency,
+            paid_event_count=int(state["paid_event_count"]),
+            paid_order_count=paid_order_count,
+            paid_amount=paid_amount,
+            refund_event_count=int(state["refund_event_count"]),
+            refunded_order_count=int(state["refunded_order_count"]),
+            refunded_amount=refunded_amount,
+            net_paid_amount=net_paid_amount,
+            net_paid_amount_per_paid_order=(
+                (net_paid_amount / Decimal(paid_order_count)).quantize(Decimal("0.000001"))
+                if paid_order_count else None
+            ),
+        ))
+
     spend_by_currency: dict[str, tuple[Decimal, int]] = {}
     for row in measurements:
         if row.actual_spend_amount is None or row.actual_spend_currency is None:
@@ -573,6 +655,7 @@ async def get_campaign_decision_workspace(
         metric_definitions=metric_definitions,
         coverage_definition=coverage_definition,
         commerce_outcomes_by_currency=currency_metrics,
+        commerce_outcomes_by_source_product=source_metrics,
         interpretation=(
             "Metrics support manager review and do not issue an automatic pause, continue, "
             "budget, or channel recommendation."
