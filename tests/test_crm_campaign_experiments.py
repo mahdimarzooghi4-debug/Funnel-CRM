@@ -161,7 +161,7 @@ def test_refunded_order_rate_matches_unique_paid_orders_and_counts_paid_event_da
         ),
         CRMProductCommerceEvent(
             id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
-            source_product="store", source_event_id=uuid4(), event_type="order.paid.duplicate",
+            source_product="store", source_event_id=uuid4(), event_type="order.paid.partial",
             order_reference="O-1", event_kind="paid", amount=Decimal("20"), currency="USD", occurred_at=day,
         ),
         CRMProductCommerceEvent(
@@ -182,6 +182,7 @@ def test_refunded_order_rate_matches_unique_paid_orders_and_counts_paid_event_da
     ]
     assert _metric_value("paid_order_count", None, [], events) == (2, 1, 0)
     assert _metric_value("paid_amount", "USD", [], events) == (Decimal("70"), 1, 0)
+    assert _metric_value("average_paid_order_value", "USD", [], events) == (Decimal("35.000000"), 1, 0)
     assert _metric_value("refunded_order_rate_percent", None, [], events) == (Decimal("50.0000"), 1, 0)
     assert _metric_coverage(
         "refunded_order_rate_percent", None, [], date(2026, 10, 16), date(2026, 10, 17), events
