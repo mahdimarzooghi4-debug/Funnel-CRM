@@ -1620,14 +1620,14 @@ class CRMMarketingCampaignExperiment(Base):
             "'refunded_order_count', 'refunded_order_rate_percent', 'matched_refund_order_rate_percent', 'matched_paid_refund_order_count', 'paid_order_refund_match_rate_percent', "
             "'unmatched_refund_order_count', 'paid_order_without_refund_count', 'click_through_rate_percent', "
             "'conversion_rate_per_click_percent', 'cost_per_lead', 'cost_per_conversion', 'roas', "
-            "'incentive_cost', 'paid_amount', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount')",
+            "'incentive_cost', 'paid_amount', 'net_paid_amount', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount')",
             name="ck_crm_marketing_campaign_experiments_metric",
         ),
         CheckConstraint(
-            "(primary_metric IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'incentive_cost', 'paid_amount', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount') "
+            "(primary_metric IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'incentive_cost', 'paid_amount', 'net_paid_amount', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount') "
             "AND currency IS NOT NULL AND length(currency) = 3 AND currency = upper(currency) "
             "AND currency ~ '^[A-Z][A-Z][A-Z]') OR "
-            "(primary_metric NOT IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'incentive_cost', 'paid_amount', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount') AND currency IS NULL)",
+            "(primary_metric NOT IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'incentive_cost', 'paid_amount', 'net_paid_amount', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount') AND currency IS NULL)",
             name="ck_crm_marketing_campaign_experiments_currency",
         ),
         CheckConstraint("jsonb_typeof(guardrail_metrics) = 'array'", name="ck_crm_marketing_campaign_experiments_guardrails_array"),
