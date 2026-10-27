@@ -180,6 +180,8 @@ def test_refunded_order_rate_matches_unique_paid_orders_and_counts_paid_event_da
             order_reference="O-3", event_kind="refunded", amount=Decimal("4"), currency="USD", occurred_at=day,
         ),
     ]
+    assert _metric_value("paid_order_count", None, [], events) == (2, 1, 0)
+    assert _metric_value("paid_amount", "USD", [], events) == (Decimal("70"), 1, 0)
     assert _metric_value("refunded_order_rate_percent", None, [], events) == (Decimal("50.0000"), 1, 0)
     assert _metric_coverage(
         "refunded_order_rate_percent", None, [], date(2026, 10, 16), date(2026, 10, 17), events
