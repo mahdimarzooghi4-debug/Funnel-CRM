@@ -178,6 +178,17 @@ class VariantReadout(BaseModel):
     guardrails: list[GuardrailMetricReadout] = Field(default_factory=list)
 
 
+class VariantCoverageDetail(BaseModel):
+    campaign_id: UUID
+    label: str
+    is_control: bool
+    coverage_percent: float
+    expected_days: int
+    missing_days: int
+    missing_dates: list[date]
+    source_labels: list[str]
+
+
 class CoverageMetricSummary(BaseModel):
     metric: ExperimentMetric
     currency: str | None
@@ -188,6 +199,7 @@ class CoverageMetricSummary(BaseModel):
     coverage_spread_percentage_points: float
     completeness: Literal["complete", "partial", "unavailable"]
     coverage_balance: Literal["equal", "unequal"]
+    variants: list[VariantCoverageDetail]
 
 
 class CampaignExperimentReadout(BaseModel):
@@ -598,14 +610,26 @@ async def read_campaign_experiment(
         (item["metric"], item.get("currency")) for item in guardrail_configs
     ]
     for metric, currency in metric_configs:
-        coverage_values = [
-            variant.coverage_percent if metric == experiment.primary_metric and currency == experiment.currency
-            else next(
-                guardrail.coverage_percent for guardrail in variant.guardrails
-                if guardrail.metric == metric and guardrail.currency == currency
-            )
-            for variant in readouts
-        ]
+        variant_coverage = []
+        for variant in readouts:
+            if metric == experiment.primary_metric and currency == experiment.currency:
+                source = variant
+            else:
+                source = next(
+                    guardrail for guardrail in variant.guardrails
+                    if guardrail.metric == metric and guardrail.currency == currency
+                )
+            variant_coverage.append(VariantCoverageDetail(
+                campaign_id=variant.campaign_id,
+                label=variant.label,
+                is_control=variant.is_control,
+                coverage_percent=source.coverage_percent,
+                expected_days=source.expected_days,
+                missing_days=source.missing_days,
+                missing_dates=source.missing_dates,
+                source_labels=source.source_labels,
+            ))
+        coverage_values = [item.coverage_percent for item in variant_coverage]
         minimum_coverage = min(coverage_values)
         maximum_coverage = max(coverage_values)
         completeness, coverage_balance = _coverage_classification(
@@ -620,6 +644,7 @@ async def read_campaign_experiment(
             coverage_spread_percentage_points=round(maximum_coverage - minimum_coverage, 2),
             completeness=completeness,
             coverage_balance=coverage_balance,
+            variants=variant_coverage,
         ))
     return CampaignExperimentReadout(
         experiment=CampaignExperimentRead.model_validate(experiment),
