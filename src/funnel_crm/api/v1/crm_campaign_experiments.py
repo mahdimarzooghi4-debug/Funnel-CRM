@@ -1,11 +1,14 @@
 """Plan and describe campaign variant experiments without claiming causality."""
 
+import csv
+import io
+import json
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 
@@ -222,6 +225,52 @@ def _coverage_classification(
         "equal" if minimum_coverage_percent == maximum_coverage_percent else "unequal"
     )
     return completeness, balance
+
+
+def _spreadsheet_safe(value: Any) -> str:
+    """Prevent user-controlled CSV text from being evaluated as a spreadsheet formula."""
+    if value is None:
+        return ""
+    text_value = str(value)
+    if text_value.lstrip(" \t\r\n")[:1] in {"=", "+", "-", "@", "\t", "\r", "\n"}:
+        return "'" + text_value
+    return text_value
+
+
+def _readout_csv_content(readout: CampaignExperimentReadout) -> str:
+    headers = [
+        "experiment_id", "experiment_name", "readout_kind", "period_start", "period_end",
+        "allocation_method", "known_limitations", "variant_campaign_id",
+        "variant_campaign_name", "variant_label", "is_control", "metric_role", "metric",
+        "currency", "value", "delta_vs_control", "percent_change_vs_control", "status",
+        "observed_days", "paired_days", "expected_days", "missing_days", "coverage_percent",
+        "coverage_delta_vs_control_percentage_points", "missing_dates", "source_labels",
+    ]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    experiment = readout.experiment
+    for variant in readout.variants:
+        metrics = [("primary", experiment.primary_metric, variant)] + [
+            ("guardrail", item.metric, item) for item in variant.guardrails
+        ]
+        for role, metric, observation in metrics:
+            writer.writerow(_spreadsheet_safe(value) for value in [
+                experiment.id, experiment.name, readout.readout_kind,
+                experiment.period_start, experiment.period_end,
+                experiment.allocation_method, experiment.known_limitations,
+                variant.campaign_id, variant.campaign_name, variant.label,
+                variant.is_control, role, metric, observation.currency,
+                observation.value, observation.delta_vs_control,
+                observation.percent_change_vs_control, observation.status,
+                observation.observed_days, observation.paired_days,
+                observation.expected_days, observation.missing_days,
+                observation.coverage_percent,
+                observation.coverage_delta_vs_control_percentage_points,
+                json.dumps([day.isoformat() for day in observation.missing_dates]),
+                json.dumps(observation.source_labels, ensure_ascii=False),
+            ])
+    return "\ufeff" + output.getvalue()
 
 
 async def _require_permission(
@@ -650,4 +699,37 @@ async def read_campaign_experiment(
         experiment=CampaignExperimentRead.model_validate(experiment),
         variants=readouts,
         coverage_summary=coverage_summary,
+    )
+
+
+@router.get("/{experiment_id}/readout.csv", response_class=Response,
+            operation_id="exportCRMMarketingCampaignExperimentReadoutCsv")
+async def export_campaign_experiment_readout_csv(
+    experiment_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> Response:
+    readout = await read_campaign_experiment(experiment_id, context)
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user", actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign_experiment.readout_exported",
+        target_type="crm_marketing_campaign_experiment",
+        target_key=str(experiment_id),
+        organization_unit_id=readout.experiment.organization_unit_id,
+        before_state=None,
+        after_state={
+            "format": "csv",
+            "variant_count": len(readout.variants),
+            "metric_row_count": sum(1 + len(variant.guardrails) for variant in readout.variants),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return Response(
+        content=_readout_csv_content(readout),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="campaign-experiment-{experiment_id}.csv"'
+        },
     )

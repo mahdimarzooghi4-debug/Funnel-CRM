@@ -19,3 +19,7 @@ Campaign experiment results must show how much source data supports each reporte
 ## Interpretation
 
 Missing dates indicate that no qualifying daily observation was recorded for that metric and variant on that date. They do not prove that the campaign had no activity. Managers should review coverage alongside the allocation method, known limitations, and the measurement sources before interpreting differences.
+
+## Export
+
+Authorized campaign viewers can download the readout as UTF-8 CSV for spreadsheet review. Each row represents one metric for one variant and includes experiment context, observed values, coverage, missing dates, and source labels. The export uses the same tenant and organization authorization as the readout, records an export audit event, and protects user-entered text from spreadsheet formula execution.
