@@ -35,3 +35,5 @@ Record discount and incentive cost separately from general campaign spend as a d
 ## Returns and refunds
 
 When the source system provides daily totals, record returned-order count and refunded amount separately. Refunded amount is currency-scoped and is not subtracted from attributed revenue automatically: daily aggregate figures may not refer to the same orders or attribution window. The experiment readout can compare each as a descriptive primary or guardrail metric, with source coverage shown for the selected currency.
+
+For order-linked analysis, use source commerce refund events attached to the experiment variant campaign. `refunded_order_count` counts unique `(source product, order reference)` pairs once even when an order has multiple partial-refund events; `refund_amount` sums the recorded refund events in the selected currency. These metrics require commerce-event permission and show the source products and dates with events. The order-linked amount remains separate from daily aggregate `refunded_amount`; neither is automatically netted against attributed revenue or paid-order value.

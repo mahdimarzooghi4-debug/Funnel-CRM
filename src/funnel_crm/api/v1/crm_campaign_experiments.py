@@ -3,7 +3,7 @@
 import csv
 import io
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -20,18 +20,20 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaignExperiment,
     CRMMarketingCampaignExperimentVariant,
     CRMMarketingCampaignMeasurement,
+    CRMProductCommerceEvent,
     CRMProfileSegment,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
 router = APIRouter(prefix="/crm/campaign-experiments", tags=["CRM marketing experiments"])
 ExperimentMetric = Literal[
-    "impressions", "clicks", "leads", "conversions", "return_count",
+    "impressions", "clicks", "leads", "conversions", "return_count", "refunded_order_count",
     "click_through_rate_percent", "conversion_rate_per_click_percent",
-    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "refunded_amount",
+    "cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "refunded_amount", "refund_amount",
 ]
-COUNT_METRICS = {"impressions", "clicks", "leads", "conversions"}
-CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "refunded_amount"}
+COUNT_METRICS = {"impressions", "clicks", "leads", "conversions", "return_count"}
+COMMERCE_METRICS = {"refunded_order_count", "refund_amount"}
+CURRENCY_METRICS = {"cost_per_lead", "cost_per_conversion", "roas", "incentive_cost", "refunded_amount", "refund_amount"}
 
 
 class ExperimentVariantWrite(BaseModel):
@@ -58,7 +60,7 @@ class GuardrailMetricWrite(BaseModel):
     @model_validator(mode="after")
     def validate_currency(self):
         if (self.metric in CURRENCY_METRICS) != (self.currency is not None):
-            raise ValueError("currency is required only for cost and ROAS guardrails")
+            raise ValueError("currency is required only for currency-based metrics")
         return self
 
 
@@ -100,7 +102,7 @@ class CampaignExperimentCreate(BaseModel):
         if self.period_start > self.period_end or (self.period_end - self.period_start).days >= 366:
             raise ValueError("period must be ordered and no longer than 366 days")
         if (self.primary_metric in CURRENCY_METRICS) != (self.currency is not None):
-            raise ValueError("currency is required only for cost and ROAS metrics")
+            raise ValueError("currency is required only for currency-based metrics")
         if len({variant.campaign_id for variant in self.variants}) != len(self.variants):
             raise ValueError("each variant must use a different campaign")
         if sum(variant.is_control for variant in self.variants) != 1:
@@ -317,7 +319,19 @@ def _metric_value(
     metric: str,
     currency: str | None,
     rows: list[CRMMarketingCampaignMeasurement],
+    commerce_events: list[CRMProductCommerceEvent] | None = None,
 ) -> tuple[int | Decimal | None, int, int]:
+    commerce_events = commerce_events or []
+    if metric == "refunded_order_count":
+        orders = {(event.source_product, event.order_reference) for event in commerce_events if event.event_kind == "refunded"}
+        return (len(orders) if commerce_events else None, len({event.occurred_at.date() for event in commerce_events}), 0)
+    if metric == "refund_amount":
+        matching = [event for event in commerce_events if event.event_kind == "refunded" and event.currency == currency]
+        return (
+            sum((event.amount for event in matching), Decimal("0")) if matching else None,
+            len({event.occurred_at.date() for event in matching}),
+            0,
+        )
     if metric in COUNT_METRICS:
         values = [getattr(row, metric) for row in rows if getattr(row, metric) is not None]
         return (sum(values) if values else None, len(values), 0)
@@ -375,8 +389,34 @@ def _metric_coverage(
     rows: list[CRMMarketingCampaignMeasurement],
     period_start: date,
     period_end: date,
+    commerce_events: list[CRMProductCommerceEvent] | None = None,
 ) -> tuple[int, int, float, list[date], list[str]]:
     """Describe daily source coverage for the observations used by one metric."""
+    commerce_events = commerce_events or []
+    if metric == "refunded_order_count":
+        qualifying = [event for event in commerce_events if event.event_kind == "refunded"]
+        available_dates = {event.occurred_at.date() for event in qualifying}
+        expected_dates = [period_start + timedelta(days=index) for index in range((period_end - period_start).days + 1)]
+        missing_dates = [day for day in expected_dates if day not in available_dates]
+        expected_days = len(expected_dates)
+        observed_days = len(available_dates)
+        return (
+            expected_days, len(missing_dates),
+            round(observed_days * 100 / expected_days, 2) if expected_days else 0.0,
+            missing_dates, sorted({event.source_product for event in qualifying}),
+        )
+    if metric == "refund_amount":
+        qualifying = [event for event in commerce_events if event.event_kind == "refunded" and event.currency == currency]
+        available_dates = {event.occurred_at.date() for event in qualifying}
+        expected_dates = [period_start + timedelta(days=index) for index in range((period_end - period_start).days + 1)]
+        missing_dates = [day for day in expected_dates if day not in available_dates]
+        expected_days = len(expected_dates)
+        observed_days = len(available_dates)
+        return (
+            expected_days, len(missing_dates),
+            round(observed_days * 100 / expected_days, 2) if expected_days else 0.0,
+            missing_dates, sorted({event.source_product for event in qualifying}),
+        )
     if metric in COUNT_METRICS:
         qualifying = [row for row in rows if getattr(row, metric) is not None]
     elif metric == "click_through_rate_percent":
@@ -453,6 +493,10 @@ async def create_campaign_experiment(
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> CampaignExperimentRead:
     await _require_permission(context, "crm.campaign:manage", payload.organization_unit_id)
+    if payload.primary_metric in COMMERCE_METRICS or any(
+        item.metric in COMMERCE_METRICS for item in payload.guardrails
+    ):
+        await _require_permission(context, "crm.commerce_event:view", payload.organization_unit_id)
     campaigns = (await context.session.scalars(
         select(CRMMarketingCampaign).where(
             CRMMarketingCampaign.tenant_id == context.access.tenant_id,
@@ -593,6 +637,12 @@ async def read_campaign_experiment(
     if experiment is None:
         raise HTTPException(status_code=404, detail="Campaign experiment not found")
     await _require_permission(context, "crm.campaign:view", experiment.organization_unit_id)
+    guardrail_configs = experiment.guardrail_metrics or []
+    uses_commerce_metrics = experiment.primary_metric in COMMERCE_METRICS or any(
+        item["metric"] in COMMERCE_METRICS for item in guardrail_configs
+    )
+    if uses_commerce_metrics:
+        await _require_permission(context, "crm.commerce_event:view", experiment.organization_unit_id)
 
     variant_rows = (await context.session.execute(
         select(CRMMarketingCampaignExperimentVariant, CRMMarketingCampaign.name)
@@ -609,6 +659,9 @@ async def read_campaign_experiment(
     measurements_by_campaign: dict[UUID, list[CRMMarketingCampaignMeasurement]] = {
         campaign_id: [] for campaign_id in campaign_ids
     }
+    commerce_by_campaign: dict[UUID, list[CRMProductCommerceEvent]] = {
+        campaign_id: [] for campaign_id in campaign_ids
+    }
     if campaign_ids:
         measurements = (await context.session.scalars(
             select(CRMMarketingCampaignMeasurement).where(
@@ -621,6 +674,21 @@ async def read_campaign_experiment(
         )).all()
         for measurement in measurements:
             measurements_by_campaign[measurement.campaign_id].append(measurement)
+        if uses_commerce_metrics:
+            start_at = datetime.combine(experiment.period_start, time.min, tzinfo=timezone.utc)
+            end_at = datetime.combine(experiment.period_end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            commerce_events = (await context.session.scalars(
+                select(CRMProductCommerceEvent).where(
+                    CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+                    CRMProductCommerceEvent.organization_unit_id == experiment.organization_unit_id,
+                    CRMProductCommerceEvent.campaign_id.in_(campaign_ids),
+                    CRMProductCommerceEvent.event_kind == "refunded",
+                    CRMProductCommerceEvent.occurred_at >= start_at,
+                    CRMProductCommerceEvent.occurred_at < end_at,
+                ).order_by(CRMProductCommerceEvent.occurred_at, CRMProductCommerceEvent.id)
+            )).all()
+            for event in commerce_events:
+                commerce_by_campaign[event.campaign_id].append(event)
 
     control_variant = next((variant for variant, _ in variant_rows if variant.is_control), None)
     control_value: int | Decimal | None = None
@@ -629,18 +697,20 @@ async def read_campaign_experiment(
         control_value, _, _ = _metric_value(
             experiment.primary_metric, experiment.currency,
             measurements_by_campaign[control_variant.campaign_id],
+            commerce_by_campaign[control_variant.campaign_id],
         )
         control_coverage_percent = _metric_coverage(
             experiment.primary_metric, experiment.currency,
             measurements_by_campaign[control_variant.campaign_id],
             experiment.period_start, experiment.period_end,
+            commerce_by_campaign[control_variant.campaign_id],
         )[2]
     readouts: list[VariantReadout] = []
-    guardrail_configs = experiment.guardrail_metrics or []
     guardrail_controls = {
         (item["metric"], item.get("currency")): _metric_value(
             item["metric"], item.get("currency"),
             measurements_by_campaign[control_variant.campaign_id],
+            commerce_by_campaign[control_variant.campaign_id],
         )[0]
         for item in guardrail_configs
     } if control_variant is not None else {}
@@ -649,6 +719,7 @@ async def read_campaign_experiment(
             item["metric"], item.get("currency"),
             measurements_by_campaign[control_variant.campaign_id],
             experiment.period_start, experiment.period_end,
+            commerce_by_campaign[control_variant.campaign_id],
         )[2]
         for item in guardrail_configs
     } if control_variant is not None else {}
@@ -656,6 +727,7 @@ async def read_campaign_experiment(
         value, observed_days, paired_days = _metric_value(
             experiment.primary_metric, experiment.currency,
             measurements_by_campaign[variant.campaign_id],
+            commerce_by_campaign[variant.campaign_id],
         )
         delta = value - control_value if value is not None and control_value is not None else None
         percent = (
@@ -666,9 +738,12 @@ async def read_campaign_experiment(
         for item in guardrail_configs:
             metric, currency = item["metric"], item.get("currency")
             metric_rows = measurements_by_campaign[variant.campaign_id]
-            guard_value, guard_days, guard_paired = _metric_value(metric, currency, metric_rows)
+            guard_value, guard_days, guard_paired = _metric_value(
+                metric, currency, metric_rows, commerce_by_campaign[variant.campaign_id]
+            )
             expected_days, missing_days, coverage_percent, missing_dates, source_labels = _metric_coverage(
-                metric, currency, metric_rows, experiment.period_start, experiment.period_end
+                metric, currency, metric_rows, experiment.period_start, experiment.period_end,
+                commerce_by_campaign[variant.campaign_id],
             )
             control_guard_coverage = guardrail_control_coverage.get((metric, currency))
             guard_control = guardrail_controls.get((metric, currency))
@@ -695,6 +770,7 @@ async def read_campaign_experiment(
             experiment.primary_metric, experiment.currency,
             measurements_by_campaign[variant.campaign_id],
             experiment.period_start, experiment.period_end,
+            commerce_by_campaign[variant.campaign_id],
         )
         readouts.append(VariantReadout(
             campaign_id=variant.campaign_id, campaign_name=campaign_name,

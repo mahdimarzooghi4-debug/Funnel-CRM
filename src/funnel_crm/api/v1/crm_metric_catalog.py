@@ -63,6 +63,7 @@ _METRICS = [
         ("responses", "پاسخ"),
         ("leads", "سرنخ"),
         ("conversions", "تبدیل"),
+        ("return_count", "تعداد مرجوعی گزارش‌شده"),
     ]
 ]
 _METRICS.extend([
@@ -194,6 +195,19 @@ _METRICS.extend([
         missing_data_behavior="فقط رویدادهای بازپرداخت ثبت‌شده با پیوند صریح کمپین شمرده می‌شوند.",
         limitations="در معیارهای مبلغ پرداخت این کاتالوگ به‌طور خودکار کسر نمی‌شود.",
         endpoint="/api/v1/crm/analytics/campaign-commerce-efficiency",
+        required_permissions=["crm.campaign:view", COMMERCE_PERMISSION],
+    ),
+    MetricDefinition(
+        key="refunded_order_count", name="تعداد سفارش‌های بازپرداخت‌شده", category="commerce",
+        description="تعداد سفارش‌های متمایز دارای رویداد بازپرداخت که صریحاً به کمپین متصل شده‌اند.",
+        formula="تعداد یکتای (محصول مبدأ، مرجع سفارش) برای رویدادهای refunded متصل به کمپین",
+        source="CRMProductCommerceEvent با event_kind=refunded و campaign_id مشخص",
+        aggregation="هر سفارش برای هر محصول مبدأ یک‌بار شمرده می‌شود، حتی با چند بازپرداخت جزئی.",
+        dimensions=["campaign", "date range", "source product"],
+        unit="count", currency_behavior="بدون ارز",
+        missing_data_behavior="فقط سفارش‌های دارای رویداد بازپرداخت ثبت‌شده شمرده می‌شوند.",
+        limitations="مرجع سفارش در محصول مبدأ معنا دارد؛ اتصال صریح کمپین اثبات اثر علّی نیست.",
+        endpoint="/api/v1/crm/campaign-experiments/{experiment_id}/readout",
         required_permissions=["crm.campaign:view", COMMERCE_PERMISSION],
     ),
     MetricDefinition(
