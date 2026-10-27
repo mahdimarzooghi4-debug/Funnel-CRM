@@ -24,6 +24,7 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaignTargetPlan,
     CRMMarketingLearningReview,
     CRMProductCommerceEvent,
+    CRMWorkItem,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -142,6 +143,7 @@ class CampaignPortfolioDecisionItem(BaseModel):
     commerce_data_status: Literal["observed", "no_linked_events", "not_authorized"]
     planned_learning_review_count: int
     evaluated_learning_review_count: int
+    open_learning_action_count: int | None
 
 
 class CampaignPortfolioDecisionQueue(BaseModel):
@@ -194,6 +196,9 @@ async def get_campaign_portfolio_decision_queue(
     )).all()), key=str)
     commerce_allowed_units = set((await context.session.scalars(
         crm_scope_ids(context, permission_key="crm.commerce_event:view")
+    )).all())
+    work_item_allowed_units = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.work_item:view")
     )).all())
     if organization_unit_id is not None:
         if organization_unit_id not in allowed_units:
@@ -340,6 +345,23 @@ async def get_campaign_portfolio_decision_queue(
             .group_by(CRMMarketingLearningReview.status)
         )).all()
         review_counts = {row.status: int(row.review_count) for row in review_status_rows}
+        open_learning_action_count = None
+        if plan.organization_unit_id in work_item_allowed_units:
+            open_learning_action_count = int(await context.session.scalar(
+                select(func.count(CRMWorkItem.id))
+                .join(
+                    CRMMarketingLearningReview,
+                    (CRMMarketingLearningReview.tenant_id == CRMWorkItem.tenant_id)
+                    & (CRMMarketingLearningReview.id == CRMWorkItem.source_learning_review_id),
+                )
+                .where(
+                    CRMWorkItem.tenant_id == context.access.tenant_id,
+                    CRMWorkItem.organization_unit_id == plan.organization_unit_id,
+                    CRMWorkItem.campaign_id == plan.campaign_id,
+                    CRMWorkItem.status.in_(("open", "in_progress")),
+                    CRMMarketingLearningReview.target_plan_id == plan.id,
+                )
+            ) or 0)
         items.append(CampaignPortfolioDecisionItem(
             campaign_id=plan.campaign_id,
             campaign_name=campaign_name,
@@ -363,6 +385,7 @@ async def get_campaign_portfolio_decision_queue(
             ),
             planned_learning_review_count=review_counts.get("planned", 0),
             evaluated_learning_review_count=review_counts.get("evaluated", 0),
+            open_learning_action_count=open_learning_action_count,
         ))
     items.sort(key=lambda item: (
         not bool(item.attention_reasons), -len(item.attention_reasons),
