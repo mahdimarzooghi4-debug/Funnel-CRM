@@ -1,6 +1,6 @@
 import csv
 import io
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -19,6 +19,7 @@ from funnel_crm.api.v1.crm_campaign_experiments import (
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
+    CRMProductCommerceEvent,
     CRMProfileSegment,
     Role,
     RoleAssignment,
@@ -120,6 +121,36 @@ def test_refunded_amount_metric_uses_matching_currency_and_sources() -> None:
     ) == (1, 0, 100.0, [], ["returns ledger"])
 
 
+def test_order_linked_refund_metrics_deduplicate_orders_but_sum_partial_refunds() -> None:
+    day = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
+    events = [
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.refunded",
+            order_reference="O-1", event_kind="refunded", amount=Decimal("3"), currency="USD",
+            occurred_at=day,
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.refunded.partial",
+            order_reference="O-1", event_kind="refunded", amount=Decimal("2"), currency="USD",
+            occurred_at=day.replace(hour=13),
+        ),
+        CRMProductCommerceEvent(
+            id=uuid4(), tenant_id=uuid4(), organization_unit_id=uuid4(), campaign_id=uuid4(),
+            source_product="store", source_event_id=uuid4(), event_type="order.refunded",
+            order_reference="O-2", event_kind="refunded", amount=Decimal("20"), currency="EUR",
+            occurred_at=day,
+        ),
+    ]
+    rows: list[CRMMarketingCampaignMeasurement] = []
+    assert _metric_value("refunded_order_count", None, rows, events) == (2, 1, 0)
+    assert _metric_value("refund_amount", "USD", rows, events) == (Decimal("5"), 1, 0)
+    assert _metric_coverage(
+        "refund_amount", "USD", rows, date(2026, 10, 16), date(2026, 10, 17), events
+    ) == (2, 1, 50.0, [date(2026, 10, 17)], ["store"])
+
+
 def make_app(
     session_factory: async_sessionmaker[AsyncSession],
     identity: AuthenticatedIdentity,
@@ -205,6 +236,29 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 assigned_count=25, exposure_count=20,
             ),
         ])
+        context.session.add_all([
+            CRMProductCommerceEvent(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=control_id, source_product="funnel.store", source_event_id=uuid4(),
+                event_type="commerce.order.refund", order_reference="CONTROL-1",
+                event_kind="refunded", amount=Decimal("3"), currency="USD",
+                occurred_at=datetime(2026, 10, 16, 12, tzinfo=timezone.utc),
+            ),
+            CRMProductCommerceEvent(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=control_id, source_product="funnel.store", source_event_id=uuid4(),
+                event_type="commerce.order.refund.partial", order_reference="CONTROL-1",
+                event_kind="refunded", amount=Decimal("2"), currency="USD",
+                occurred_at=datetime(2026, 10, 16, 13, tzinfo=timezone.utc),
+            ),
+            CRMProductCommerceEvent(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=variant_id, source_product="funnel.store", source_event_id=uuid4(),
+                event_type="commerce.order.refund", order_reference="VARIANT-1",
+                event_kind="refunded", amount=Decimal("4"), currency="USD",
+                occurred_at=datetime(2026, 10, 16, 12, tzinfo=timezone.utc),
+            ),
+        ])
         role = Role(tenant_id=tenant_id, name=f"Experiment manager {uuid4().hex[:8]}")
         context.session.add(role)
         await context.session.flush()
@@ -215,6 +269,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             ),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.commerce_event:view"),
         ])
         await context.session.flush()
 
@@ -232,6 +287,8 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 {"metric": "clicks"}, {"metric": "roas", "currency": "USD"},
                 {"metric": "incentive_cost", "currency": "USD"},
                 {"metric": "refunded_amount", "currency": "USD"},
+                {"metric": "refunded_order_count"},
+                {"metric": "refund_amount", "currency": "USD"},
             ],
             "period_start": "2026-10-16",
             "period_end": "2026-10-18",
@@ -255,6 +312,8 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             {"metric": "roas", "currency": "USD"},
             {"metric": "incentive_cost", "currency": "USD"},
             {"metric": "refunded_amount", "currency": "USD"},
+            {"metric": "refunded_order_count", "currency": None},
+            {"metric": "refund_amount", "currency": "USD"},
         ]
         assert listed.json()[0]["experiment"]["allocation_method"] == payload["allocation_method"]
         assert listed.json()[0]["experiment"]["known_limitations"] == payload["known_limitations"]
@@ -324,6 +383,37 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             Decimal("20"), Decimal("10"),
         ]
 
+        for metric, currency, expected_values in (
+            ("refund_amount", "USD", [Decimal("5"), Decimal("4")]),
+            ("refunded_order_count", None, [1, 1]),
+        ):
+            source_refund_payload = dict(payload)
+            source_refund_payload.update({
+                "name": f"Source refund review: {metric}",
+                "primary_metric": metric,
+                "guardrails": [{"metric": "clicks"}],
+            })
+            if currency is None:
+                source_refund_payload.pop("currency", None)
+            else:
+                source_refund_payload["currency"] = currency
+            source_refund = await client.post(
+                "/api/v1/crm/campaign-experiments",
+                headers=headers,
+                json=source_refund_payload,
+            )
+            assert source_refund.status_code == 201, source_refund.text
+            source_refund_readout = await client.get(
+                f"/api/v1/crm/campaign-experiments/{source_refund.json()['id']}/readout",
+                headers=headers,
+            )
+            assert source_refund_readout.status_code == 200, source_refund_readout.text
+            observed = [item["value"] for item in source_refund_readout.json()["variants"]]
+            if currency is None:
+                assert observed == expected_values
+            else:
+                assert [Decimal(value) for value in observed] == expected_values
+
         csv_response = await client.get(
             f"/api/v1/crm/campaign-experiments/{experiment_id}/readout.csv",
             headers=headers,
@@ -332,7 +422,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert csv_response.headers["content-type"].startswith("text/csv")
         assert "attachment; filename=\"campaign-experiment-" in csv_response.headers["content-disposition"]
         csv_rows = list(csv.DictReader(io.StringIO(csv_response.text.lstrip("\ufeff"))))
-        assert len(csv_rows) == 14
+        assert len(csv_rows) == 18
         variant_csv = next(
             row for row in csv_rows
             if row["variant_campaign_id"] == str(variant_id) and row["metric_role"] == "primary"
@@ -356,12 +446,18 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert variant_incentive_csv["currency"] == "USD"
         variant_refund_csv = next(row for row in csv_rows if row["variant_campaign_id"] == str(variant_id) and row["metric"] == "refunded_amount")
         assert variant_refund_csv["value"] == "12.000000"
+        variant_source_refund = next(row for row in csv_rows if row["variant_campaign_id"] == str(variant_id) and row["metric"] == "refund_amount")
+        assert variant_source_refund["value"] == "4.000000"
         control, variant = result["variants"]
         assert control["is_control"] is True
         assert control["guardrails"][0]["value"] == 100
         assert Decimal(control["guardrails"][1]["value"]) == Decimal("3")
         assert Decimal(control["guardrails"][2]["value"]) == Decimal("20")
         assert Decimal(control["guardrails"][3]["value"]) == Decimal("30")
+        assert control["guardrails"][4]["value"] == 1
+        assert control["guardrails"][4]["coverage_percent"] == 33.33
+        assert control["guardrails"][4]["source_labels"] == ["funnel.store"]
+        assert Decimal(control["guardrails"][5]["value"]) == Decimal("5")
         assert control["value"] == 10
         assert control["delta_vs_control"] == 0
         assert control["coverage_percent"] == 66.67
@@ -397,6 +493,10 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
         assert Decimal(variant["guardrails"][2]["value"]) == Decimal("10")
         assert Decimal(variant["guardrails"][2]["delta_vs_control"]) == Decimal("-10")
         assert Decimal(variant["guardrails"][3]["delta_vs_control"]) == Decimal("-18")
+        assert variant["guardrails"][4]["value"] == 1
+        assert variant["guardrails"][4]["coverage_percent"] == 33.33
+        assert variant["guardrails"][4]["source_labels"] == ["funnel.store"]
+        assert Decimal(variant["guardrails"][5]["delta_vs_control"]) == Decimal("-1")
 
         missing_currency = dict(payload)
         missing_currency["primary_metric"] = "cost_per_conversion"
