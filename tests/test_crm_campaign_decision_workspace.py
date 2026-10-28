@@ -317,6 +317,17 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert comparison_financial["USD"]["baseline_net_paid_amount"] == "110.000000"
     assert comparison_financial["USD"]["comparison_net_paid_amount"] == "0"
     assert comparison_financial["EUR"]["baseline_net_paid_amount"] == "6.000000"
+    period_source_outcomes = {
+        (row["source_product"], row["currency"]): row
+        for row in comparison["source_product_outcomes"]
+    }
+    assert period_source_outcomes[("funnel.store", "USD")]["baseline_paid_amount"] == "80.000000"
+    assert period_source_outcomes[("funnel.store", "USD")]["baseline_paid_share_percent"] == "66.67"
+    assert period_source_outcomes[("funnel.store", "USD")]["baseline_refunded_share_percent"] == "100.00"
+    assert period_source_outcomes[("funnel.marketplace", "USD")]["baseline_paid_share_percent"] == "33.33"
+    assert period_source_outcomes[("funnel.store", "EUR")]["baseline_paid_share_percent"] == "100.00"
+    assert period_source_outcomes[("funnel.store", "USD")]["comparison_paid_amount"] == "0"
+    assert period_source_outcomes[("funnel.store", "USD")]["comparison_paid_share_percent"] is None
     assert export_response.status_code == 200, export_response.text
     assert export_response.headers["content-type"].startswith("text/csv")
     assert "attachment; filename=" in export_response.headers["content-disposition"]
@@ -496,6 +507,21 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
+        restricted_period_comparison = await client.get(
+            "/api/v1/crm/campaigns/portfolio-period-comparison",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={
+                "baseline_start": "2026-10-19",
+                "baseline_end": "2026-10-19",
+                "comparison_start": "2026-10-20",
+                "comparison_end": "2026-10-21",
+                "organization_unit_id": str(root_id),
+            },
+        )
+        assert restricted_period_comparison.status_code == 200, restricted_period_comparison.text
+        assert restricted_period_comparison.json()["commerce_scope_status"] == "not_authorized"
+        assert restricted_period_comparison.json()["financial_outcomes_by_currency"] == []
+        assert restricted_period_comparison.json()["source_product_outcomes"] == []
         restricted_queue_response = await client.get(
             "/api/v1/crm/campaigns/decision-queue",
             headers={"X-Workspace-ID": str(tenant_id)},
