@@ -4,15 +4,19 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
+from funnel_crm.api.v1.crm_segments import _segment_member_filters
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
+    CRMCommunicationConsentEvent,
+    CRMContactPoint,
     CRMMarketingCampaignAsset,
+    CRMProfile,
     CRMProfileSegment,
     CRMWorkItem,
 )
@@ -23,8 +27,8 @@ AssetStatus = Literal["draft", "in_review", "approved", "rejected", "retired"]
 
 
 class CampaignReadinessCheck(BaseModel):
-    key: Literal["campaign_schedule", "active_audience", "approved_content"]
-    status: Literal["complete", "missing", "pending", "inactive"]
+    key: Literal["campaign_schedule", "active_audience", "approved_content", "channel_eligibility"]
+    status: Literal["complete", "missing", "pending", "inactive", "not_authorized", "unsupported"]
     count: int | None
     explanation: str
 
@@ -52,6 +56,7 @@ class CampaignReadinessResponse(BaseModel):
 )
 async def get_campaign_readiness(
     campaign_id: UUID,
+    purpose_key: str = Query(default="marketing", pattern=r"^[a-z][a-z0-9_.-]{0,79}$"),
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> CampaignReadinessResponse:
     campaign = await context.session.scalar(
@@ -71,7 +76,7 @@ async def get_campaign_readiness(
         raise HTTPException(status_code=409, detail="Readiness review is available for draft campaigns")
 
     active_segment = await context.session.scalar(
-        select(CRMProfileSegment.id).where(
+        select(CRMProfileSegment).where(
             CRMProfileSegment.tenant_id == context.access.tenant_id,
             CRMProfileSegment.organization_unit_id == campaign.organization_unit_id,
             CRMProfileSegment.id == campaign.segment_id,
@@ -101,6 +106,76 @@ async def get_campaign_readiness(
     )
     schedule_ready = campaign.starts_at is not None and campaign.ends_at is not None
     audience_ready = active_segment is not None
+    channel_map = {
+        "email": "email",
+        "phone": "phone",
+        "messaging": "phone",
+        "social": "social_handle",
+        "web": "website",
+        "store": "postal_address",
+        "field": "postal_address",
+    }
+    communication_channel = channel_map.get(campaign.channel)
+    eligibility_status: Literal["complete", "missing", "not_authorized", "unsupported"]
+    eligible_count: int | None = None
+    if communication_channel is None:
+        eligibility_status = "unsupported"
+        eligibility_explanation = "No communication-consent channel is mapped to this campaign channel."
+    else:
+        required_permissions = (
+            "crm.profile:view",
+            "crm.segment:view",
+            "crm.contact_point:view",
+            "crm.communication_consent:view",
+        )
+        can_review_eligibility = all(
+            await has_crm_permission(
+                context, permission_key=permission,
+                organization_unit_id=campaign.organization_unit_id,
+            )
+            for permission in required_permissions
+        )
+        if not can_review_eligibility:
+            eligibility_status = "not_authorized"
+            eligibility_explanation = "The caller cannot review audience contact and consent eligibility."
+        elif active_segment is None:
+            eligibility_status = "missing"
+            eligibility_explanation = "Link an active audience segment before reviewing channel eligibility."
+        else:
+            member_filters = await _segment_member_filters(context, active_segment)
+            latest_decision = (
+                select(CRMCommunicationConsentEvent.decision)
+                .where(
+                    CRMCommunicationConsentEvent.tenant_id == context.access.tenant_id,
+                    CRMCommunicationConsentEvent.profile_id == CRMProfile.id,
+                    CRMCommunicationConsentEvent.purpose_key == purpose_key,
+                    CRMCommunicationConsentEvent.channel == communication_channel,
+                )
+                .order_by(
+                    CRMCommunicationConsentEvent.recorded_at.desc(),
+                    CRMCommunicationConsentEvent.id.desc(),
+                )
+                .limit(1)
+                .scalar_subquery()
+            )
+            verified_contact = exists(select(1).where(
+                CRMContactPoint.tenant_id == context.access.tenant_id,
+                CRMContactPoint.profile_id == CRMProfile.id,
+                CRMContactPoint.channel == communication_channel,
+                CRMContactPoint.verification_status == "verified",
+            ))
+            eligible_count = int(await context.session.scalar(
+                select(func.count()).select_from(CRMProfile).where(
+                    *member_filters, verified_contact, latest_decision == "granted"
+                )
+            ) or 0)
+            eligibility_status = "complete" if eligible_count > 0 else "missing"
+            eligibility_explanation = (
+                f"{eligible_count} profile(s) have a verified {communication_channel} contact "
+                f"and current granted consent for purpose '{purpose_key}'."
+                if eligible_count > 0
+                else f"No profiles have both a verified {communication_channel} contact and current granted consent for purpose '{purpose_key}'."
+            )
     checks = [
         CampaignReadinessCheck(
             key="campaign_schedule",
@@ -126,6 +201,12 @@ async def get_campaign_readiness(
                 else "Approve at least one content asset for this campaign."
             ),
         ),
+        CampaignReadinessCheck(
+            key="channel_eligibility",
+            status=eligibility_status,
+            count=eligible_count,
+            explanation=eligibility_explanation,
+        ),
     ]
     work_item_scopes = set((await context.session.scalars(
         crm_scope_ids(context, permission_key="crm.work_item:view")
@@ -150,7 +231,7 @@ async def get_campaign_readiness(
         ends_at=campaign.ends_at,
         launch_readiness=(
             "ready_for_manager_review"
-            if schedule_ready and audience_ready and content_status == "complete"
+            if schedule_ready and audience_ready and content_status == "complete" and eligibility_status == "complete"
             else "needs_attention"
         ),
         checks=checks,
@@ -160,7 +241,9 @@ async def get_campaign_readiness(
         generated_at=datetime.now(timezone.utc),
         basis=(
             "Readiness is a checklist for manager review, not an automatic launch approval. "
-            "It requires a complete schedule, active audience, and at least one approved asset with no unresolved content reviews. "
+            "It requires a complete schedule, active audience, at least one approved asset with no unresolved content reviews, "
+            "and at least one profile with a verified channel contact and latest granted consent for the requested purpose. "
+            "Unsupported channels or missing access keep the review in needs_attention. "
             "Open work items are shown only when the caller has work-item view permission."
         ),
     )
