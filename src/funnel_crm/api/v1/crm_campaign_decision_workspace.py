@@ -139,6 +139,7 @@ class CampaignPortfolioDecisionItem(BaseModel):
     no_data_metric_count: int
     recorded_day_coverage_percent: Decimal
     measurement_record_count: int
+    latest_measurement_date: date | None
     commerce_outcomes_by_currency: list[DecisionQueueCommerceCurrency]
     commerce_data_status: Literal["observed", "no_linked_events", "not_authorized"]
     planned_learning_review_count: int
@@ -411,6 +412,9 @@ async def get_campaign_portfolio_decision_queue(
             no_data_metric_count=no_data,
             recorded_day_coverage_percent=coverage,
             measurement_record_count=len(measurements),
+            latest_measurement_date=max(
+                (row.measured_on for row in measurements), default=None
+            ),
             commerce_outcomes_by_currency=queue_commerce_metrics,
             commerce_data_status=(
                 "observed"

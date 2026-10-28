@@ -261,6 +261,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["target_plan_id"] == str(plan_id)
     assert queue["items"][0]["status"] == "review_required"
     assert queue["items"][0]["missed_metric_count"] == 2
+    assert queue["items"][0]["latest_measurement_date"] == "2026-10-21"
     assert queue["items"][0]["commerce_data_status"] == "observed"
     assert queue["items"][0]["planned_learning_review_count"] == 2
     assert queue["items"][0]["evaluated_learning_review_count"] == 0
