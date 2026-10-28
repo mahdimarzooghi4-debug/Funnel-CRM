@@ -53,6 +53,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert isinstance(identity, AuthenticatedIdentity)
 
     campaign_id, plan_id, segment_id = uuid4(), uuid4(), uuid4()
+    low_priority_campaign_id, low_priority_plan_id = uuid4(), uuid4()
     period_start, period_end = date(2026, 10, 19), date(2026, 10, 25)
     event_fact_ids = [uuid4(), uuid4(), uuid4(), uuid4()]
     async with tenant_session(
@@ -71,6 +72,14 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 id=campaign_id, tenant_id=tenant_id, organization_unit_id=root_id,
                 segment_id=segment_id, name="Decision workspace campaign",
                 objective_key="acquisition", channel="web",
+                planned_budget_amount=None, planned_budget_currency=None,
+                starts_at=None, ends_at=None, status="draft",
+            ),
+            CRMMarketingCampaign(
+                id=low_priority_campaign_id, tenant_id=tenant_id,
+                organization_unit_id=root_id, segment_id=segment_id,
+                name="A campaign with no target misses",
+                objective_key="awareness", channel="web",
                 planned_budget_amount=None, planned_budget_currency=None,
                 starts_at=None, ends_at=None, status="draft",
             ),
@@ -102,6 +111,18 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             max_cost_per_conversion_amount=None, conversion_cost_currency=None,
             min_roas=Decimal("1.500000"), roas_currency="USD",
             min_net_paid_to_spend=Decimal("2.000000"), net_paid_to_spend_currency="USD",
+        ))
+        await context.session.flush()
+        context.session.add(CRMMarketingCampaignTargetPlan(
+            id=low_priority_plan_id, tenant_id=tenant_id,
+            organization_unit_id=root_id, campaign_id=low_priority_campaign_id,
+            period_start=period_start, period_end=period_start,
+            impressions_target=1, clicks_target=None, leads_target=None,
+            conversions_target=None, max_spend_amount=None, max_spend_currency=None,
+            max_cpl_amount=None, cpl_currency=None,
+            max_cost_per_conversion_amount=None, conversion_cost_currency=None,
+            min_roas=None, roas_currency=None,
+            min_net_paid_to_spend=None, net_paid_to_spend_currency=None,
         ))
         await context.session.flush()
         learning_review_id = uuid4()
@@ -169,6 +190,15 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 actual_spend_amount=Decimal("10.00"), actual_spend_currency="EUR",
                 attributed_revenue_amount=None, attributed_revenue_currency=None,
             ),
+            CRMMarketingCampaignMeasurement(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=low_priority_campaign_id, measured_on=period_start,
+                source_label="verified analytics import",
+                impressions=1, clicks=None, reach=None, responses=None,
+                leads=None, conversions=None, actual_spend_amount=None,
+                actual_spend_currency=None, attributed_revenue_amount=None,
+                attributed_revenue_currency=None,
+            ),
         ])
         for index, (kind, amount, currency, order_ref) in enumerate([
             ("paid", "80.00", "USD", "USD-1"),
@@ -206,6 +236,14 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         )
         assert queue_response.status_code == 200, queue_response.text
         queue = queue_response.json()
+        ranked_page_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id), "limit": 1, "offset": 0},
+        )
+        assert ranked_page_response.status_code == 200, ranked_page_response.text
+        ranked_page = ranked_page_response.json()
 
     assert workspace["campaign_name"] == "Decision workspace campaign"
     assert workspace["period_calendar_days"] == 7
@@ -256,8 +294,12 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert source_rows[("funnel.marketplace", "USD")]["net_paid_amount"] == "40.000000"
     assert source_rows[("funnel.marketplace", "USD")]["net_paid_amount_per_paid_order"] == "40.000000"
     assert source_rows[("funnel.store", "EUR")]["net_paid_amount"] == "6.000000"
-    assert queue["total_count"] == 1
+    assert queue["total_count"] == 2
     assert queue["automatic_recommendation_issued"] is False
+    assert ranked_page["total_count"] == 2
+    assert ranked_page["has_more"] is True
+    assert len(ranked_page["items"]) == 1
+    assert ranked_page["items"][0]["target_plan_id"] == str(plan_id)
     assert queue["items"][0]["target_plan_id"] == str(plan_id)
     assert queue["items"][0]["status"] == "review_required"
     assert queue["items"][0]["missed_metric_count"] == 2
@@ -365,7 +407,9 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         ))
         await context.session.execute(delete(CRMMarketingCampaignMeasurement).where(
             CRMMarketingCampaignMeasurement.tenant_id == tenant_id,
-            CRMMarketingCampaignMeasurement.campaign_id == campaign_id,
+            CRMMarketingCampaignMeasurement.campaign_id.in_(
+                (campaign_id, low_priority_campaign_id)
+            ),
         ))
         await context.session.execute(delete(CRMWorkItem).where(
             CRMWorkItem.tenant_id == tenant_id,
@@ -373,15 +417,17 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         ))
         await context.session.execute(delete(CRMMarketingLearningReview).where(
             CRMMarketingLearningReview.tenant_id == tenant_id,
-            CRMMarketingLearningReview.target_plan_id == plan_id,
+            CRMMarketingLearningReview.target_plan_id.in_(
+                (plan_id, low_priority_plan_id)
+            ),
         ))
         await context.session.execute(delete(CRMMarketingCampaignTargetPlan).where(
             CRMMarketingCampaignTargetPlan.tenant_id == tenant_id,
-            CRMMarketingCampaignTargetPlan.id == plan_id,
+            CRMMarketingCampaignTargetPlan.id.in_((plan_id, low_priority_plan_id)),
         ))
         await context.session.execute(delete(CRMMarketingCampaign).where(
             CRMMarketingCampaign.tenant_id == tenant_id,
-            CRMMarketingCampaign.id == campaign_id,
+            CRMMarketingCampaign.id.in_((campaign_id, low_priority_campaign_id)),
         ))
         await context.session.execute(delete(CRMProfileSegment).where(
             CRMProfileSegment.tenant_id == tenant_id,
