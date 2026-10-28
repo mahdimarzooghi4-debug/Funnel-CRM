@@ -174,6 +174,20 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert eligibility_check["status"] == "missing"
         assert eligibility_check["count"] == 0
 
+        portfolio = await client.get(
+            "/api/v1/crm/campaigns/readiness-portfolio",
+            headers=headers,
+            params={"limit": 1, "offset": 0},
+        )
+        assert portfolio.status_code == 200, portfolio.text
+        portfolio_result = portfolio.json()
+        assert portfolio_result["total_draft_campaigns"] == 1
+        assert portfolio_result["has_more"] is False
+        assert portfolio_result["ready_for_manager_review_count"] == 0
+        assert portfolio_result["needs_attention_count"] == 1
+        assert portfolio_result["items"][0]["campaign_id"] == campaign_id
+        assert portfolio_result["attention_by_check"]["channel_eligibility"] == 1
+
         marketing_consent = await client.post(
             f"/api/v1/crm/profiles/{profile_id}/communication-consents",
             headers=headers,
