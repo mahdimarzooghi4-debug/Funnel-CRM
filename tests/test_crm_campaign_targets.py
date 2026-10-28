@@ -405,6 +405,36 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert report["campaigns"][0]["metrics"]["spend"]["recorded_day_coverage_percent"] == "50.00"
         assert "missing days are not zero" in report["coverage_basis"]
 
+        comparison = await client.get(
+            "/api/v1/crm/analytics/campaign-target-performance/portfolio",
+            headers=headers,
+            params=[
+                ("period_start", "2026-10-16"),
+                ("period_end", "2026-10-17"),
+                ("campaign_ids", str(campaign_id)),
+                ("campaign_ids", str(partial_campaign_id)),
+            ],
+        )
+        assert comparison.status_code == 200, comparison.text
+        comparison_report = comparison.json()
+        assert comparison_report["campaign_count"] == 2
+        assert {item["campaign_id"] for item in comparison_report["campaigns"]} == {
+            str(campaign_id), str(partial_campaign_id),
+        }
+        assert comparison_report["metric_variances"]["leads"]["targeted_campaign_count"] == 2
+
+        duplicate_selection = await client.get(
+            "/api/v1/crm/analytics/campaign-target-performance/portfolio",
+            headers=headers,
+            params=[
+                ("period_start", "2026-10-16"),
+                ("period_end", "2026-10-17"),
+                ("campaign_ids", str(campaign_id)),
+                ("campaign_ids", str(campaign_id)),
+            ],
+        )
+        assert duplicate_selection.status_code == 422
+
         payload["clicks_target"] = 70
         updated = await client.put(base, headers=headers, json=payload)
         assert updated.status_code == 200, updated.text
