@@ -271,6 +271,17 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         )
         assert metric_filtered_response.status_code == 200, metric_filtered_response.text
         metric_filtered = metric_filtered_response.json()
+        period_comparison_response = await client.get(
+            "/api/v1/crm/campaigns/portfolio-period-comparison",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={
+                "baseline_start": "2026-10-19",
+                "baseline_end": "2026-10-19",
+                "comparison_start": "2026-10-20",
+                "comparison_end": "2026-10-21",
+                "organization_unit_id": str(root_id),
+            },
+        )
         export_response = await client.get(
             "/api/v1/crm/campaigns/decision-queue/export.csv",
             headers={"X-Workspace-ID": str(tenant_id)},
@@ -279,6 +290,25 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                     "metric_status": "not_met"},
         )
 
+    assert period_comparison_response.status_code == 200, period_comparison_response.text
+    comparison = period_comparison_response.json()
+    assert comparison["baseline_campaign_count"] == 2
+    assert comparison["comparison_campaign_count"] == 1
+    assert comparison["metrics"]["impressions"]["baseline_value"] == 61
+    assert comparison["metrics"]["impressions"]["comparison_value"] == 20
+    assert comparison["metrics"]["impressions"]["change"] == -41
+    assert comparison["metrics"]["impressions"]["change_percent"] == "-67.21"
+    assert comparison["metrics"]["clicks"]["change_percent"] == "-60.00"
+    assert comparison["metrics"]["leads"]["baseline_value"] is None
+    assert comparison["metrics"]["leads"]["change_percent"] is None
+    assert comparison["commerce_scope_status"] == "complete"
+    comparison_financial = {
+        row["currency"]: row
+        for row in comparison["financial_outcomes_by_currency"]
+    }
+    assert comparison_financial["USD"]["baseline_net_paid_amount"] == "110.000000"
+    assert comparison_financial["USD"]["comparison_net_paid_amount"] == "0"
+    assert comparison_financial["EUR"]["baseline_net_paid_amount"] == "6.000000"
     assert export_response.status_code == 200, export_response.text
     assert export_response.headers["content-type"].startswith("text/csv")
     assert "attachment; filename=" in export_response.headers["content-disposition"]
