@@ -100,7 +100,7 @@ async def get_marketing_calendar_events(
             select(CRMMarketingCampaign).where(
                 CRMMarketingCampaign.tenant_id == tenant_id,
                 CRMMarketingCampaign.organization_unit_id.in_(campaign_units),
-                CRMMarketingCampaign.status == "draft",
+                CRMMarketingCampaign.status != "archived",
                 CRMMarketingCampaign.starts_at.is_not(None),
                 CRMMarketingCampaign.starts_at < end_at,
                 or_(CRMMarketingCampaign.ends_at.is_(None), CRMMarketingCampaign.ends_at >= start_at),
@@ -192,5 +192,5 @@ async def get_marketing_calendar_events(
         events=events,
         schedule_conflicts=schedule_conflicts,
         has_more=has_more,
-        basis="Campaign dates show draft schedules; work items appear on due dates. Schedule conflicts flag overlapping campaigns for the same audience segment and channel, not predicted outcomes. Visibility follows campaign and work-item permissions independently.",
+        basis="Campaign dates show non-archived schedules and execution; work items appear on due dates. Schedule conflicts flag overlapping campaigns for the same audience segment and channel, not predicted outcomes. Visibility follows campaign and work-item permissions independently.",
     )
