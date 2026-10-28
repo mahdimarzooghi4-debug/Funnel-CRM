@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from funnel_crm.api.v1.crm_campaign_experiments import router
 from funnel_crm.api.v1.crm_campaign_experiments import (
     _coverage_classification,
+    _delivery_efficiency,
     _metric_coverage,
     _metric_value,
     _spreadsheet_safe,
@@ -696,3 +697,11 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             "/api/v1/crm/campaign-experiments", headers=headers, json=missing_allocation
         )
         assert invalid_design.status_code == 422
+
+
+def test_delivery_efficiency_requires_observed_positive_denominator() -> None:
+    assert _delivery_efficiency(12, 4) == Decimal("3.000000")
+    assert _delivery_efficiency(Decimal("7.5"), 3) == Decimal("2.500000")
+    assert _delivery_efficiency(12, 0) is None
+    assert _delivery_efficiency(None, 4) is None
+    assert _delivery_efficiency(12, None) is None
