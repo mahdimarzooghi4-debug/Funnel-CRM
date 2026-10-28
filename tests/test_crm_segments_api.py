@@ -148,6 +148,65 @@ async def test_saved_segment_previews_scoped_profiles_and_records_audit(
         assert activity_preview.status_code == 200
         assert activity_preview.json()["total"] == 1
 
+        include_segment = await client.post(
+            "/api/v1/crm/segments",
+            headers=headers,
+            json={
+                "organization_unit_id": str(root_id),
+                "name": "Lead audience",
+                "criteria": {"profile_kinds": ["person"], "lifecycle_stages": ["lead"]},
+            },
+        )
+        assert include_segment.status_code == 201, include_segment.text
+        exclude_segment = await client.post(
+            "/api/v1/crm/segments",
+            headers=headers,
+            json={
+                "organization_unit_id": str(root_id),
+                "name": "Online purchasers",
+                "criteria": {"activity": {"channels": ["online"], "within_last_days": 30}},
+            },
+        )
+        assert exclude_segment.status_code == 201, exclude_segment.text
+
+        composed_segment = await client.post(
+            "/api/v1/crm/segments",
+            headers=headers,
+            json={
+                "organization_unit_id": str(root_id),
+                "name": "Leads excluding recent online purchasers",
+                "criteria": {
+                    "include_segment_ids": [include_segment.json()["id"]],
+                    "exclude_segment_ids": [exclude_segment.json()["id"]],
+                },
+            },
+        )
+        assert composed_segment.status_code == 201, composed_segment.text
+        assert composed_segment.json()["criteria"]["include_segment_ids"] == [include_segment.json()["id"]]
+        composed_preview = await client.get(
+            f"/api/v1/crm/segments/{composed_segment.json()['id']}/preview",
+            headers=headers,
+        )
+        assert composed_preview.status_code == 200, composed_preview.text
+        assert composed_preview.json()["total"] == 0
+
+        referenced_deactivation = await client.post(
+            f"/api/v1/crm/segments/{exclude_segment.json()['id']}/deactivate",
+            headers=headers,
+        )
+        assert referenced_deactivation.status_code == 409
+
+        invalid_nested = await client.post(
+            "/api/v1/crm/segments",
+            headers=headers,
+            json={
+                "organization_unit_id": str(root_id),
+                "name": "Nested segment",
+                "criteria": {"include_segment_ids": [composed_segment.json()["id"]]},
+            },
+        )
+        assert invalid_nested.status_code == 422
+
         no_match_criteria = await client.patch(
             f"/api/v1/crm/segments/{segment_id}",
             headers=headers,
