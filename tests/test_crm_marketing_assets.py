@@ -162,9 +162,13 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
             f"/api/v1/crm/campaigns/{campaign_id}/readiness", headers=headers
         )
         assert readiness_approved.status_code == 200, readiness_approved.text
-        assert readiness_approved.json()["launch_readiness"] == "ready_for_manager_review"
+        assert readiness_approved.json()["launch_readiness"] == "needs_attention"
         assert readiness_approved.json()["asset_counts"]["approved"] == 1
-        assert all(item["status"] == "complete" for item in readiness_approved.json()["checks"])
+        readiness_checks = {
+            item["key"]: item for item in readiness_approved.json()["checks"]
+        }
+        assert readiness_checks["approved_content"]["status"] == "complete"
+        assert readiness_checks["channel_eligibility"]["status"] == "not_authorized"
 
         for action, expected in [("schedule", "scheduled"), ("launch", "active"), ("pause", "paused"), ("resume", "active"), ("complete", "completed"), ("archive", "archived")]:
             transition = await client.post(f"/api/v1/crm/campaigns/{campaign_id}/lifecycle", headers=headers, json={"action": action})
