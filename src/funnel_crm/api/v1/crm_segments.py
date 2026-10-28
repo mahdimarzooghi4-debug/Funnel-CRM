@@ -13,6 +13,8 @@ from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
     AuditEvent,
+    CRMCommunicationConsentEvent,
+    CRMContactPoint,
     CRMCustomerActivity,
     CRMProfile,
     CRMProfileSegment,
@@ -190,6 +192,19 @@ class CRMProfileSegmentPreview(BaseModel):
     items: list[CRMProfileSegmentMember]
     limit: int
     offset: int
+
+class CRMProfileSegmentChannelReach(BaseModel):
+    segment_id: UUID
+    purpose_key: str
+    channel: str
+    total_profiles: int
+    profiles_with_contact: int
+    profiles_with_verified_contact: int
+    profiles_with_granted_consent: int
+    eligible_profiles: int
+    withdrawn_consent_profiles: int
+    missing_or_withdrawn_consent_profiles: int
+    eligibility_basis: str
 
 
 def _criteria_filters(
@@ -486,37 +501,10 @@ async def deactivate_crm_profile_segment(
         await context.session.flush()
 
 
-@router.get(
-    "/{segment_id}/preview",
-    response_model=CRMProfileSegmentPreview,
-    operation_id="previewCRMProfileSegment",
-    summary="Preview live audience membership in authorized profile scope",
-)
-async def preview_crm_profile_segment(
-    segment_id: UUID,
-    context: TenantSessionContext = Depends(require_tenant_session),
-    limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-) -> CRMProfileSegmentPreview:
-    segment = await context.session.scalar(
-        select(CRMProfileSegment).where(
-            CRMProfileSegment.tenant_id == context.access.tenant_id,
-            CRMProfileSegment.id == segment_id,
-            CRMProfileSegment.organization_unit_id.in_(
-                crm_scope_ids(context, permission_key="crm.segment:view")
-            ),
-        )
-    )
-    if segment is None:
-        raise HTTPException(status_code=404, detail="CRM segment not found")
-    if not segment.is_active:
-        raise HTTPException(status_code=409, detail="Inactive CRM segments cannot be previewed")
-    await _require_permission(
-        context,
-        permission_key="crm.profile:view",
-        organization_unit_id=segment.organization_unit_id,
-    )
-
+async def _segment_member_filters(
+    context: TenantSessionContext,
+    segment: CRMProfileSegment,
+) -> list[object]:
     segment_units = (
         select(OrganizationUnit.id.label("id"))
         .where(
@@ -539,14 +527,14 @@ async def preview_crm_profile_segment(
         criteria, tenant_id=context.access.tenant_id,
         segment_units=segment_units, profile_scope=profile_scope,
     )
-    predicates = []
     has_base_filter = any((
         criteria.profile_kinds is not None,
         criteria.lifecycle_stages is not None,
         criteria.activity is not None,
     ))
+    include_predicates = []
     if has_base_filter:
-        predicates.append(select(CRMProfile.id).where(*base_filters))
+        include_predicates.append(select(CRMProfile.id).where(*base_filters))
     references = set(criteria.include_segment_ids or []) | set(criteria.exclude_segment_ids or [])
     referenced_segments = []
     if references:
@@ -560,7 +548,6 @@ async def preview_crm_profile_segment(
         )).all()
         if len(referenced_segments) != len(references):
             raise HTTPException(status_code=409, detail="A referenced segment is no longer active")
-    include_predicates = list(predicates)
     exclude_predicates = []
     for referenced in referenced_segments:
         referenced_criteria = CRMProfileSegmentCriteria.model_validate(referenced.criteria)
@@ -574,12 +561,12 @@ async def preview_crm_profile_segment(
             exclude_predicates.append(referenced_query)
     if not include_predicates:
         raise HTTPException(status_code=422, detail="At least one included segment or profile filter is required")
-    membership = CRMProfile.id.in_(include_predicates[0]) if len(include_predicates) == 1 else CRMProfile.id.in_(
-        select(CRMProfile.id).where(or_(*[
-            CRMProfile.id.in_(query) for query in include_predicates
-        ]))
+    membership = (
+        CRMProfile.id.in_(include_predicates[0])
+        if len(include_predicates) == 1
+        else or_(*[CRMProfile.id.in_(query) for query in include_predicates])
     )
-    filters = [
+    filters: list[object] = [
         CRMProfile.tenant_id == context.access.tenant_id,
         CRMProfile.organization_unit_id.in_(segment_units),
         CRMProfile.organization_unit_id.in_(profile_scope),
@@ -587,8 +574,130 @@ async def preview_crm_profile_segment(
         CRMProfile.archived_at.is_(None),
         membership,
     ]
-    for excluded in exclude_predicates:
-        filters.append(not_(CRMProfile.id.in_(excluded)))
+    filters.extend(not_(CRMProfile.id.in_(query)) for query in exclude_predicates)
+    return filters
+
+
+async def _load_active_segment(
+    context: TenantSessionContext,
+    segment_id: UUID,
+) -> CRMProfileSegment:
+    segment = await context.session.scalar(
+        select(CRMProfileSegment).where(
+            CRMProfileSegment.tenant_id == context.access.tenant_id,
+            CRMProfileSegment.id == segment_id,
+            CRMProfileSegment.organization_unit_id.in_(
+                crm_scope_ids(context, permission_key="crm.segment:view")
+            ),
+        )
+    )
+    if segment is None:
+        raise HTTPException(status_code=404, detail="CRM segment not found")
+    if not segment.is_active:
+        raise HTTPException(status_code=409, detail="Inactive CRM segments cannot be previewed")
+    await _require_permission(
+        context, permission_key="crm.profile:view",
+        organization_unit_id=segment.organization_unit_id,
+    )
+    return segment
+
+
+@router.get(
+    "/{segment_id}/reach",
+    response_model=CRMProfileSegmentChannelReach,
+    operation_id="reviewCRMProfileSegmentChannelReach",
+    summary="Estimate consent-eligible audience reach for one channel",
+)
+async def review_crm_profile_segment_channel_reach(
+    segment_id: UUID,
+    purpose_key: str = Query(pattern=r"^[a-z][a-z0-9_.-]{0,79}$"),
+    channel: Literal["email", "phone", "postal_address", "social_handle", "website"] = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CRMProfileSegmentChannelReach:
+    segment = await _load_active_segment(context, segment_id)
+    for permission in ("crm.communication_consent:view", "crm.contact_point:view"):
+        await _require_permission(
+            context, permission_key=permission,
+            organization_unit_id=segment.organization_unit_id,
+        )
+    filters = await _segment_member_filters(context, segment)
+    latest_decision = (
+        select(CRMCommunicationConsentEvent.decision)
+        .where(
+            CRMCommunicationConsentEvent.tenant_id == context.access.tenant_id,
+            CRMCommunicationConsentEvent.profile_id == CRMProfile.id,
+            CRMCommunicationConsentEvent.purpose_key == purpose_key,
+            CRMCommunicationConsentEvent.channel == channel,
+        )
+        .order_by(
+            CRMCommunicationConsentEvent.recorded_at.desc(),
+            CRMCommunicationConsentEvent.id.desc(),
+        )
+        .limit(1)
+        .scalar_subquery()
+    )
+    contact_exists = exists(select(1).where(
+        CRMContactPoint.tenant_id == context.access.tenant_id,
+        CRMContactPoint.profile_id == CRMProfile.id,
+        CRMContactPoint.channel == channel,
+        CRMContactPoint.verification_status != "invalid",
+    ))
+    verified_contact_exists = exists(select(1).where(
+        CRMContactPoint.tenant_id == context.access.tenant_id,
+        CRMContactPoint.profile_id == CRMProfile.id,
+        CRMContactPoint.channel == channel,
+        CRMContactPoint.verification_status == "verified",
+    ))
+    latest_granted = latest_decision == "granted"
+    count_statement = select(func.count()).select_from(CRMProfile).where(*filters)
+    total = int(await context.session.scalar(count_statement) or 0)
+    with_contact = int(await context.session.scalar(count_statement.where(contact_exists)) or 0)
+    verified = int(await context.session.scalar(count_statement.where(verified_contact_exists)) or 0)
+    granted = int(await context.session.scalar(count_statement.where(latest_granted)) or 0)
+    eligible = int(await context.session.scalar(
+        count_statement.where(verified_contact_exists, latest_granted)
+    ) or 0)
+    withdrawn = int(await context.session.scalar(
+        count_statement.where(latest_decision == "withdrawn")
+    ) or 0)
+    _audit(
+        context,
+        action_key="crm_profile_segment.channel_reach_reviewed",
+        segment=segment,
+        after_state={
+            "purpose_key": purpose_key, "channel": channel,
+            "total_profiles": total, "eligible_profiles": eligible,
+        },
+    )
+    await context.session.flush()
+    return CRMProfileSegmentChannelReach(
+        segment_id=segment.id, purpose_key=purpose_key, channel=channel,
+        total_profiles=total, profiles_with_contact=with_contact,
+        profiles_with_verified_contact=verified, profiles_with_granted_consent=granted,
+        eligible_profiles=eligible, withdrawn_consent_profiles=withdrawn,
+        missing_or_withdrawn_consent_profiles=total - granted,
+        eligibility_basis=(
+            "Eligible profiles have a verified contact point on the selected channel and an explicit latest granted consent "
+            "for the selected purpose. Missing consent is treated as not eligible."
+        ),
+    )
+
+
+@router.get(
+    "/{segment_id}/preview",
+    response_model=CRMProfileSegmentPreview,
+    operation_id="previewCRMProfileSegment",
+    summary="Preview live audience membership in authorized profile scope",
+)
+async def preview_crm_profile_segment(
+    segment_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> CRMProfileSegmentPreview:
+    segment = await _load_active_segment(context, segment_id)
+
+    filters = await _segment_member_filters(context, segment)
 
     total = int(
         await context.session.scalar(

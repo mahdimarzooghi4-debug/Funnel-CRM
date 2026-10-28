@@ -8,7 +8,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_segments import router
-from funnel_crm.platform.models import AuditEvent, CRMCustomerActivity, CRMProfile, CRMProfileSegment, Role, RoleAssignment, RolePermission, TenantRecord
+from funnel_crm.api.v1.crm_communication_consent import router as consent_router
+from funnel_crm.platform.models import (
+    AuditEvent, CRMContactPoint, CRMCustomerActivity,
+    CRMProfile, CRMProfileSegment, Role, RoleAssignment, RolePermission, TenantRecord,
+)
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
 
@@ -22,6 +26,7 @@ def make_app(session_factory: async_sessionmaker[AsyncSession], identity: Authen
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(consent_router, prefix="/api/v1")
     return app
 
 
@@ -86,8 +91,23 @@ async def test_saved_segment_previews_scoped_profiles_and_records_audit(
                 RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.profile:view"),
                 RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.segment:view"),
                 RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.segment:manage"),
+                RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.contact_point:view"),
+                RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.communication_consent:view"),
+                RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.communication_consent:record"),
             ]
         )
+        context.session.add(CRMContactPoint(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            profile_id=profile_id,
+            channel="email",
+            encrypted_value=b"x" * 29,
+            encryption_key_id="test-key",
+            fingerprint_key_id=None,
+            match_fingerprint=None,
+            verification_status="verified",
+            is_primary=True,
+        ))
         await context.session.flush()
 
     app = make_app(runtime_session_factory, identity)
@@ -113,6 +133,47 @@ async def test_saved_segment_previews_scoped_profiles_and_records_audit(
         assert preview.status_code == 200
         assert preview.json()["total"] == 1
         assert preview.json()["items"][0]["id"] == str(profile_id)
+
+        grant = await client.post(
+            f"/api/v1/crm/profiles/{profile_id}/communication-consents",
+            headers=headers,
+            json={
+                "purpose_key": "marketing",
+                "channel": "email",
+                "decision": "granted",
+                "policy_version": "v1",
+            },
+        )
+        assert grant.status_code == 201, grant.text
+        reach = await client.get(
+            f"/api/v1/crm/segments/{segment_id}/reach",
+            headers=headers,
+            params={"purpose_key": "marketing", "channel": "email"},
+        )
+        assert reach.status_code == 200, reach.text
+        assert reach.json()["total_profiles"] == 1
+        assert reach.json()["profiles_with_verified_contact"] == 1
+        assert reach.json()["eligible_profiles"] == 1
+
+        withdrawal = await client.post(
+            f"/api/v1/crm/profiles/{profile_id}/communication-consents",
+            headers=headers,
+            json={
+                "purpose_key": "marketing",
+                "channel": "email",
+                "decision": "withdrawn",
+                "policy_version": "v1",
+            },
+        )
+        assert withdrawal.status_code == 201, withdrawal.text
+        withdrawn_reach = await client.get(
+            f"/api/v1/crm/segments/{segment_id}/reach",
+            headers=headers,
+            params={"purpose_key": "marketing", "channel": "email"},
+        )
+        assert withdrawn_reach.status_code == 200, withdrawn_reach.text
+        assert withdrawn_reach.json()["eligible_profiles"] == 0
+        assert withdrawn_reach.json()["withdrawn_consent_profiles"] == 1
 
         updated = await client.patch(
             f"/api/v1/crm/segments/{segment_id}",
@@ -257,6 +318,7 @@ async def test_saved_segment_previews_scoped_profiles_and_records_audit(
             "crm_profile_segment.created",
             "crm_profile_segment.updated",
             "crm_profile_segment.previewed",
+            "crm_profile_segment.channel_reach_reviewed",
             "crm_profile_segment.deactivated",
         }
         await context.session.execute(
