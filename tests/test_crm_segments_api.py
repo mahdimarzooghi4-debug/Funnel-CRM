@@ -318,6 +318,7 @@ async def test_saved_segment_previews_scoped_profiles_and_records_audit(
             "crm_profile_segment.created",
             "crm_profile_segment.updated",
             "crm_profile_segment.previewed",
+            "crm_profile_segment.channel_reach_reviewed",
             "crm_profile_segment.deactivated",
         }
         await context.session.execute(
