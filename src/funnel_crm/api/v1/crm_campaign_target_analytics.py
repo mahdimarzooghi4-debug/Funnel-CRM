@@ -103,6 +103,20 @@ class CampaignTargetPortfolioGroup(BaseModel):
     commerce_outcomes_by_source_product: list[PortfolioCommerceSourceOutcome]
 
 
+class CampaignManagerSignal(BaseModel):
+    campaign_id: UUID
+    target_plan_id: UUID
+    metric_key: str
+    signal_type: Literal["measurement_gap", "target_gap"]
+    priority: Literal["medium", "high"]
+    target: int | Decimal
+    actual: int | Decimal | None
+    currency: str | None
+    observed_days: int
+    period_days: int
+    recommended_action: str
+
+
 class CampaignTargetPortfolioRead(BaseModel):
     period_start: date
     period_end: date
@@ -120,6 +134,9 @@ class CampaignTargetPortfolioRead(BaseModel):
     coverage_basis: str
     groups: list[CampaignTargetPortfolioGroup]
     campaigns: list[CampaignTargetPortfolioItem]
+    manager_signals: list[CampaignManagerSignal]
+    manager_signals_truncated: bool
+    manager_signals_basis: str
 
 
 def _metric_variances(
@@ -176,6 +193,45 @@ def _outcomes(
             counts[name][result.status] += 1
     return {name: TargetOutcomeCounts(**values) for name, values in sorted(counts.items())}
 
+
+
+def _manager_signals(items: list[CampaignTargetPortfolioItem]) -> list[CampaignManagerSignal]:
+    signals: list[CampaignManagerSignal] = []
+    for item in items:
+        for key, metric in item.metrics.items():
+            if metric.observed_days < metric.period_days:
+                signals.append(CampaignManagerSignal(
+                    campaign_id=item.campaign_id,
+                    target_plan_id=item.target_plan_id,
+                    metric_key=key,
+                    signal_type="measurement_gap",
+                    priority="medium",
+                    target=metric.target,
+                    actual=metric.actual,
+                    currency=metric.currency,
+                    observed_days=metric.observed_days,
+                    period_days=metric.period_days,
+                    recommended_action="Complete or verify measurement coverage before making a campaign decision.",
+                ))
+            elif metric.status == "not_met":
+                signals.append(CampaignManagerSignal(
+                    campaign_id=item.campaign_id,
+                    target_plan_id=item.target_plan_id,
+                    metric_key=key,
+                    signal_type="target_gap",
+                    priority="high",
+                    target=metric.target,
+                    actual=metric.actual,
+                    currency=metric.currency,
+                    observed_days=metric.observed_days,
+                    period_days=metric.period_days,
+                    recommended_action="Review the campaign's audience, offer, channel, and spend before changing its plan.",
+                ))
+    signals.sort(key=lambda signal: (
+        0 if signal.priority == "high" else 1,
+        signal.metric_key, str(signal.campaign_id), str(signal.target_plan_id),
+    ))
+    return signals
 
 def _campaign_commerce_outcomes(
     measurements: list[CRMMarketingCampaignMeasurement],
@@ -553,6 +609,8 @@ async def review_campaign_target_portfolio(
             if definition is not None:
                 metric_definitions[key] = definition
 
+    signals = _manager_signals(items)
+    signals_truncated = len(signals) > 1000
     return CampaignTargetPortfolioRead(
         period_start=period_start,
         period_end=period_end,
@@ -581,4 +639,10 @@ async def review_campaign_target_portfolio(
         ),
         groups=groups,
         campaigns=items,
+        manager_signals=signals[:1000],
+        manager_signals_truncated=signals_truncated,
+        manager_signals_basis=(
+            "Rule-based review prompts derived from target attainment and day coverage. "
+            "Signals do not establish causality or automatically change campaigns."
+        ),
     )
