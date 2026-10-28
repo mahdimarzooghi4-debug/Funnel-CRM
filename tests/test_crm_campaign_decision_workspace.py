@@ -387,6 +387,15 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert financial_by_currency["USD"]["net_paid_amount"] == "110.000000"
     assert financial_by_currency["EUR"]["recorded_spend_amount"] == "10.000000"
     assert financial_by_currency["EUR"]["net_paid_amount"] == "6.000000"
+    source_product_outcomes = {
+        (row["source_product"], row["currency"]): row
+        for row in queue["summary"]["source_product_outcomes"]
+    }
+    assert source_product_outcomes[("funnel.store", "USD")]["net_paid_amount"] == "70.000000"
+    assert source_product_outcomes[("funnel.store", "USD")]["paid_amount_share_percent"] == "66.67"
+    assert source_product_outcomes[("funnel.store", "USD")]["refunded_amount_share_percent"] == "100.00"
+    assert source_product_outcomes[("funnel.marketplace", "USD")]["paid_amount_share_percent"] == "33.33"
+    assert source_product_outcomes[("funnel.store", "EUR")]["paid_amount_share_percent"] == "100.00"
     assert queue["automatic_recommendation_issued"] is False
     assert ranked_page["total_count"] == 2
     assert ranked_page["has_more"] is True
@@ -494,6 +503,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         assert len(restricted_financial) == 2
         assert all(row["paid_event_count"] == 0 for row in restricted_financial)
         assert all(row["refund_event_count"] == 0 for row in restricted_financial)
+        assert restricted_queue_response.json()["summary"]["source_product_outcomes"] == []
         assert restricted_item["open_learning_action_count"] is None
         assert restricted_item["completed_learning_action_count"] is None
         assert restricted_item["tracked_learning_action_count"] is None
