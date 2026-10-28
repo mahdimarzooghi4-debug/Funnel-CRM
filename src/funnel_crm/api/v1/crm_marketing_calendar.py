@@ -28,10 +28,23 @@ class MarketingCalendarEvent(BaseModel):
     end_date: date
     status: str
     campaign_id: UUID | None
+    segment_id: UUID | None
     channel: str | None
     objective_key: str | None
     priority: str | None
     assigned_membership_id: UUID | None
+
+
+class CampaignScheduleConflict(BaseModel):
+    campaign_id: UUID
+    campaign_name: str
+    conflicting_campaign_id: UUID
+    conflicting_campaign_name: str
+    segment_id: UUID
+    channel: str
+    overlap_start: date
+    overlap_end: date
+    reason: str
 
 
 class MarketingCalendarResponse(BaseModel):
@@ -40,6 +53,7 @@ class MarketingCalendarResponse(BaseModel):
     organization_unit_id: UUID | None
     visible_sources: list[Literal["campaigns", "work_items"]]
     events: list[MarketingCalendarEvent]
+    schedule_conflicts: list[CampaignScheduleConflict]
     has_more: bool
     basis: str
 
@@ -86,6 +100,7 @@ async def get_marketing_calendar_events(
             select(CRMMarketingCampaign).where(
                 CRMMarketingCampaign.tenant_id == tenant_id,
                 CRMMarketingCampaign.organization_unit_id.in_(campaign_units),
+                CRMMarketingCampaign.status == "draft",
                 CRMMarketingCampaign.starts_at.is_not(None),
                 CRMMarketingCampaign.starts_at < end_at,
                 or_(CRMMarketingCampaign.ends_at.is_(None), CRMMarketingCampaign.ends_at >= start_at),
@@ -103,6 +118,7 @@ async def get_marketing_calendar_events(
                 end_date=(campaign.ends_at or campaign.starts_at).date(),
                 status=campaign.status,
                 campaign_id=campaign.id,
+                segment_id=campaign.segment_id,
                 channel=campaign.channel,
                 objective_key=campaign.objective_key,
                 priority=None,
@@ -131,6 +147,7 @@ async def get_marketing_calendar_events(
                 end_date=item.due_at.date(),
                 status=item.status,
                 campaign_id=item.campaign_id,
+                segment_id=None,
                 channel=None,
                 objective_key=None,
                 priority=item.priority,
@@ -141,6 +158,27 @@ async def get_marketing_calendar_events(
     if len(events) > limit:
         has_more = True
         events = events[:limit]
+
+    campaign_events = [event for event in events if event.kind == "campaign"]
+    schedule_conflicts: list[CampaignScheduleConflict] = []
+    for index, left in enumerate(campaign_events):
+        for right in campaign_events[index + 1:]:
+            if left.segment_id is None or left.segment_id != right.segment_id or left.channel != right.channel:
+                continue
+            overlap_start = max(left.start_date, right.start_date)
+            overlap_end = min(left.end_date, right.end_date)
+            if overlap_start <= overlap_end:
+                schedule_conflicts.append(CampaignScheduleConflict(
+                    campaign_id=left.id,
+                    campaign_name=left.title,
+                    conflicting_campaign_id=right.id,
+                    conflicting_campaign_name=right.title,
+                    segment_id=left.segment_id,
+                    channel=left.channel or "",
+                    overlap_start=overlap_start,
+                    overlap_end=overlap_end,
+                    reason="Campaign schedules overlap for the same audience segment and channel; review for possible coordination or audience fatigue.",
+                ))
     visible_sources: list[Literal["campaigns", "work_items"]] = []
     if campaign_units:
         visible_sources.append("campaigns")
@@ -152,6 +190,7 @@ async def get_marketing_calendar_events(
         organization_unit_id=organization_unit_id,
         visible_sources=visible_sources,
         events=events,
+        schedule_conflicts=schedule_conflicts,
         has_more=has_more,
-        basis="Campaign dates show their planned schedule; work items appear on due dates. Visibility follows campaign and work-item permissions independently.",
+        basis="Campaign dates show draft schedules; work items appear on due dates. Schedule conflicts flag overlapping campaigns for the same audience segment and channel, not predicted outcomes. Visibility follows campaign and work-item permissions independently.",
     )

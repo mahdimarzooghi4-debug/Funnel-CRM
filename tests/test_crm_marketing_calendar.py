@@ -46,7 +46,7 @@ async def test_marketing_calendar_combines_scoped_campaigns_and_work_items(
     assert isinstance(root_id, UUID)
     assert isinstance(identity, AuthenticatedIdentity)
 
-    segment_id, campaign_id = uuid4(), uuid4()
+    segment_id, campaign_id, overlapping_campaign_id = uuid4(), uuid4(), uuid4()
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
@@ -72,6 +72,13 @@ async def test_marketing_calendar_combines_scoped_campaigns_and_work_items(
             channel="store", planned_budget_amount=None, planned_budget_currency=None,
             starts_at=datetime(2026, 10, 20, 9, tzinfo=timezone.utc),
             ends_at=datetime(2026, 10, 22, 18, tzinfo=timezone.utc), status="draft",
+        ))
+        context.session.add(CRMMarketingCampaign(
+            id=overlapping_campaign_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            segment_id=segment_id, name="October retargeting", objective_key="retention",
+            channel="store", planned_budget_amount=None, planned_budget_currency=None,
+            starts_at=datetime(2026, 10, 21, 8, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 10, 23, 18, tzinfo=timezone.utc), status="draft",
         ))
         context.session.add(CRMWorkItem(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
@@ -100,12 +107,20 @@ async def test_marketing_calendar_combines_scoped_campaigns_and_work_items(
         assert result["visible_sources"] == ["campaigns", "work_items"]
         assert [(item["kind"], item["title"]) for item in result["events"]] == [
             ("campaign", "October launch"),
+            ("campaign", "October retargeting"),
             ("work_item", "Prepare store launch materials"),
         ]
+        assert len(result["schedule_conflicts"]) == 1
+        conflict = result["schedule_conflicts"][0]
+        assert conflict["campaign_name"] == "October launch"
+        assert conflict["conflicting_campaign_name"] == "October retargeting"
+        assert conflict["overlap_start"] == "2026-10-21"
+        assert conflict["overlap_end"] == "2026-10-22"
         assert result["events"][0]["channel"] == "store"
         assert result["events"][0]["end_date"] == "2026-10-22"
-        assert result["events"][1]["priority"] == "high"
-        assert result["events"][1]["campaign_id"] == str(campaign_id)
+        work_item_event = next(item for item in result["events"] if item["kind"] == "work_item")
+        assert work_item_event["priority"] == "high"
+        assert work_item_event["campaign_id"] == str(campaign_id)
         assert result["has_more"] is False
 
         invalid_range = await client.get(
