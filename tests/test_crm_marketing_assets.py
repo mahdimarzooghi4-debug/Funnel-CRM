@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_marketing_assets import router
+from funnel_crm.api.v1.crm_campaigns import router as campaigns_router
 from funnel_crm.api.v1.crm_campaign_readiness import router as readiness_router
 from funnel_crm.platform.models import CRMMarketingCampaign, CRMProfileSegment, Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
@@ -25,6 +26,7 @@ def make_app(
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(campaigns_router, prefix="/api/v1")
     app.include_router(readiness_router, prefix="/api/v1")
     return app
 
@@ -60,6 +62,7 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
             ),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.segment:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:view"),
         ])
         context.session.add(CRMMarketingCampaign(
@@ -162,6 +165,11 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
         assert readiness_approved.json()["launch_readiness"] == "ready_for_manager_review"
         assert readiness_approved.json()["asset_counts"]["approved"] == 1
         assert all(item["status"] == "complete" for item in readiness_approved.json()["checks"])
+
+        for action, expected in [("schedule", "scheduled"), ("launch", "active"), ("pause", "paused"), ("resume", "active"), ("complete", "completed"), ("archive", "archived")]:
+            transition = await client.post(f"/api/v1/crm/campaigns/{campaign_id}/lifecycle", headers=headers, json={"action": action})
+            assert transition.status_code == 200, transition.text
+            assert transition.json()["status"] == expected
 
         immutable = await client.patch(
             f"/api/v1/crm/marketing-assets/{asset_id}",
