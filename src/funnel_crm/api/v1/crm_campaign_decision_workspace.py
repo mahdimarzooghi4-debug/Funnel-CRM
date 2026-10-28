@@ -222,6 +222,20 @@ class CampaignPortfolioCurrencyOutcome(BaseModel):
     net_paid_amount: Decimal
 
 
+class CampaignPortfolioSourceProductOutcome(BaseModel):
+    source_product: str
+    currency: str
+    paid_event_count: int
+    paid_order_count: int
+    paid_amount: Decimal
+    paid_amount_share_percent: Decimal | None
+    refund_event_count: int
+    refunded_order_count: int
+    refunded_amount: Decimal
+    refunded_amount_share_percent: Decimal | None
+    net_paid_amount: Decimal
+
+
 class CampaignDecisionQueueSummary(BaseModel):
     total_count: int
     campaign_count: int
@@ -231,6 +245,7 @@ class CampaignDecisionQueueSummary(BaseModel):
     financial_period_basis: str
     commerce_scope_status: Literal["complete", "partial", "not_authorized"]
     financial_outcomes_by_currency: list[CampaignPortfolioCurrencyOutcome]
+    source_product_outcomes: list[CampaignPortfolioSourceProductOutcome]
 
 
 class CampaignPortfolioDecisionQueue(BaseModel):
@@ -630,6 +645,7 @@ async def get_campaign_portfolio_decision_queue(
         item for item in items
         if item.organization_unit_id in commerce_allowed_units
     ]
+    source_product_financials: dict[tuple[str, str], dict[str, object]] = {}
     if authorized_windows:
         commerce_windows = [
             and_(
@@ -650,7 +666,7 @@ async def get_campaign_portfolio_decision_queue(
                 or_(*commerce_windows),
             )
         )).all()
-        order_references: dict[str, dict[str, set[tuple[str, str]]]] = {}
+        order_references: dict[tuple[str, str], dict[str, set[tuple[str, str]]]] = {}
         for event in events:
             state = financial_by_currency.setdefault(
                 event.currency,
@@ -665,21 +681,63 @@ async def get_campaign_portfolio_decision_queue(
                     "refunded_amount": Decimal("0"),
                 },
             )
+            source_state = source_product_financials.setdefault(
+                (event.source_product, event.currency),
+                {
+                    "paid_event_count": 0, "paid_amount": Decimal("0"),
+                    "refund_event_count": 0, "refunded_amount": Decimal("0"),
+                },
+            )
+            kinds = order_references.setdefault(
+                (event.source_product, event.currency),
+                {"paid": set(), "refunded": set()},
+            )
             if event.event_kind == "paid":
                 state["paid_event_count"] += 1
                 state["paid_amount"] += event.amount
-                order_references.setdefault(event.currency, {}).setdefault(
-                    "paid", set()
-                ).add((event.source_product, event.order_reference))
+                source_state["paid_event_count"] += 1
+                source_state["paid_amount"] += event.amount
+                kinds["paid"].add((event.source_product, event.order_reference))
             else:
                 state["refund_event_count"] += 1
                 state["refunded_amount"] += event.amount
-                order_references.setdefault(event.currency, {}).setdefault(
-                    "refunded", set()
-                ).add((event.source_product, event.order_reference))
-        for currency, kinds in order_references.items():
-            financial_by_currency[currency]["paid_order_count"] = len(kinds.get("paid", set()))
-            financial_by_currency[currency]["refunded_order_count"] = len(kinds.get("refunded", set()))
+                source_state["refund_event_count"] += 1
+                source_state["refunded_amount"] += event.amount
+                kinds["refunded"].add((event.source_product, event.order_reference))
+        for (source_product, currency), kinds in order_references.items():
+            paid_orders = len(kinds["paid"])
+            refunded_orders = len(kinds["refunded"])
+            source_product_financials[(source_product, currency)]["paid_order_count"] = paid_orders
+            source_product_financials[(source_product, currency)]["refunded_order_count"] = refunded_orders
+            financial_by_currency[currency]["paid_order_count"] += paid_orders
+            financial_by_currency[currency]["refunded_order_count"] += refunded_orders
+
+    source_product_outcomes = []
+    for (source_product, currency), state in sorted(source_product_financials.items()):
+        currency_total = financial_by_currency[currency]
+        total_paid = currency_total["paid_amount"]
+        total_refunded = currency_total["refunded_amount"]
+        paid_amount = state["paid_amount"]
+        refunded_amount = state["refunded_amount"]
+        source_product_outcomes.append(CampaignPortfolioSourceProductOutcome(
+            source_product=source_product,
+            currency=currency,
+            paid_event_count=int(state["paid_event_count"]),
+            paid_order_count=int(state["paid_order_count"]),
+            paid_amount=paid_amount,
+            paid_amount_share_percent=(
+                (paid_amount * Decimal("100") / total_paid).quantize(Decimal("0.01"))
+                if total_paid else None
+            ),
+            refund_event_count=int(state["refund_event_count"]),
+            refunded_order_count=int(state["refunded_order_count"]),
+            refunded_amount=refunded_amount,
+            refunded_amount_share_percent=(
+                (refunded_amount * Decimal("100") / total_refunded).quantize(Decimal("0.01"))
+                if total_refunded else None
+            ),
+            net_paid_amount=paid_amount - refunded_amount,
+        ))
 
     authorized_window_count = len(authorized_windows)
     commerce_scope_status = (
@@ -716,6 +774,7 @@ async def get_campaign_portfolio_decision_queue(
         ),
         commerce_scope_status=commerce_scope_status,
         financial_outcomes_by_currency=financial_outcomes,
+        source_product_outcomes=source_product_outcomes,
     )
     page_items = items[offset:offset + limit]
     context.session.add(AuditEvent(
