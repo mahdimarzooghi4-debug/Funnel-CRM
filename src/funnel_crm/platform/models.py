@@ -927,6 +927,93 @@ class CRMMarketingBudgetScenarioLine(Base):
     planned_budget_currency: Mapped[str] = mapped_column(String(3), nullable=False)
 
 
+class CRMMarketingCampaignAsset(Base):
+    """A reusable or campaign-linked marketing asset with review state."""
+
+    __tablename__ = "crm_marketing_campaign_assets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_campaign_assets_tenant_id"),
+        CheckConstraint("length(trim(title)) BETWEEN 1 AND 160", name="ck_crm_marketing_campaign_assets_title"),
+        CheckConstraint(
+            "channel IN ('email', 'phone', 'messaging', 'social', 'web', 'store', 'field', 'other')",
+            name="ck_crm_marketing_campaign_assets_channel",
+        ),
+        CheckConstraint(
+            "asset_kind IN ('copy', 'image', 'video', 'landing_page', 'document', 'other')",
+            name="ck_crm_marketing_campaign_assets_kind",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'in_review', 'approved', 'rejected', 'retired')",
+            name="ck_crm_marketing_campaign_assets_status",
+        ),
+        CheckConstraint(
+            "body IS NOT NULL OR external_url IS NOT NULL",
+            name="ck_crm_marketing_campaign_assets_content",
+        ),
+        CheckConstraint(
+            "locale IS NULL OR locale ~ '^[a-z]{2}(-[A-Z]{2})?$'",
+            name="ck_crm_marketing_campaign_assets_locale",
+        ),
+        CheckConstraint(
+            "(status IN ('approved', 'rejected') AND reviewed_by_membership_id IS NOT NULL AND reviewed_at IS NOT NULL) OR "
+            "(status NOT IN ('approved', 'rejected') AND reviewed_by_membership_id IS NULL AND reviewed_at IS NULL)",
+            name="ck_crm_marketing_campaign_assets_review_state",
+        ),
+        CheckConstraint(
+            "status <> 'rejected' OR review_note IS NOT NULL",
+            name="ck_crm_marketing_campaign_assets_rejection_note",
+        ),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_campaign_assets_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_marketing_campaign_assets_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_marketing_campaign_assets_campaign_same_org", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_marketing_campaign_assets_creator_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "reviewed_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_marketing_campaign_assets_reviewer_same_tenant", ondelete="RESTRICT"),
+        Index(
+            "ix_crm_marketing_campaign_assets_tenant_org_status",
+            "tenant_id", "organization_unit_id", "status",
+        ),
+        Index(
+            "ix_crm_marketing_campaign_assets_tenant_campaign",
+            "tenant_id", "campaign_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    asset_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    body: Mapped[str | None] = mapped_column(String(12000), nullable=True)
+    external_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    locale: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    reviewed_by_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
 class CRMMarketingCampaignMeasurement(Base):
     """Externally recorded daily metrics for a planned marketing campaign."""
 
