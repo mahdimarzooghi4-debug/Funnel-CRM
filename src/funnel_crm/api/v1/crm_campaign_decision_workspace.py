@@ -241,7 +241,6 @@ async def get_campaign_portfolio_decision_queue(
         .where(*filters)
         .order_by(CRMMarketingCampaignTargetPlan.period_end, CRMMarketingCampaign.name,
                   CRMMarketingCampaignTargetPlan.id)
-        .limit(limit).offset(offset)
     )).all()
     items = []
     for plan, campaign_name in rows:
@@ -468,6 +467,7 @@ async def get_campaign_portfolio_decision_queue(
         not bool(item.attention_reasons), -len(item.attention_reasons),
         item.period_end, item.campaign_name, str(item.target_plan_id),
     ))
+    page_items = items[offset:offset + limit]
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id,
         actor_kind="user",
@@ -479,7 +479,7 @@ async def get_campaign_portfolio_decision_queue(
         organization_unit_id=organization_unit_id,
         before_state=None,
         after_state={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
-                     "total_count": total, "returned_count": len(items), "offset": offset, "limit": limit},
+                     "total_count": total, "returned_count": len(page_items), "offset": offset, "limit": limit},
         correlation_id=None,
     ))
     await context.session.flush()
@@ -487,9 +487,9 @@ async def get_campaign_portfolio_decision_queue(
         generated_at=datetime.now(timezone.utc),
         period_start=period_start,
         period_end=period_end,
-        items=items,
+        items=page_items,
         total_count=total,
-        has_more=offset + len(items) < total,
+        has_more=offset + len(page_items) < total,
         basis=("Target plan evaluations, recorded-day coverage, and linked paid/refunded outcomes by "
                "currency; no causal attribution, source-specific spend allocation, or automatic action is applied."),
         automatic_recommendation_issued=False,
