@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import exists, func, select
 
@@ -48,6 +48,100 @@ class CampaignReadinessResponse(BaseModel):
     work_item_data_visible: bool
     generated_at: datetime
     basis: str
+
+
+class CampaignReadinessPortfolioResponse(BaseModel):
+    organization_unit_id: UUID | None
+    generated_at: datetime
+    total_draft_campaigns: int
+    limit: int
+    offset: int
+    has_more: bool
+    ready_for_manager_review_count: int
+    needs_attention_count: int
+    attention_by_check: dict[str, int]
+    items: list[CampaignReadinessResponse]
+
+
+
+
+@router.get(
+    "/readiness-portfolio",
+    response_model=CampaignReadinessPortfolioResponse,
+    operation_id="reviewCRMCampaignReadinessPortfolio",
+)
+async def review_campaign_readiness_portfolio(
+    context: TenantSessionContext = Depends(require_tenant_session),
+    organization_unit_id: UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> CampaignReadinessPortfolioResponse:
+    permitted_scopes = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.campaign:view")
+    )).all())
+    if organization_unit_id is not None and organization_unit_id not in permitted_scopes:
+        raise HTTPException(status_code=403, detail="Campaign readiness is not authorized for this organization scope")
+    filters = [
+        CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+        CRMMarketingCampaign.organization_unit_id.in_(permitted_scopes),
+        CRMMarketingCampaign.status == "draft",
+    ]
+    if organization_unit_id is not None:
+        filters.append(CRMMarketingCampaign.organization_unit_id == organization_unit_id)
+    total = int(await context.session.scalar(
+        select(func.count()).select_from(CRMMarketingCampaign).where(*filters)
+    ) or 0)
+    campaign_ids = (await context.session.scalars(
+        select(CRMMarketingCampaign.id).where(*filters)
+        .order_by(CRMMarketingCampaign.starts_at.asc().nulls_last(),
+                  CRMMarketingCampaign.name, CRMMarketingCampaign.id)
+        .limit(limit).offset(offset)
+    )).all()
+    items = [
+        await get_campaign_readiness(campaign_id=campaign_id, context=context)
+        for campaign_id in campaign_ids
+    ]
+    attention_by_check: dict[str, int] = {}
+    for item in items:
+        for check in item.checks:
+            if check.status not in {"complete"}:
+                attention_by_check[check.key] = attention_by_check.get(check.key, 0) + 1
+    ready_count = sum(
+        item.launch_readiness == "ready_for_manager_review" for item in items
+    )
+    needs_attention_count = len(items) - ready_count
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign_readiness_portfolio.reviewed",
+        target_type="crm_marketing_campaign_readiness_portfolio",
+        target_key=f"{organization_unit_id or 'all'}:{offset}",
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "total_draft_campaigns": total,
+            "page_size": len(items),
+            "offset": offset,
+            "ready_for_manager_review_count": ready_count,
+            "needs_attention_count": needs_attention_count,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignReadinessPortfolioResponse(
+        organization_unit_id=organization_unit_id,
+        generated_at=datetime.now(timezone.utc),
+        total_draft_campaigns=total,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(items) < total,
+        ready_for_manager_review_count=ready_count,
+        needs_attention_count=needs_attention_count,
+        attention_by_check=attention_by_check,
+        items=items,
+    )
 
 
 @router.get(
