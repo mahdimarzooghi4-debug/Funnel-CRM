@@ -345,6 +345,18 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["summary"]["metric_status_counts"]["clicks"] == {
         "met": 0, "not_met": 1, "no_data": 0
     }
+    assert queue["summary"]["commerce_scope_status"] == "complete"
+    assert "union of the filtered target-plan date windows" in queue["summary"]["financial_period_basis"]
+    financial_by_currency = {
+        row["currency"]: row
+        for row in queue["summary"]["financial_outcomes_by_currency"]
+    }
+    assert financial_by_currency["USD"]["recorded_spend_amount"] == "60.000000"
+    assert financial_by_currency["USD"]["paid_amount"] == "120.000000"
+    assert financial_by_currency["USD"]["refunded_amount"] == "10.000000"
+    assert financial_by_currency["USD"]["net_paid_amount"] == "110.000000"
+    assert financial_by_currency["EUR"]["recorded_spend_amount"] == "10.000000"
+    assert financial_by_currency["EUR"]["net_paid_amount"] == "6.000000"
     assert queue["automatic_recommendation_issued"] is False
     assert ranked_page["total_count"] == 2
     assert ranked_page["has_more"] is True
@@ -447,6 +459,8 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         restricted_item = restricted_queue_response.json()["items"][0]
         assert restricted_item["commerce_outcomes_by_currency"] == []
         assert restricted_item["commerce_data_status"] == "not_authorized"
+        assert restricted_queue_response.json()["summary"]["commerce_scope_status"] == "not_authorized"
+        assert restricted_queue_response.json()["summary"]["financial_outcomes_by_currency"] == []
         assert restricted_item["open_learning_action_count"] is None
         assert restricted_item["completed_learning_action_count"] is None
         assert restricted_item["tracked_learning_action_count"] is None
