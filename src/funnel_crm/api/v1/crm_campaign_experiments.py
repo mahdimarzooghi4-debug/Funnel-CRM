@@ -66,6 +66,39 @@ class GuardrailMetricWrite(BaseModel):
         return self
 
 
+class CampaignExperimentDecisionWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["adopt_variant", "keep_control", "retest", "stop"]
+    selected_variant_campaign_id: UUID | None = None
+    rationale: str = Field(min_length=1, max_length=2000)
+    next_action: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("rationale")
+    @classmethod
+    def normalize_rationale(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("rationale must contain a non-whitespace character")
+        return value
+
+    @field_validator("next_action")
+    @classmethod
+    def normalize_next_action(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("next_action must be omitted or contain text")
+        return value
+
+    @model_validator(mode="after")
+    def validate_selected_variant(self):
+        if (self.decision == "adopt_variant") != (self.selected_variant_campaign_id is not None):
+            raise ValueError("selected_variant_campaign_id is required only when adopting a variant")
+        return self
+
+
 class CampaignExperimentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -130,6 +163,7 @@ class CampaignExperimentRead(BaseModel):
     allocation_method: str
     known_limitations: str | None
     audience_snapshot: dict[str, Any] | None
+    decision: dict[str, Any] | None = None
     period_start: date
     period_end: date
     created_at: datetime
@@ -898,6 +932,55 @@ async def list_campaign_experiments(
             ],
         ))
     return result
+
+
+@router.put("/{experiment_id}/decision", response_model=CampaignExperimentRead,
+            operation_id="recordCRMMarketingCampaignExperimentDecision")
+async def record_campaign_experiment_decision(
+    experiment_id: UUID,
+    payload: CampaignExperimentDecisionWrite,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignExperimentRead:
+    experiment = await context.session.scalar(
+        select(CRMMarketingCampaignExperiment).where(
+            CRMMarketingCampaignExperiment.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaignExperiment.id == experiment_id,
+        )
+    )
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Campaign experiment not found")
+    await _require_permission(context, "crm.campaign:manage", experiment.organization_unit_id)
+    if payload.selected_variant_campaign_id is not None:
+        selected_variant = await context.session.scalar(
+            select(CRMMarketingCampaignExperimentVariant.id).where(
+                CRMMarketingCampaignExperimentVariant.tenant_id == context.access.tenant_id,
+                CRMMarketingCampaignExperimentVariant.organization_unit_id == experiment.organization_unit_id,
+                CRMMarketingCampaignExperimentVariant.experiment_id == experiment.id,
+                CRMMarketingCampaignExperimentVariant.campaign_id == payload.selected_variant_campaign_id,
+            )
+        )
+        if selected_variant is None:
+            raise HTTPException(status_code=422, detail="Selected campaign is not a variant in this experiment")
+    before = experiment.decision
+    after = {
+        **payload.model_dump(mode="json"),
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    experiment.decision = after
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user", actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign_experiment.decision_recorded",
+        target_type="crm_marketing_campaign_experiment",
+        target_key=str(experiment.id),
+        organization_unit_id=experiment.organization_unit_id,
+        before_state=before,
+        after_state=after,
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignExperimentRead.model_validate(experiment)
 
 
 @router.get("/{experiment_id}/readout", response_model=CampaignExperimentReadout,
