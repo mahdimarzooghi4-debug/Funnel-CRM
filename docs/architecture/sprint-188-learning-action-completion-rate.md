@@ -5,3 +5,5 @@ The campaign decision queue now reports the percentage of target-plan learning a
 `completed / (completed + open or in-progress) × 100`
 
 The value is `null` when the viewer lacks work-item visibility or when the target plan has no tracked actions. It describes follow-through only; it does not assess whether an action improved campaign results.
+
+The queue also exposes the tracked action count used as the percentage denominator, so managers can read the rate with its sample size.
