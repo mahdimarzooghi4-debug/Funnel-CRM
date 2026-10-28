@@ -22,6 +22,7 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaignMeasurement,
     CRMProductCommerceEvent,
     CRMProfileSegment,
+    CRMWorkItem,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -73,6 +74,7 @@ class CampaignExperimentDecisionWrite(BaseModel):
     selected_variant_campaign_id: UUID | None = None
     rationale: str = Field(min_length=1, max_length=2000)
     next_action: str | None = Field(default=None, max_length=1000)
+    follow_up_work_item_id: UUID | None = None
 
     @field_validator("rationale")
     @classmethod
@@ -961,6 +963,23 @@ async def record_campaign_experiment_decision(
         )
         if selected_variant is None:
             raise HTTPException(status_code=422, detail="Selected campaign is not a variant in this experiment")
+    if payload.follow_up_work_item_id is not None:
+        await _require_permission(context, "crm.work_item:view", experiment.organization_unit_id)
+        variant_campaign_ids = select(CRMMarketingCampaignExperimentVariant.campaign_id).where(
+            CRMMarketingCampaignExperimentVariant.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaignExperimentVariant.organization_unit_id == experiment.organization_unit_id,
+            CRMMarketingCampaignExperimentVariant.experiment_id == experiment.id,
+        )
+        linked_work_item = await context.session.scalar(
+            select(CRMWorkItem.id).where(
+                CRMWorkItem.tenant_id == context.access.tenant_id,
+                CRMWorkItem.organization_unit_id == experiment.organization_unit_id,
+                CRMWorkItem.id == payload.follow_up_work_item_id,
+                CRMWorkItem.campaign_id.in_(variant_campaign_ids),
+            )
+        )
+        if linked_work_item is None:
+            raise HTTPException(status_code=422, detail="Follow-up work item must belong to an experiment campaign in the same organization")
     before = experiment.decision
     after = {
         **payload.model_dump(mode="json"),
