@@ -273,6 +273,15 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert report["metric_outcomes"]["clicks"] == {
             "evaluated": 1, "met": 0, "not_met": 1, "no_data": 0,
         }
+        assert any(
+            signal["metric_key"] == "clicks" and signal["signal_type"] == "target_gap"
+            for signal in report["manager_signals"]
+        )
+        assert any(
+            signal["signal_type"] == "measurement_gap" and signal["observed_days"] < signal["period_days"]
+            for signal in report["manager_signals"]
+        )
+        assert "do not establish causality" in report["manager_signals_basis"]
         assert report["groups"][0]["key"] == "web"
         assert report["metric_variances"]["leads"] == {
             "targeted_campaign_count": 3,
