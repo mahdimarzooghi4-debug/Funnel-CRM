@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_metric_catalog import MetricDefinition, get_metric_definition
@@ -24,6 +24,8 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaignMeasurement,
     CRMMarketingCampaignTargetPlan,
     CRMProductCommerceEvent,
+    CRMWorkItem,
+    CRMWorkItemCampaignSignalOutcome,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -645,4 +647,157 @@ async def review_campaign_target_portfolio(
             "Rule-based review prompts derived from target attainment and day coverage. "
             "Signals do not establish causality or automatically change campaigns."
         ),
+    )
+
+
+
+class CampaignSignalOutcomePortfolioItem(BaseModel):
+    outcome_id: UUID
+    work_item_id: UUID
+    campaign_id: UUID
+    campaign_name: str
+    organization_unit_id: UUID
+    metric_key: str
+    signal_type: Literal["measurement_gap", "target_gap"]
+    decision_key: Literal["adjusted", "data_corrected", "no_change", "escalated", "other"]
+    notes: str
+    metric_actual: str | None
+    metric_target: str
+    metric_status: Literal["met", "not_met", "no_data"]
+    observed_days: int
+    period_days: int
+    recorded_by_membership_id: UUID
+    occurred_at: datetime
+
+
+class CampaignSignalOutcomePortfolioRead(BaseModel):
+    period_start: date
+    period_end: date
+    organization_unit_id: UUID | None
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+    outcomes_by_decision: dict[str, int]
+    outcomes_by_metric: dict[str, int]
+    items: list[CampaignSignalOutcomePortfolioItem]
+    basis: str
+
+
+@router.get(
+    "/follow-up-outcomes",
+    response_model=CampaignSignalOutcomePortfolioRead,
+    operation_id="reviewCRMCampaignSignalFollowUpOutcomes",
+)
+async def review_campaign_signal_follow_up_outcomes(
+    period_start: date,
+    period_end: date,
+    context: TenantSessionContext = Depends(require_tenant_session),
+    organization_unit_id: UUID | None = None,
+    campaign_id: UUID | None = None,
+    decision_key: Literal["adjusted", "data_corrected", "no_change", "escalated", "other"] | None = None,
+    metric_key: str | None = Query(default=None, min_length=1, max_length=80),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> CampaignSignalOutcomePortfolioRead:
+    if period_start > period_end or (period_end - period_start).days >= 366:
+        raise HTTPException(status_code=422, detail="Period must be ordered and no longer than 366 days")
+
+    campaign_scopes = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.campaign:view")
+    )).all())
+    work_item_scopes = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.work_item:view")
+    )).all())
+    permitted_scopes = campaign_scopes & work_item_scopes
+    if organization_unit_id is not None and organization_unit_id not in permitted_scopes:
+        raise HTTPException(status_code=403, detail="Campaign follow-up analytics is not authorized for this organization scope")
+
+    start_at = datetime.combine(period_start, time.min, tzinfo=timezone.utc)
+    end_at = datetime.combine(period_end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    filters = [
+        CRMWorkItemCampaignSignalOutcome.tenant_id == context.access.tenant_id,
+        CRMWorkItemCampaignSignalOutcome.occurred_at >= start_at,
+        CRMWorkItemCampaignSignalOutcome.occurred_at < end_at,
+        CRMWorkItem.organization_unit_id.in_(permitted_scopes),
+    ]
+    if organization_unit_id is not None:
+        filters.append(CRMWorkItem.organization_unit_id == organization_unit_id)
+    if campaign_id is not None:
+        filters.append(CRMWorkItem.campaign_id == campaign_id)
+    if decision_key is not None:
+        filters.append(CRMWorkItemCampaignSignalOutcome.decision_key == decision_key)
+    if metric_key is not None:
+        filters.append(CRMWorkItemCampaignSignalOutcome.metric_key == metric_key)
+
+    join_item = (
+        CRMWorkItem.tenant_id == CRMWorkItemCampaignSignalOutcome.tenant_id
+    ) & (CRMWorkItem.id == CRMWorkItemCampaignSignalOutcome.work_item_id)
+    join_campaign = (
+        CRMMarketingCampaign.tenant_id == CRMWorkItem.tenant_id
+    ) & (CRMMarketingCampaign.organization_unit_id == CRMWorkItem.organization_unit_id) & (
+        CRMMarketingCampaign.id == CRMWorkItem.campaign_id
+    )
+    total = int(await context.session.scalar(
+        select(func.count()).select_from(CRMWorkItemCampaignSignalOutcome)
+        .join(CRMWorkItem, join_item).join(CRMMarketingCampaign, join_campaign)
+        .where(*filters)
+    ) or 0)
+    decision_rows = (await context.session.execute(
+        select(CRMWorkItemCampaignSignalOutcome.decision_key, func.count(CRMWorkItemCampaignSignalOutcome.id))
+        .join(CRMWorkItem, join_item).join(CRMMarketingCampaign, join_campaign)
+        .where(*filters).group_by(CRMWorkItemCampaignSignalOutcome.decision_key)
+    )).all()
+    metric_rows = (await context.session.execute(
+        select(CRMWorkItemCampaignSignalOutcome.metric_key, func.count(CRMWorkItemCampaignSignalOutcome.id))
+        .join(CRMWorkItem, join_item).join(CRMMarketingCampaign, join_campaign)
+        .where(*filters).group_by(CRMWorkItemCampaignSignalOutcome.metric_key)
+    )).all()
+    rows = (await context.session.execute(
+        select(CRMWorkItemCampaignSignalOutcome, CRMWorkItem.id, CRMWorkItem.campaign_id,
+               CRMMarketingCampaign.name, CRMWorkItem.organization_unit_id)
+        .join(CRMWorkItem, join_item).join(CRMMarketingCampaign, join_campaign)
+        .where(*filters)
+        .order_by(CRMWorkItemCampaignSignalOutcome.occurred_at.desc(),
+                  CRMWorkItemCampaignSignalOutcome.id.desc())
+        .limit(limit).offset(offset)
+    )).all()
+    items = [
+        CampaignSignalOutcomePortfolioItem(
+            outcome_id=outcome.id, work_item_id=work_item_id,
+            campaign_id=linked_campaign_id, campaign_name=name,
+            organization_unit_id=unit_id, metric_key=outcome.metric_key,
+            signal_type=outcome.signal_type, decision_key=outcome.decision_key,
+            notes=outcome.notes, metric_actual=outcome.metric_actual,
+            metric_target=outcome.metric_target, metric_status=outcome.metric_status,
+            observed_days=outcome.observed_days, period_days=outcome.period_days,
+            recorded_by_membership_id=outcome.recorded_by_membership_id,
+            occurred_at=outcome.occurred_at,
+        )
+        for outcome, work_item_id, linked_campaign_id, name, unit_id in rows
+    ]
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id, actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign_signal_outcome_portfolio.reviewed",
+        target_type="crm_marketing_campaign_signal_outcome_portfolio",
+        target_key=f"{period_start.isoformat()}:{period_end.isoformat()}",
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={"total": total, "offset": offset, "result_count": len(items),
+                     "campaign_id": str(campaign_id) if campaign_id else None,
+                     "decision_key": decision_key, "metric_key": metric_key},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignSignalOutcomePortfolioRead(
+        period_start=period_start, period_end=period_end,
+        organization_unit_id=organization_unit_id, total=total,
+        limit=limit, offset=offset, has_more=offset + len(items) < total,
+        outcomes_by_decision={str(key): count for key, count in decision_rows},
+        outcomes_by_metric={str(key): count for key, count in metric_rows},
+        items=items,
+        basis=("Counts describe manager-recorded follow-up decisions and metric snapshots. "
+               "They do not show that a decision caused a later performance change."),
     )
