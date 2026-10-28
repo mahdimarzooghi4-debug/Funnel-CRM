@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaign_targets import evaluate_net_paid_to_spend_target, router
 from funnel_crm.api.v1.crm_campaign_target_analytics import router as target_analytics_router
+from funnel_crm.api.v1.crm_work_items import router as work_items_router
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
@@ -79,6 +80,7 @@ def make_app(
 
     app.include_router(router, prefix="/api/v1")
     app.include_router(target_analytics_router, prefix="/api/v1")
+    app.include_router(work_items_router, prefix="/api/v1")
     return app
 
 
@@ -161,6 +163,7 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             ),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:create"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.commerce_event:view"),
         ])
         await context.session.flush()
@@ -221,6 +224,23 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert metrics["impressions"]["recorded_day_coverage_percent"] == "100.00"
         assert metrics["clicks"]["actual"] == 75
         assert metrics["clicks"]["status"] == "not_met"
+
+        follow_up = await client.post(
+            "/api/v1/crm/work-items/from-campaign-signal",
+            headers=headers,
+            json={
+                "campaign_id": str(campaign_id),
+                "target_plan_id": target_id,
+                "metric_key": "clicks",
+                "priority": "high",
+                "note": "Review creative and audience performance.",
+            },
+        )
+        assert follow_up.status_code == 201, follow_up.text
+        assert follow_up.json()["campaign_id"] == str(campaign_id)
+        assert follow_up.json()["title"] == "Review Acquisition: clicks"
+        assert "target_gap" in follow_up.json()["description"]
+
         assert metrics["spend"]["actual"] == "20.000000"
         assert metrics["spend"]["observed_days"] == 1
         assert metrics["spend"]["period_days"] == 2
