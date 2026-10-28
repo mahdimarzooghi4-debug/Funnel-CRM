@@ -11,7 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import and_, func, or_, select, tuple_
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_metric_catalog import MetricDefinition, get_metric_definition
@@ -168,12 +168,28 @@ class CampaignPortfolioDecisionItem(BaseModel):
     learning_action_completion_rate_percent: Decimal | None
 
 
+class CampaignPortfolioCurrencyOutcome(BaseModel):
+    currency: str
+    spend_measurement_count: int
+    recorded_spend_amount: Decimal
+    paid_event_count: int
+    paid_order_count: int
+    paid_amount: Decimal
+    refund_event_count: int
+    refunded_order_count: int
+    refunded_amount: Decimal
+    net_paid_amount: Decimal
+
+
 class CampaignDecisionQueueSummary(BaseModel):
     total_count: int
     campaign_count: int
     status_counts: dict[str, int]
     attention_reason_counts: dict[str, int]
     metric_status_counts: dict[str, dict[str, int]]
+    financial_period_basis: str
+    commerce_scope_status: Literal["complete", "partial", "not_authorized"]
+    financial_outcomes_by_currency: list[CampaignPortfolioCurrencyOutcome]
 
 
 class CampaignPortfolioDecisionQueue(BaseModel):
@@ -530,12 +546,135 @@ async def get_campaign_portfolio_decision_queue(
             )
             outcome_counts[metric.status] += 1
     filtered_total = len(items)
+    financial_by_currency: dict[str, dict[str, object]] = {}
+    selected_windows = [
+        item for item in items
+    ]
+    if selected_windows:
+        spend_windows = [
+            and_(
+                CRMMarketingCampaignMeasurement.campaign_id == item.campaign_id,
+                CRMMarketingCampaignMeasurement.organization_unit_id == item.organization_unit_id,
+                CRMMarketingCampaignMeasurement.measured_on >= item.period_start,
+                CRMMarketingCampaignMeasurement.measured_on <= item.period_end,
+            )
+            for item in selected_windows
+        ]
+        spend_rows = (await context.session.scalars(
+            select(CRMMarketingCampaignMeasurement).where(
+                CRMMarketingCampaignMeasurement.tenant_id == context.access.tenant_id,
+                or_(*spend_windows),
+                CRMMarketingCampaignMeasurement.actual_spend_amount.is_not(None),
+                CRMMarketingCampaignMeasurement.actual_spend_currency.is_not(None),
+            )
+        )).all()
+        for row in spend_rows:
+            state = financial_by_currency.setdefault(
+                row.actual_spend_currency,
+                {
+                    "spend_measurement_count": 0,
+                    "recorded_spend_amount": Decimal("0"),
+                    "paid_event_count": 0,
+                    "paid_order_count": 0,
+                    "paid_amount": Decimal("0"),
+                    "refund_event_count": 0,
+                    "refunded_order_count": 0,
+                    "refunded_amount": Decimal("0"),
+                },
+            )
+            state["spend_measurement_count"] += 1
+            state["recorded_spend_amount"] += row.actual_spend_amount
+
+    authorized_windows = [
+        item for item in items
+        if item.organization_unit_id in commerce_allowed_units
+    ]
+    if authorized_windows:
+        commerce_windows = [
+            and_(
+                CRMProductCommerceEvent.campaign_id == item.campaign_id,
+                CRMProductCommerceEvent.organization_unit_id == item.organization_unit_id,
+                CRMProductCommerceEvent.occurred_at >= datetime.combine(
+                    item.period_start, time.min, tzinfo=timezone.utc
+                ),
+                CRMProductCommerceEvent.occurred_at < datetime.combine(
+                    item.period_end + timedelta(days=1), time.min, tzinfo=timezone.utc
+                ),
+            )
+            for item in authorized_windows
+        ]
+        events = (await context.session.scalars(
+            select(CRMProductCommerceEvent).where(
+                CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+                or_(*commerce_windows),
+            )
+        )).all()
+        order_references: dict[str, dict[str, set[tuple[str, str]]]] = {}
+        for event in events:
+            state = financial_by_currency.setdefault(
+                event.currency,
+                {
+                    "spend_measurement_count": 0,
+                    "recorded_spend_amount": Decimal("0"),
+                    "paid_event_count": 0,
+                    "paid_order_count": 0,
+                    "paid_amount": Decimal("0"),
+                    "refund_event_count": 0,
+                    "refunded_order_count": 0,
+                    "refunded_amount": Decimal("0"),
+                },
+            )
+            if event.event_kind == "paid":
+                state["paid_event_count"] += 1
+                state["paid_amount"] += event.amount
+                order_references.setdefault(event.currency, {}).setdefault(
+                    "paid", set()
+                ).add((event.source_product, event.order_reference))
+            else:
+                state["refund_event_count"] += 1
+                state["refunded_amount"] += event.amount
+                order_references.setdefault(event.currency, {}).setdefault(
+                    "refunded", set()
+                ).add((event.source_product, event.order_reference))
+        for currency, kinds in order_references.items():
+            financial_by_currency[currency]["paid_order_count"] = len(kinds.get("paid", set()))
+            financial_by_currency[currency]["refunded_order_count"] = len(kinds.get("refunded", set()))
+
+    authorized_window_count = len(authorized_windows)
+    commerce_scope_status = (
+        "not_authorized"
+        if not authorized_window_count
+        else "partial"
+        if authorized_window_count < len(items)
+        else "complete"
+    )
+    financial_outcomes = [
+        CampaignPortfolioCurrencyOutcome(
+            currency=currency,
+            spend_measurement_count=int(state["spend_measurement_count"]),
+            recorded_spend_amount=state["recorded_spend_amount"],
+            paid_event_count=int(state["paid_event_count"]),
+            paid_order_count=int(state["paid_order_count"]),
+            paid_amount=state["paid_amount"],
+            refund_event_count=int(state["refund_event_count"]),
+            refunded_order_count=int(state["refunded_order_count"]),
+            refunded_amount=state["refunded_amount"],
+            net_paid_amount=state["paid_amount"] - state["refunded_amount"],
+        )
+        for currency, state in sorted(financial_by_currency.items())
+    ]
     summary = CampaignDecisionQueueSummary(
         total_count=filtered_total,
         campaign_count=len({item.campaign_id for item in items}),
         status_counts=summary_status_counts,
         attention_reason_counts=summary_attention_reason_counts,
         metric_status_counts=summary_metric_status_counts,
+        financial_period_basis=(
+            "Unique measurement and commerce records inside the union of the filtered "
+            "target-plan date windows; totals are separated by currency."
+        ),
+        commerce_scope_status=commerce_scope_status,
+        financial_outcomes_by_currency=financial_outcomes,
     )
     page_items = items[offset:offset + limit]
     context.session.add(AuditEvent(
