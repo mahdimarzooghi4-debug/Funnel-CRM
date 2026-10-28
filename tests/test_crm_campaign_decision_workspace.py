@@ -122,6 +122,25 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             priority="normal", status="open", completed_at=None,
             source_learning_review_id=learning_review_id, source_outcome_id=None,
         ))
+        completed_learning_review_id = uuid4()
+        context.session.add(CRMMarketingLearningReview(
+            id=completed_learning_review_id, tenant_id=tenant_id,
+            organization_unit_id=root_id, campaign_id=campaign_id,
+            target_plan_id=plan_id, assessment="Completed action review",
+            corrective_action="Document campaign follow-up",
+            status="planned",
+        ))
+        await context.session.flush()
+        context.session.add(CRMWorkItem(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            profile_id=None, opportunity_id=None, campaign_id=campaign_id,
+            assigned_membership_id=context.access.membership_id,
+            created_by_membership_id=context.access.membership_id,
+            title="Completed campaign follow-up", description=None,
+            due_at=None, priority="normal", status="completed",
+            completed_at=datetime.now(timezone.utc),
+            source_learning_review_id=completed_learning_review_id, source_outcome_id=None,
+        ))
         context.session.add_all([
             CRMMarketingCampaignMeasurement(
                 id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
@@ -243,11 +262,12 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["status"] == "review_required"
     assert queue["items"][0]["missed_metric_count"] == 2
     assert queue["items"][0]["commerce_data_status"] == "observed"
-    assert queue["items"][0]["planned_learning_review_count"] == 1
+    assert queue["items"][0]["planned_learning_review_count"] == 2
     assert queue["items"][0]["evaluated_learning_review_count"] == 0
     assert queue["items"][0]["open_learning_action_count"] == 1
     assert queue["items"][0]["overdue_learning_action_count"] == 1
     assert queue["items"][0]["unassigned_learning_action_count"] == 1
+    assert queue["items"][0]["completed_learning_action_count"] == 1
     queue_currency = {
         row["currency"]: row for row in queue["items"][0]["commerce_outcomes_by_currency"]
     }
@@ -328,7 +348,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         ))
         await context.session.execute(delete(CRMWorkItem).where(
             CRMWorkItem.tenant_id == tenant_id,
-            CRMWorkItem.source_learning_review_id == learning_review_id,
+            CRMWorkItem.campaign_id == campaign_id,
         ))
         await context.session.execute(delete(CRMMarketingLearningReview).where(
             CRMMarketingLearningReview.tenant_id == tenant_id,
