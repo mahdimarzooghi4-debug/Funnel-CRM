@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import exists, func, select
 
@@ -38,6 +38,7 @@ class CampaignReadinessResponse(BaseModel):
     campaign_name: str
     organization_unit_id: UUID
     channel: str
+    communication_purpose_key: str
     starts_at: datetime | None
     ends_at: datetime | None
     launch_readiness: Literal["ready_for_manager_review", "needs_attention"]
@@ -56,7 +57,6 @@ class CampaignReadinessResponse(BaseModel):
 )
 async def get_campaign_readiness(
     campaign_id: UUID,
-    purpose_key: str = Query(default="marketing", pattern=r"^[a-z][a-z0-9_.-]{0,79}$"),
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> CampaignReadinessResponse:
     campaign = await context.session.scalar(
@@ -74,6 +74,7 @@ async def get_campaign_readiness(
         raise HTTPException(status_code=403, detail="Campaign readiness is not authorized for this organization scope")
     if campaign.status != "draft":
         raise HTTPException(status_code=409, detail="Readiness review is available for draft campaigns")
+    purpose_key = campaign.communication_purpose_key
 
     active_segment = await context.session.scalar(
         select(CRMProfileSegment).where(
@@ -229,6 +230,7 @@ async def get_campaign_readiness(
         campaign_name=campaign.name,
         organization_unit_id=campaign.organization_unit_id,
         channel=campaign.channel,
+        communication_purpose_key=campaign.communication_purpose_key,
         starts_at=campaign.starts_at,
         ends_at=campaign.ends_at,
         launch_readiness=(

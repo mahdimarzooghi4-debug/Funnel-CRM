@@ -803,6 +803,10 @@ class CRMMarketingCampaign(Base):
             name="ck_crm_marketing_campaigns_objective",
         ),
         CheckConstraint(
+            "communication_purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}$'",
+            name="ck_crm_marketing_campaigns_communication_purpose",
+        ),
+        CheckConstraint(
             "channel IN ('email', 'phone', 'messaging', 'social', 'web', 'store', 'field', 'other')",
             name="ck_crm_marketing_campaigns_channel",
         ),
@@ -845,6 +849,9 @@ class CRMMarketingCampaign(Base):
     segment_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     objective_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    communication_purpose_key: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="marketing", server_default="marketing"
+    )
     channel: Mapped[str] = mapped_column(String(24), nullable=False)
     planned_budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     planned_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)

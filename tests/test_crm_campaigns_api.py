@@ -10,9 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaigns import router
 from funnel_crm.api.v1.crm_campaign_readiness import router as readiness_router
+from funnel_crm.api.v1.crm_communication_consent import router as consent_router
 from funnel_crm.platform.models import (
+    CRMContactPoint,
     CRMMarketingCampaign,
+    CRMProfile,
     CRMProfileSegment,
+    TenantRecord,
     Role,
     RoleAssignment,
     RolePermission,
@@ -34,6 +38,7 @@ def make_app(
 
     app.include_router(router, prefix="/api/v1")
     app.include_router(readiness_router, prefix="/api/v1")
+    app.include_router(consent_router, prefix="/api/v1")
     return app
 
 
@@ -61,6 +66,25 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
             is_active=True,
         )
         context.session.add(segment)
+        profile_id = uuid4()
+        context.session.add(TenantRecord(
+            id=profile_id, tenant_id=tenant_id,
+            organization_unit_id=root_id, record_type="crm_profile",
+        ))
+        await context.session.flush()
+        context.session.add(CRMProfile(
+            id=profile_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            profile_kind="person", display_name="Campaign readiness profile",
+            lifecycle_stage="lead",
+        ))
+        await context.session.flush()
+        context.session.add(CRMContactPoint(
+            id=uuid4(), tenant_id=tenant_id, profile_id=profile_id,
+            channel="email", encrypted_value=b"x" * 29,
+            encryption_key_id="test-key", fingerprint_key_id=None,
+            match_fingerprint=None, verification_status="verified", is_primary=True,
+        ))
+        await context.session.flush()
         role = Role(tenant_id=tenant_id, name=f"Campaign manager {uuid4().hex[:8]}")
         context.session.add(role)
         await context.session.flush()
@@ -96,6 +120,10 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
                     tenant_id=tenant_id, role_id=role.id,
                     permission_key="crm.communication_consent:view",
                 ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.communication_consent:record",
+                ),
             ]
         )
         await context.session.flush()
@@ -116,6 +144,7 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
                 "segment_id": str(segment_id),
                 "name": "Spring offer",
                 "objective_key": "repeat_purchase",
+                "communication_purpose_key": "repeat_purchase",
                 "channel": "email",
                 "planned_budget_amount": "1200.50",
                 "planned_budget_currency": "USD",
@@ -126,6 +155,7 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert created.status_code == 201, created.text
         campaign_id = created.json()["id"]
         assert created.json()["status"] == "draft"
+        assert created.json()["communication_purpose_key"] == "repeat_purchase"
         assert created.json()["planned_budget_amount"] == "1200.50"
         assert created.json()["planned_budget_currency"] == "USD"
 
@@ -135,6 +165,7 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         )
         assert readiness.status_code == 200, readiness.text
         readiness_result = readiness.json()
+        assert readiness_result["communication_purpose_key"] == "repeat_purchase"
         assert readiness_result["launch_readiness"] == "needs_attention"
         eligibility_check = next(
             item for item in readiness_result["checks"]
@@ -142,6 +173,49 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         )
         assert eligibility_check["status"] == "missing"
         assert eligibility_check["count"] == 0
+
+        marketing_consent = await client.post(
+            f"/api/v1/crm/profiles/{profile_id}/communication-consents",
+            headers=headers,
+            json={
+                "purpose_key": "marketing",
+                "channel": "email",
+                "decision": "granted",
+                "policy_version": "v1",
+            },
+        )
+        assert marketing_consent.status_code == 201, marketing_consent.text
+        wrong_purpose_readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        wrong_check = next(
+            item for item in wrong_purpose_readiness.json()["checks"]
+            if item["key"] == "channel_eligibility"
+        )
+        assert wrong_check["count"] == 0
+
+        campaign_consent = await client.post(
+            f"/api/v1/crm/profiles/{profile_id}/communication-consents",
+            headers=headers,
+            json={
+                "purpose_key": "repeat_purchase",
+                "channel": "email",
+                "decision": "granted",
+                "policy_version": "v1",
+            },
+        )
+        assert campaign_consent.status_code == 201, campaign_consent.text
+        eligible_readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        eligible_check = next(
+            item for item in eligible_readiness.json()["checks"]
+            if item["key"] == "channel_eligibility"
+        )
+        assert eligible_check["status"] == "complete"
+        assert eligible_check["count"] == 1
 
         listed = await client.get("/api/v1/crm/campaigns", headers=headers)
         assert listed.status_code == 200
