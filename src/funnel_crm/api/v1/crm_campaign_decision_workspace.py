@@ -195,6 +195,8 @@ class CampaignPortfolioPeriodComparison(BaseModel):
     baseline_end: date
     comparison_start: date
     comparison_end: date
+    baseline_calendar_days: int
+    comparison_calendar_days: int
     baseline_campaign_count: int
     comparison_campaign_count: int
     baseline_measurement_record_count: int
@@ -945,6 +947,8 @@ async def get_campaign_portfolio_period_comparison(
         baseline_end=baseline_end,
         comparison_start=comparison_start,
         comparison_end=comparison_end,
+        baseline_calendar_days=(baseline_end - baseline_start).days + 1,
+        comparison_calendar_days=(comparison_end - comparison_start).days + 1,
         baseline_campaign_count=int(baseline["campaign_count"] or 0),
         comparison_campaign_count=int(comparison["campaign_count"] or 0),
         baseline_measurement_record_count=int(baseline["record_count"] or 0),
