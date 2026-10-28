@@ -240,6 +240,21 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert follow_up.json()["campaign_id"] == str(campaign_id)
         assert follow_up.json()["title"] == "Review Acquisition: clicks"
         assert "target_gap" in follow_up.json()["description"]
+        assert follow_up.json()["source_campaign_target_plan_id"] == target_id
+        assert follow_up.json()["source_campaign_metric_key"] == "clicks"
+        assert follow_up.json()["source_campaign_signal_type"] == "target_gap"
+        duplicate_follow_up = await client.post(
+            "/api/v1/crm/work-items/from-campaign-signal",
+            headers=headers,
+            json={
+                "campaign_id": str(campaign_id),
+                "target_plan_id": target_id,
+                "metric_key": "clicks",
+                "priority": "high",
+            },
+        )
+        assert duplicate_follow_up.status_code == 409
+        assert duplicate_follow_up.json()["detail"]["work_item_id"] == follow_up.json()["id"]
 
         assert metrics["spend"]["actual"] == "20.000000"
         assert metrics["spend"]["observed_days"] == 1
