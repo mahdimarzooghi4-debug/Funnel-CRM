@@ -460,7 +460,10 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         assert restricted_item["commerce_outcomes_by_currency"] == []
         assert restricted_item["commerce_data_status"] == "not_authorized"
         assert restricted_queue_response.json()["summary"]["commerce_scope_status"] == "not_authorized"
-        assert restricted_queue_response.json()["summary"]["financial_outcomes_by_currency"] == []
+        restricted_financial = restricted_queue_response.json()["summary"]["financial_outcomes_by_currency"]
+        assert len(restricted_financial) == 2
+        assert all(row["paid_event_count"] == 0 for row in restricted_financial)
+        assert all(row["refund_event_count"] == 0 for row in restricted_financial)
         assert restricted_item["open_learning_action_count"] is None
         assert restricted_item["completed_learning_action_count"] is None
         assert restricted_item["tracked_learning_action_count"] is None
