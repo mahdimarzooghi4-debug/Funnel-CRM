@@ -383,9 +383,6 @@ async def create_work_item(
         created_by_membership_id=context.access.membership_id,
         title=payload.title, description=payload.description, due_at=payload.due_at,
         priority=payload.priority, status="open", completed_at=None,
-        source_campaign_target_plan_id=plan.id,
-        source_campaign_metric_key=payload.metric_key,
-        source_campaign_signal_type=signal_kind,
     )
     context.session.add(item)
     await context.session.flush()
@@ -487,6 +484,9 @@ async def create_work_item_from_campaign_signal(
         created_by_membership_id=context.access.membership_id,
         title=title, description=description[:2000], due_at=payload.due_at,
         priority=payload.priority, status="open", completed_at=None,
+        source_campaign_target_plan_id=plan.id,
+        source_campaign_metric_key=payload.metric_key,
+        source_campaign_signal_type=signal_kind,
     )
     context.session.add(item)
     await context.session.flush()
