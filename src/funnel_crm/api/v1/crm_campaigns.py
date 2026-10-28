@@ -33,6 +33,7 @@ class CampaignCreate(BaseModel):
     segment_id: UUID
     name: str = Field(min_length=1, max_length=160)
     objective_key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
+    communication_purpose_key: str = Field(default="marketing", min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
     channel: CampaignChannel
     planned_budget_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     planned_budget_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
@@ -69,13 +70,14 @@ class CampaignUpdate(BaseModel):
     segment_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=160)
     objective_key: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
+    communication_purpose_key: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
     channel: CampaignChannel | None = None
     planned_budget_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     planned_budget_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     starts_at: datetime | None = None
     ends_at: datetime | None = None
 
-    @field_validator("segment_id", "name", "objective_key", "channel")
+    @field_validator("segment_id", "name", "objective_key", "communication_purpose_key", "channel")
     @classmethod
     def reject_null_for_nonnullable(cls, value):
         if value is None:
@@ -110,6 +112,7 @@ class CampaignRead(BaseModel):
     segment_id: UUID
     name: str
     objective_key: str
+    communication_purpose_key: str
     channel: str
     planned_budget_amount: Decimal | None
     planned_budget_currency: str | None
@@ -220,7 +223,8 @@ async def create_campaign(
     campaign = CRMMarketingCampaign(
         id=uuid4(), tenant_id=context.access.tenant_id,
         organization_unit_id=payload.organization_unit_id, segment_id=payload.segment_id,
-        name=payload.name, objective_key=payload.objective_key, channel=payload.channel,
+        name=payload.name, objective_key=payload.objective_key,
+        communication_purpose_key=payload.communication_purpose_key, channel=payload.channel,
         starts_at=payload.starts_at, ends_at=payload.ends_at,
         planned_budget_amount=payload.planned_budget_amount,
         planned_budget_currency=payload.planned_budget_currency, status="draft",
