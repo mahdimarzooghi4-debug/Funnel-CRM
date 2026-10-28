@@ -262,6 +262,7 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             "request_id": str(uuid4()),
             "decision_key": "adjusted",
             "notes": "Refreshed the campaign creative based on the click gap.",
+            "occurred_at": "2026-10-18T12:00:00Z",
         }
         outcome = await client.post(
             f"/api/v1/crm/work-items/{follow_up.json()['id']}/campaign-signal-outcomes",
@@ -285,6 +286,20 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         )
         assert outcome_history.status_code == 200, outcome_history.text
         assert len(outcome_history.json()) == 1
+
+        outcome_report = await client.get(
+            "/api/v1/crm/analytics/campaign-target-performance/follow-up-outcomes",
+            headers=headers,
+            params={"period_start": "2026-10-18", "period_end": "2026-10-18"},
+        )
+        assert outcome_report.status_code == 200, outcome_report.text
+        report = outcome_report.json()
+        assert report["total"] == 1
+        assert report["outcomes_by_decision"] == {"adjusted": 1}
+        assert report["outcomes_by_metric"] == {"clicks": 1}
+        assert report["items"][0]["campaign_name"] == "Acquisition"
+        assert report["items"][0]["metric_actual"] == "75"
+        assert "do not show that a decision caused" in report["basis"]
 
         assert metrics["spend"]["actual"] == "20.000000"
         assert metrics["spend"]["observed_days"] == 1
