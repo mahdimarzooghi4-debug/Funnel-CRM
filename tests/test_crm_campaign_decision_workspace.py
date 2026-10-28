@@ -322,6 +322,15 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert source_rows[("funnel.marketplace", "USD")]["net_paid_amount_per_paid_order"] == "40.000000"
     assert source_rows[("funnel.store", "EUR")]["net_paid_amount"] == "6.000000"
     assert queue["total_count"] == 2
+    assert queue["summary"]["total_count"] == 2
+    assert queue["summary"]["campaign_count"] == 2
+    assert queue["summary"]["status_counts"] == {
+        "review_required": 1, "on_track_or_insufficient_signal": 1
+    }
+    assert queue["summary"]["attention_reason_counts"]["target_missed"] == 1
+    assert queue["summary"]["metric_status_counts"]["clicks"] == {
+        "met": 0, "not_met": 1, "no_data": 0
+    }
     assert queue["automatic_recommendation_issued"] is False
     assert ranked_page["total_count"] == 2
     assert ranked_page["has_more"] is True
@@ -333,6 +342,8 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert status_filtered["total_count"] == 1
     assert status_filtered["items"][0]["target_plan_id"] == str(low_priority_plan_id)
     assert metric_filtered["total_count"] == 1
+    assert metric_filtered["summary"]["campaign_count"] == 1
+    assert metric_filtered["summary"]["metric_status_counts"]["clicks"]["not_met"] == 1
     assert metric_filtered["items"][0]["target_plan_id"] == str(plan_id)
     assert metric_filtered["items"][0]["metrics"]["clicks"]["status"] == "not_met"
     assert queue["items"][0]["target_plan_id"] == str(plan_id)
