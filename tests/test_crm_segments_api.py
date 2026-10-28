@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from funnel_crm.api.v1.crm_segments import router
 from funnel_crm.api.v1.crm_communication_consent import router as consent_router
 from funnel_crm.platform.models import (
-    AuditEvent, CRMCommunicationConsentEvent, CRMContactPoint, CRMCustomerActivity,
+    AuditEvent, CRMContactPoint, CRMCustomerActivity,
     CRMProfile, CRMProfileSegment, Role, RoleAssignment, RolePermission, TenantRecord,
 )
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
