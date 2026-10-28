@@ -187,6 +187,25 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert portfolio_result["needs_attention_count"] == 1
         assert portfolio_result["items"][0]["campaign_id"] == campaign_id
         assert portfolio_result["attention_by_check"]["channel_eligibility"] == 1
+        filtered_portfolio = await client.get(
+            "/api/v1/crm/campaigns/readiness-portfolio",
+            headers=headers,
+            params={
+                "channel": "email",
+                "communication_purpose_key": "repeat_purchase",
+            },
+        )
+        assert filtered_portfolio.status_code == 200, filtered_portfolio.text
+        assert filtered_portfolio.json()["total_draft_campaigns"] == 1
+        assert filtered_portfolio.json()["items"][0]["campaign_id"] == campaign_id
+        empty_portfolio = await client.get(
+            "/api/v1/crm/campaigns/readiness-portfolio",
+            headers=headers,
+            params={"channel": "email", "communication_purpose_key": "awareness"},
+        )
+        assert empty_portfolio.status_code == 200, empty_portfolio.text
+        assert empty_portfolio.json()["total_draft_campaigns"] == 0
+        assert empty_portfolio.json()["items"] == []
 
         marketing_consent = await client.post(
             f"/api/v1/crm/profiles/{profile_id}/communication-consents",
