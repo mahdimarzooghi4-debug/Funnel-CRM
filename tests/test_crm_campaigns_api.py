@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaigns import router
+from funnel_crm.api.v1.crm_campaign_readiness import router as readiness_router
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMProfileSegment,
@@ -32,6 +33,7 @@ def make_app(
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(readiness_router, prefix="/api/v1")
     return app
 
 
@@ -82,6 +84,18 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
                     tenant_id=tenant_id, role_id=role.id,
                     permission_key="crm.segment:view",
                 ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.profile:view",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.contact_point:view",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.communication_consent:view",
+                ),
             ]
         )
         await context.session.flush()
@@ -114,6 +128,20 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert created.json()["status"] == "draft"
         assert created.json()["planned_budget_amount"] == "1200.50"
         assert created.json()["planned_budget_currency"] == "USD"
+
+        readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        assert readiness.status_code == 200, readiness.text
+        readiness_result = readiness.json()
+        assert readiness_result["launch_readiness"] == "needs_attention"
+        eligibility_check = next(
+            item for item in readiness_result["checks"]
+            if item["key"] == "channel_eligibility"
+        )
+        assert eligibility_check["status"] == "missing"
+        assert eligibility_check["count"] == 0
 
         listed = await client.get("/api/v1/crm/campaigns", headers=headers)
         assert listed.status_code == 200
