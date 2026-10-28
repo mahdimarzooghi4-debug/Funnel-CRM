@@ -2015,6 +2015,12 @@ class CRMWorkItem(Base):
             name="ck_crm_work_items_status",
         ),
         CheckConstraint(
+            "(source_campaign_target_plan_id IS NULL AND source_campaign_metric_key IS NULL AND source_campaign_signal_type IS NULL) OR "
+            "(source_campaign_target_plan_id IS NOT NULL AND campaign_id IS NOT NULL "
+            "AND source_campaign_metric_key IS NOT NULL AND source_campaign_signal_type IN ('measurement_gap', 'target_gap'))",
+            name="ck_crm_work_items_campaign_signal_source",
+        ),
+        CheckConstraint(
             "profile_id IS NOT NULL OR opportunity_id IS NOT NULL OR campaign_id IS NOT NULL",
             name="ck_crm_work_items_has_context",
         ),
@@ -2051,10 +2057,20 @@ class CRMWorkItem(Base):
         ForeignKeyConstraint(["tenant_id", "source_outcome_id"],
             ["crm_work_item_outcomes.tenant_id", "crm_work_item_outcomes.id"],
             name="fk_crm_work_items_outcome_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "source_campaign_target_plan_id"],
+            ["crm_marketing_campaign_target_plans.tenant_id", "crm_marketing_campaign_target_plans.id"],
+            name="fk_crm_work_items_campaign_target_plan_same_tenant", ondelete="RESTRICT"),
         UniqueConstraint("tenant_id", "source_learning_review_id",
                          name="uq_crm_work_items_source_learning_review"),
         UniqueConstraint("tenant_id", "source_outcome_id",
                          name="uq_crm_work_items_source_outcome"),
+        Index(
+            "uq_crm_work_items_open_campaign_signal",
+            "tenant_id", "campaign_id", "source_campaign_target_plan_id", "source_campaign_metric_key",
+            unique=True,
+            postgresql_where=text("source_campaign_target_plan_id IS NOT NULL AND status IN ('open', 'in_progress')"),
+            sqlite_where=text("source_campaign_target_plan_id IS NOT NULL AND status IN ('open', 'in_progress')"),
+        ),
         Index(
             "ix_crm_work_items_tenant_org_status_due",
             "tenant_id", "organization_unit_id", "status", "due_at",
@@ -2085,6 +2101,9 @@ class CRMWorkItem(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_learning_review_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     source_outcome_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    source_campaign_target_plan_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    source_campaign_metric_key: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_campaign_signal_type: Mapped[str | None] = mapped_column(String(24), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
