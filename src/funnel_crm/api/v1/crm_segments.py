@@ -362,7 +362,7 @@ async def create_crm_profile_segment(
         tenant_id=context.access.tenant_id,
         organization_unit_id=payload.organization_unit_id,
         name=payload.name,
-        criteria=payload.criteria.model_dump(exclude_none=True),
+        criteria=payload.criteria.model_dump(mode="json", exclude_none=True),
         is_active=True,
     )
     context.session.add(segment)
@@ -421,7 +421,7 @@ async def update_crm_profile_segment(
         criteria = changes["criteria"]
         if criteria is None:
             raise HTTPException(status_code=422, detail="criteria cannot be null")
-        segment.criteria = criteria
+        segment.criteria = CRMProfileSegmentCriteria.model_validate(criteria).model_dump(mode="json", exclude_none=True)
     segment.updated_at = datetime.now(timezone.utc)
     await context.session.flush()
     _audit(
