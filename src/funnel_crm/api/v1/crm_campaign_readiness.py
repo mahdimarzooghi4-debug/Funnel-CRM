@@ -72,6 +72,8 @@ class CampaignReadinessPortfolioResponse(BaseModel):
 async def review_campaign_readiness_portfolio(
     context: TenantSessionContext = Depends(require_tenant_session),
     organization_unit_id: UUID | None = None,
+    channel: str | None = Query(default=None, min_length=1, max_length=40),
+    communication_purpose_key: str | None = Query(default=None, min_length=1, max_length=80),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> CampaignReadinessPortfolioResponse:
@@ -87,6 +89,12 @@ async def review_campaign_readiness_portfolio(
     ]
     if organization_unit_id is not None:
         filters.append(CRMMarketingCampaign.organization_unit_id == organization_unit_id)
+    if channel is not None:
+        filters.append(CRMMarketingCampaign.channel == channel)
+    if communication_purpose_key is not None:
+        filters.append(
+            CRMMarketingCampaign.communication_purpose_key == communication_purpose_key
+        )
     total = int(await context.session.scalar(
         select(func.count()).select_from(CRMMarketingCampaign).where(*filters)
     ) or 0)
@@ -123,6 +131,8 @@ async def review_campaign_readiness_portfolio(
             "total_draft_campaigns": total,
             "page_size": len(items),
             "offset": offset,
+            "channel": channel,
+            "communication_purpose_key": communication_purpose_key,
             "ready_for_manager_review_count": ready_count,
             "needs_attention_count": needs_attention_count,
         },
