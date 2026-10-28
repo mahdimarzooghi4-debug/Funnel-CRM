@@ -191,6 +191,23 @@ class PeriodCurrencyComparison(BaseModel):
     comparison_net_paid_amount: Decimal
 
 
+class PeriodSourceProductComparison(BaseModel):
+    source_product: str
+    currency: str
+    baseline_paid_amount: Decimal
+    comparison_paid_amount: Decimal
+    baseline_paid_share_percent: Decimal | None
+    comparison_paid_share_percent: Decimal | None
+    paid_share_change_percentage_points: Decimal | None
+    baseline_refunded_amount: Decimal
+    comparison_refunded_amount: Decimal
+    baseline_refunded_share_percent: Decimal | None
+    comparison_refunded_share_percent: Decimal | None
+    refunded_share_change_percentage_points: Decimal | None
+    baseline_net_paid_amount: Decimal
+    comparison_net_paid_amount: Decimal
+
+
 class CampaignPortfolioPeriodComparison(BaseModel):
     generated_at: datetime
     baseline_start: date
@@ -207,6 +224,7 @@ class CampaignPortfolioPeriodComparison(BaseModel):
     comparison_recorded_days: int
     metrics: dict[str, PeriodMetricComparison]
     financial_outcomes_by_currency: list[PeriodCurrencyComparison]
+    source_product_outcomes: list[PeriodSourceProductComparison]
     commerce_scope_status: Literal["complete", "partial", "not_authorized"]
     interpretation: str
 
@@ -975,6 +993,7 @@ async def get_campaign_portfolio_period_comparison(
         )
 
     currency_values: dict[str, dict[str, Decimal]] = {}
+    source_currency_values: dict[tuple[str, str], dict[str, Decimal]] = {}
     period_ranges = (
         ("baseline", baseline_start, baseline_end),
         ("comparison", comparison_start, comparison_end),
@@ -1003,6 +1022,7 @@ async def get_campaign_portfolio_period_comparison(
             event_end = datetime.combine(end + timedelta(days=1), time.min, tzinfo=timezone.utc)
             event_rows = (await context.session.execute(
                 select(
+                    CRMProductCommerceEvent.source_product,
                     CRMProductCommerceEvent.currency,
                     CRMProductCommerceEvent.event_kind,
                     func.sum(CRMProductCommerceEvent.amount).label("amount"),
@@ -1015,13 +1035,21 @@ async def get_campaign_portfolio_period_comparison(
                     CRMProductCommerceEvent.campaign_id.is_not(None),
                 )
                 .group_by(
+                    CRMProductCommerceEvent.source_product,
                     CRMProductCommerceEvent.currency,
                     CRMProductCommerceEvent.event_kind,
                 )
             )).all()
             for row in event_rows:
+                amount = row.amount or Decimal("0")
                 state = currency_values.setdefault(row.currency, {})
-                state[f"{prefix}_{row.event_kind}"] = row.amount or Decimal("0")
+                state[f"{prefix}_{row.event_kind}"] = (
+                    state.get(f"{prefix}_{row.event_kind}", Decimal("0")) + amount
+                )
+                source_state = source_currency_values.setdefault(
+                    (row.source_product, row.currency), {}
+                )
+                source_state[f"{prefix}_{row.event_kind}"] = amount
 
     financial_outcomes = []
     for currency, state in sorted(currency_values.items()):
@@ -1039,6 +1067,58 @@ async def get_campaign_portfolio_period_comparison(
             comparison_paid_amount=comparison_paid,
             baseline_refunded_amount=baseline_refunded,
             comparison_refunded_amount=comparison_refunded,
+            baseline_net_paid_amount=baseline_paid - baseline_refunded,
+            comparison_net_paid_amount=comparison_paid - comparison_refunded,
+        ))
+
+    source_product_outcomes = []
+    for (source_product, currency), source_state in sorted(source_currency_values.items()):
+        totals = currency_values[currency]
+        baseline_paid = source_state.get("baseline_paid", Decimal("0"))
+        comparison_paid = source_state.get("comparison_paid", Decimal("0"))
+        baseline_refunded = source_state.get("baseline_refunded", Decimal("0"))
+        comparison_refunded = source_state.get("comparison_refunded", Decimal("0"))
+        baseline_paid_total = totals.get("baseline_paid", Decimal("0"))
+        comparison_paid_total = totals.get("comparison_paid", Decimal("0"))
+        baseline_refunded_total = totals.get("baseline_refunded", Decimal("0"))
+        comparison_refunded_total = totals.get("comparison_refunded", Decimal("0"))
+        baseline_paid_share = (
+            (baseline_paid * Decimal("100") / baseline_paid_total).quantize(Decimal("0.01"))
+            if baseline_paid_total else None
+        )
+        comparison_paid_share = (
+            (comparison_paid * Decimal("100") / comparison_paid_total).quantize(Decimal("0.01"))
+            if comparison_paid_total else None
+        )
+        baseline_refunded_share = (
+            (baseline_refunded * Decimal("100") / baseline_refunded_total).quantize(Decimal("0.01"))
+            if baseline_refunded_total else None
+        )
+        comparison_refunded_share = (
+            (comparison_refunded * Decimal("100") / comparison_refunded_total).quantize(Decimal("0.01"))
+            if comparison_refunded_total else None
+        )
+        source_product_outcomes.append(PeriodSourceProductComparison(
+            source_product=source_product,
+            currency=currency,
+            baseline_paid_amount=baseline_paid,
+            comparison_paid_amount=comparison_paid,
+            baseline_paid_share_percent=baseline_paid_share,
+            comparison_paid_share_percent=comparison_paid_share,
+            paid_share_change_percentage_points=(
+                (comparison_paid_share - baseline_paid_share).quantize(Decimal("0.01"))
+                if baseline_paid_share is not None and comparison_paid_share is not None
+                else None
+            ),
+            baseline_refunded_amount=baseline_refunded,
+            comparison_refunded_amount=comparison_refunded,
+            baseline_refunded_share_percent=baseline_refunded_share,
+            comparison_refunded_share_percent=comparison_refunded_share,
+            refunded_share_change_percentage_points=(
+                (comparison_refunded_share - baseline_refunded_share).quantize(Decimal("0.01"))
+                if baseline_refunded_share is not None and comparison_refunded_share is not None
+                else None
+            ),
             baseline_net_paid_amount=baseline_paid - baseline_refunded,
             comparison_net_paid_amount=comparison_paid - comparison_refunded,
         ))
@@ -1088,6 +1168,7 @@ async def get_campaign_portfolio_period_comparison(
         comparison_recorded_days=int(comparison["recorded_days"] or 0),
         metrics=metric_comparisons,
         financial_outcomes_by_currency=financial_outcomes,
+        source_product_outcomes=source_product_outcomes,
         commerce_scope_status=commerce_scope_status,
         interpretation=(
             "Observed totals and period-over-period changes are descriptive. "
