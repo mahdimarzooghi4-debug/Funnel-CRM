@@ -154,6 +154,7 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert created.status_code == 201, created.text
         campaign_id = created.json()["id"]
         assert created.json()["status"] == "draft"
+        assert created.json()["communication_purpose_key"] == "repeat_purchase"
         assert created.json()["planned_budget_amount"] == "1200.50"
         assert created.json()["planned_budget_currency"] == "USD"
 
