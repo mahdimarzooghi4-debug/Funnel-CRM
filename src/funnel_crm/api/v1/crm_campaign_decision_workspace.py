@@ -147,6 +147,7 @@ class CampaignPortfolioDecisionItem(BaseModel):
     overdue_learning_action_count: int | None
     unassigned_learning_action_count: int | None
     completed_learning_action_count: int | None
+    tracked_learning_action_count: int | None
     learning_action_completion_rate_percent: Decimal | None
 
 
@@ -353,6 +354,7 @@ async def get_campaign_portfolio_decision_queue(
         overdue_learning_action_count = None
         unassigned_learning_action_count = None
         completed_learning_action_count = None
+        tracked_learning_action_count = None
         learning_action_completion_rate_percent = None
         if plan.organization_unit_id in work_item_allowed_units:
             open_action_status = CRMWorkItem.status.in_(("open", "in_progress"))
@@ -388,13 +390,13 @@ async def get_campaign_portfolio_decision_queue(
             overdue_learning_action_count = int(action_counts.overdue_count or 0)
             unassigned_learning_action_count = int(action_counts.unassigned_count or 0)
             completed_learning_action_count = int(action_counts.completed_count or 0)
-            tracked_action_count = (
+            tracked_learning_action_count = (
                 open_learning_action_count + completed_learning_action_count
             )
-            if tracked_action_count:
+            if tracked_learning_action_count:
                 learning_action_completion_rate_percent = (
                     Decimal(completed_learning_action_count) * Decimal("100")
-                    / Decimal(tracked_action_count)
+                    / Decimal(tracked_learning_action_count)
                 ).quantize(Decimal("0.01"))
         items.append(CampaignPortfolioDecisionItem(
             campaign_id=plan.campaign_id,
@@ -423,6 +425,7 @@ async def get_campaign_portfolio_decision_queue(
             overdue_learning_action_count=overdue_learning_action_count,
             unassigned_learning_action_count=unassigned_learning_action_count,
             completed_learning_action_count=completed_learning_action_count,
+            tracked_learning_action_count=tracked_learning_action_count,
             learning_action_completion_rate_percent=learning_action_completion_rate_percent,
         ))
     items.sort(key=lambda item: (
