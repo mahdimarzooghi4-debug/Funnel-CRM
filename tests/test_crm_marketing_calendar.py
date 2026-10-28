@@ -118,8 +118,9 @@ async def test_marketing_calendar_combines_scoped_campaigns_and_work_items(
         assert conflict["overlap_end"] == "2026-10-22"
         assert result["events"][0]["channel"] == "store"
         assert result["events"][0]["end_date"] == "2026-10-22"
-        assert result["events"][1]["priority"] == "high"
-        assert result["events"][1]["campaign_id"] == str(campaign_id)
+        work_item_event = next(item for item in result["events"] if item["kind"] == "work_item")
+        assert work_item_event["priority"] == "high"
+        assert work_item_event["campaign_id"] == str(campaign_id)
         assert result["has_more"] is False
 
         invalid_range = await client.get(
