@@ -164,6 +164,18 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert updated.json()["channel"] == "store"
         assert updated.json()["planned_budget_amount"] == "1000.00"
 
+        unsupported_readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        assert unsupported_readiness.status_code == 200, unsupported_readiness.text
+        unsupported_check = next(
+            item for item in unsupported_readiness.json()["checks"]
+            if item["key"] == "channel_eligibility"
+        )
+        assert unsupported_check["status"] == "unsupported"
+        assert unsupported_check["count"] is None
+
         archived = await client.post(
             f"/api/v1/crm/campaigns/{campaign_id}/archive", headers=headers
         )
