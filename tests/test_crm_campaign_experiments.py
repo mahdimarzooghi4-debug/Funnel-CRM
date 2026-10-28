@@ -443,6 +443,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.commerce_event:view"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:view"),
         ])
         await context.session.flush()
 
