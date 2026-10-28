@@ -4,7 +4,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import cast, func, select, String
 from sqlalchemy.orm import aliased
@@ -25,6 +25,7 @@ from funnel_crm.platform.models import (
     CRMProfile,
     CRMWorkItem,
     CRMWorkItemOutcome,
+    CRMWorkItemCampaignSignalOutcome,
     WorkspaceMembership,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
@@ -174,6 +175,53 @@ class WorkItemRead(BaseModel):
     source_campaign_signal_type: str | None
     created_at: datetime
     updated_at: datetime
+
+
+CampaignSignalDecision = Literal["adjusted", "data_corrected", "no_change", "escalated", "other"]
+
+
+class CampaignSignalOutcomeCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    decision_key: CampaignSignalDecision
+    notes: str = Field(min_length=1, max_length=2000)
+    occurred_at: datetime | None = None
+
+    @field_validator("notes")
+    @classmethod
+    def normalize_required_notes(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("notes must contain a non-whitespace character")
+        return value
+
+    @field_validator("occurred_at")
+    @classmethod
+    def require_outcome_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("occurred_at must include a timezone")
+        return value
+
+
+class CampaignSignalOutcomeRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    request_id: UUID
+    work_item_id: UUID
+    recorded_by_membership_id: UUID
+    metric_key: str
+    signal_type: str
+    decision_key: CampaignSignalDecision
+    notes: str
+    metric_actual: str | None
+    metric_target: str
+    metric_status: str
+    observed_days: int
+    period_days: int
+    occurred_at: datetime
+    created_at: datetime
 
 
 class WorkItemOutcomeCreate(BaseModel):
@@ -503,6 +551,172 @@ async def create_work_item_from_campaign_signal(
     _audit(context, item, "crm_work_item.created_from_campaign_signal", None, after)
     await context.session.flush()
     return WorkItemRead.model_validate(item)
+
+
+
+@router.post(
+    "/{item_id}/campaign-signal-outcomes",
+    response_model=CampaignSignalOutcomeRead,
+    status_code=201,
+    operation_id="recordCRMCampaignSignalWorkItemOutcome",
+)
+async def record_campaign_signal_work_item_outcome(
+    item_id: UUID,
+    payload: CampaignSignalOutcomeCreate,
+    response: Response,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignSignalOutcomeRead:
+    item = await context.session.scalar(
+        select(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == context.access.tenant_id,
+            CRMWorkItem.id == item_id,
+        ).with_for_update()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="CRM work item not found")
+    await _require_permission(context, "crm.work_item:record_outcome", item.organization_unit_id)
+    if item.source_campaign_target_plan_id is None or item.source_campaign_metric_key is None:
+        raise HTTPException(status_code=404, detail="Campaign signal work item not found")
+    if item.status == "cancelled":
+        raise HTTPException(status_code=409, detail="Cancelled work items cannot record campaign signal outcomes")
+
+    existing = await context.session.scalar(
+        select(CRMWorkItemCampaignSignalOutcome).where(
+            CRMWorkItemCampaignSignalOutcome.tenant_id == context.access.tenant_id,
+            CRMWorkItemCampaignSignalOutcome.request_id == payload.request_id,
+        )
+    )
+    if existing is not None:
+        matches = (
+            existing.work_item_id == item.id
+            and existing.decision_key == payload.decision_key
+            and existing.notes == payload.notes
+            and (payload.occurred_at is None or existing.occurred_at == payload.occurred_at)
+        )
+        if not matches:
+            raise HTTPException(status_code=409, detail="Outcome request ID was already used for different data")
+        response.status_code = 200
+        return CampaignSignalOutcomeRead.model_validate(existing)
+
+    plan = await context.session.scalar(
+        select(CRMMarketingCampaignTargetPlan).where(
+            CRMMarketingCampaignTargetPlan.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaignTargetPlan.id == item.source_campaign_target_plan_id,
+            CRMMarketingCampaignTargetPlan.campaign_id == item.campaign_id,
+            CRMMarketingCampaignTargetPlan.organization_unit_id == item.organization_unit_id,
+        )
+    )
+    if plan is None:
+        raise HTTPException(status_code=409, detail="Campaign target plan for this work item is unavailable")
+    await _require_permission(context, "crm.campaign:view", item.organization_unit_id)
+
+    measurements = (await context.session.scalars(
+        select(CRMMarketingCampaignMeasurement).where(
+            CRMMarketingCampaignMeasurement.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaignMeasurement.organization_unit_id == item.organization_unit_id,
+            CRMMarketingCampaignMeasurement.campaign_id == item.campaign_id,
+            CRMMarketingCampaignMeasurement.measured_on >= plan.period_start,
+            CRMMarketingCampaignMeasurement.measured_on <= plan.period_end,
+        )
+    )).all()
+    if item.source_campaign_metric_key == "period_net_paid_to_spend":
+        await _require_permission(context, "crm.commerce_event:view", item.organization_unit_id)
+        events = (await context.session.scalars(
+            select(CRMProductCommerceEvent).where(
+                CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+                CRMProductCommerceEvent.organization_unit_id == item.organization_unit_id,
+                CRMProductCommerceEvent.campaign_id == item.campaign_id,
+                CRMProductCommerceEvent.occurred_at >= datetime.combine(plan.period_start, time.min, tzinfo=timezone.utc),
+                CRMProductCommerceEvent.occurred_at < datetime.combine(plan.period_end + timedelta(days=1), time.min, tzinfo=timezone.utc),
+            )
+        )).all()
+        metric = evaluate_net_paid_to_spend_target(plan, list(measurements), list(events))
+    else:
+        metric = evaluate_plan_metrics(plan, list(measurements)).get(item.source_campaign_metric_key)
+    if metric is None:
+        raise HTTPException(status_code=409, detail="Campaign signal metric can no longer be evaluated")
+
+    outcome = CRMWorkItemCampaignSignalOutcome(
+        id=uuid4(),
+        tenant_id=context.access.tenant_id,
+        request_id=payload.request_id,
+        work_item_id=item.id,
+        recorded_by_membership_id=context.access.membership_id,
+        metric_key=item.source_campaign_metric_key,
+        signal_type=item.source_campaign_signal_type or "measurement_gap",
+        decision_key=payload.decision_key,
+        notes=payload.notes,
+        metric_actual=str(metric.actual) if metric.actual is not None else None,
+        metric_target=str(metric.target),
+        metric_status=metric.status,
+        observed_days=metric.observed_days,
+        period_days=metric.period_days,
+        occurred_at=payload.occurred_at or datetime.now(timezone.utc),
+    )
+    context.session.add(outcome)
+    await context.session.flush()
+    _audit(
+        context, item, "crm_work_item.campaign_signal_outcome_recorded", None,
+        {
+            "outcome_id": str(outcome.id),
+            "request_id": str(outcome.request_id),
+            "metric_key": outcome.metric_key,
+            "signal_type": outcome.signal_type,
+            "decision_key": outcome.decision_key,
+            "metric_actual": outcome.metric_actual,
+            "metric_target": outcome.metric_target,
+            "metric_status": outcome.metric_status,
+            "observed_days": outcome.observed_days,
+            "period_days": outcome.period_days,
+        },
+    )
+    await context.session.flush()
+    return CampaignSignalOutcomeRead.model_validate(outcome)
+
+
+@router.get(
+    "/{item_id}/campaign-signal-outcomes",
+    response_model=list[CampaignSignalOutcomeRead],
+    operation_id="listCRMCampaignSignalWorkItemOutcomes",
+)
+async def list_campaign_signal_work_item_outcomes(
+    item_id: UUID,
+    limit: int = Query(default=100, ge=1, le=200),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> list[CampaignSignalOutcomeRead]:
+    item = await context.session.scalar(
+        select(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == context.access.tenant_id,
+            CRMWorkItem.id == item_id,
+        )
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="CRM work item not found")
+    await _require_permission(context, "crm.work_item:view", item.organization_unit_id)
+    if item.source_campaign_target_plan_id is None:
+        raise HTTPException(status_code=404, detail="Campaign signal work item not found")
+    outcomes = (await context.session.scalars(
+        select(CRMWorkItemCampaignSignalOutcome).where(
+            CRMWorkItemCampaignSignalOutcome.tenant_id == context.access.tenant_id,
+            CRMWorkItemCampaignSignalOutcome.work_item_id == item.id,
+        ).order_by(CRMWorkItemCampaignSignalOutcome.occurred_at.desc(), CRMWorkItemCampaignSignalOutcome.created_at.desc())
+        .limit(limit)
+    )).all()
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_work_item.campaign_signal_outcomes_listed",
+        target_type="crm_work_item",
+        target_key=str(item.id),
+        organization_unit_id=item.organization_unit_id,
+        before_state=None,
+        after_state={"result_count": len(outcomes)},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return [CampaignSignalOutcomeRead.model_validate(outcome) for outcome in outcomes]
 
 
 @router.get("", response_model=list[WorkItemRead],

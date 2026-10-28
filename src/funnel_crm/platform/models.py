@@ -2167,6 +2167,64 @@ class CRMWorkItemOutcome(Base):
         server_default=text("now()"),
     )
 
+class CRMWorkItemCampaignSignalOutcome(Base):
+    """Append-only manager outcome and metric snapshot for a campaign signal task."""
+
+    __tablename__ = "crm_work_item_campaign_signal_outcomes"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_work_item_campaign_signal_outcomes_tenant_id"),
+        UniqueConstraint("tenant_id", "request_id", name="uq_crm_work_item_campaign_signal_outcomes_request"),
+        CheckConstraint(
+            "decision_key IN ('adjusted', 'data_corrected', 'no_change', 'escalated', 'other')",
+            name="ck_crm_work_item_campaign_signal_outcomes_decision",
+        ),
+        CheckConstraint(
+            "signal_type IN ('measurement_gap', 'target_gap')",
+            name="ck_crm_work_item_campaign_signal_outcomes_signal_type",
+        ),
+        CheckConstraint(
+            "metric_status IN ('met', 'not_met', 'no_data')",
+            name="ck_crm_work_item_campaign_signal_outcomes_metric_status",
+        ),
+        CheckConstraint(
+            "observed_days >= 0 AND period_days > 0 AND observed_days <= period_days",
+            name="ck_crm_work_item_campaign_signal_outcomes_coverage",
+        ),
+        CheckConstraint("length(trim(notes)) BETWEEN 1 AND 2000",
+                        name="ck_crm_work_item_campaign_signal_outcomes_notes"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_work_item_campaign_signal_outcomes_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "work_item_id"],
+            ["crm_work_items.tenant_id", "crm_work_items.id"],
+            name="fk_crm_work_item_campaign_signal_outcomes_item_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "recorded_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_work_item_campaign_signal_outcomes_recorder_same_tenant", ondelete="RESTRICT"),
+        Index("ix_crm_work_item_campaign_signal_outcomes_tenant_item_time",
+              "tenant_id", "work_item_id", "occurred_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    request_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    work_item_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    recorded_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    metric_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    signal_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    decision_key: Mapped[str] = mapped_column(String(24), nullable=False)
+    notes: Mapped[str] = mapped_column(String(2000), nullable=False)
+    metric_actual: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    metric_target: Mapped[str] = mapped_column(String(80), nullable=False)
+    metric_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    observed_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    period_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
 class CRMProductCommerceEvent(Base):
     """Source fact for an explicitly recorded paid order or refund event."""
 
