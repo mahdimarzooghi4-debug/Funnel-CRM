@@ -348,7 +348,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         ))
         await context.session.execute(delete(CRMWorkItem).where(
             CRMWorkItem.tenant_id == tenant_id,
-            CRMWorkItem.source_learning_review_id == learning_review_id,
+            CRMWorkItem.campaign_id == campaign_id,
         ))
         await context.session.execute(delete(CRMMarketingLearningReview).where(
             CRMMarketingLearningReview.tenant_id == tenant_id,
