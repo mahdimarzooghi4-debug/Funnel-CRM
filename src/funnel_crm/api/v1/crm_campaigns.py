@@ -271,7 +271,6 @@ async def update_campaign(
 
 
 @router.post(
-    @router.post(
     "/{campaign_id}/lifecycle", response_model=CampaignRead,
     operation_id="transitionCRMMarketingCampaignLifecycle",
 )
