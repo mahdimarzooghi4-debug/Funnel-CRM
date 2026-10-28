@@ -195,6 +195,10 @@ class VariantReadout(BaseModel):
     source_labels: list[str]
     assignment: DeliveryCountReadout
     exposure: DeliveryCountReadout
+    metric_per_assigned: Decimal | None = None
+    metric_per_exposed: Decimal | None = None
+    metric_per_assigned_delta_vs_control: Decimal | None = None
+    metric_per_exposed_delta_vs_control: Decimal | None = None
     guardrails: list[GuardrailMetricReadout] = Field(default_factory=list)
 
 
@@ -263,7 +267,9 @@ def _readout_csv_content(readout: CampaignExperimentReadout) -> str:
         "variant_campaign_name", "variant_label", "is_control", "metric_role", "metric",
         "currency", "value", "delta_vs_control", "percent_change_vs_control", "status",
         "observed_days", "paired_days", "expected_days", "missing_days", "coverage_percent",
-        "coverage_delta_vs_control_percentage_points", "missing_dates", "source_labels",
+        "coverage_delta_vs_control_percentage_points", "metric_per_assigned", "metric_per_exposed",
+        "metric_per_assigned_delta_vs_control", "metric_per_exposed_delta_vs_control",
+        "missing_dates", "source_labels",
     ]
     output = io.StringIO(newline="")
     writer = csv.writer(output)
@@ -286,6 +292,10 @@ def _readout_csv_content(readout: CampaignExperimentReadout) -> str:
                 observation.expected_days, observation.missing_days,
                 observation.coverage_percent,
                 observation.coverage_delta_vs_control_percentage_points,
+                variant.metric_per_assigned if role == "primary" else None,
+                variant.metric_per_exposed if role == "primary" else None,
+                variant.metric_per_assigned_delta_vs_control if role == "primary" else None,
+                variant.metric_per_exposed_delta_vs_control if role == "primary" else None,
                 json.dumps([day.isoformat() for day in observation.missing_dates]),
                 json.dumps(observation.source_labels, ensure_ascii=False),
             ])
@@ -720,6 +730,13 @@ def _metric_coverage(
     )
 
 
+def _delivery_efficiency(value: int | Decimal | None, denominator: int | None) -> Decimal | None:
+    """Normalize a recorded metric by a reported assignment or exposure count."""
+    if value is None or denominator is None or denominator <= 0:
+        return None
+    return (Decimal(value) / Decimal(denominator)).quantize(Decimal("0.000001"))
+
+
 def _delivery_count_readout(
     field: Literal["assigned_count", "exposure_count"],
     rows: list[CRMMarketingCampaignMeasurement],
@@ -1058,6 +1075,27 @@ async def read_campaign_experiment(
             ),
             guardrails=guardrail_readouts,
         ))
+    control_readout = next((item for item in readouts if item.is_control), None)
+    control_assigned_rate = (
+        _delivery_efficiency(control_readout.value, control_readout.assignment.count)
+        if control_readout else None
+    )
+    control_exposed_rate = (
+        _delivery_efficiency(control_readout.value, control_readout.exposure.count)
+        if control_readout else None
+    )
+    for item in readouts:
+        item.metric_per_assigned = _delivery_efficiency(item.value, item.assignment.count)
+        item.metric_per_exposed = _delivery_efficiency(item.value, item.exposure.count)
+        item.metric_per_assigned_delta_vs_control = (
+            item.metric_per_assigned - control_assigned_rate
+            if item.metric_per_assigned is not None and control_assigned_rate is not None else None
+        )
+        item.metric_per_exposed_delta_vs_control = (
+            item.metric_per_exposed - control_exposed_rate
+            if item.metric_per_exposed is not None and control_exposed_rate is not None else None
+        )
+
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id,
         actor_kind="user", actor_identity_id=context.access.identity_id,
