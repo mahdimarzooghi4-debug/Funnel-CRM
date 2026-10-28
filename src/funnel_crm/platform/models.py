@@ -806,7 +806,7 @@ class CRMMarketingCampaign(Base):
             "channel IN ('email', 'phone', 'messaging', 'social', 'web', 'store', 'field', 'other')",
             name="ck_crm_marketing_campaigns_channel",
         ),
-        CheckConstraint("status IN ('draft', 'archived')", name="ck_crm_marketing_campaigns_status"),
+        CheckConstraint("status IN ('draft', 'scheduled', 'active', 'paused', 'completed', 'archived')", name="ck_crm_marketing_campaigns_status"),
         CheckConstraint(
             "(planned_budget_amount IS NULL AND planned_budget_currency IS NULL) OR "
             "(planned_budget_amount IS NOT NULL AND planned_budget_amount >= 0 "
