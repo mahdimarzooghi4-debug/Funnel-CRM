@@ -520,7 +520,12 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         )
         assert restricted_period_comparison.status_code == 200, restricted_period_comparison.text
         assert restricted_period_comparison.json()["commerce_scope_status"] == "not_authorized"
-        assert restricted_period_comparison.json()["financial_outcomes_by_currency"] == []
+        restricted_period_financial = restricted_period_comparison.json()["financial_outcomes_by_currency"]
+        assert len(restricted_period_financial) == 2
+        assert all(row["baseline_paid_amount"] == "0" for row in restricted_period_financial)
+        assert all(row["comparison_paid_amount"] == "0" for row in restricted_period_financial)
+        assert all(row["baseline_refunded_amount"] == "0" for row in restricted_period_financial)
+        assert all(row["comparison_refunded_amount"] == "0" for row in restricted_period_financial)
         assert restricted_period_comparison.json()["source_product_outcomes"] == []
         restricted_queue_response = await client.get(
             "/api/v1/crm/campaigns/decision-queue",
