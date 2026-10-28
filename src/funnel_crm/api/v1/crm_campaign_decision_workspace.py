@@ -168,6 +168,47 @@ class CampaignPortfolioDecisionItem(BaseModel):
     learning_action_completion_rate_percent: Decimal | None
 
 
+class PeriodMetricComparison(BaseModel):
+    baseline_value: int | Decimal | None
+    comparison_value: int | Decimal | None
+    change: int | Decimal | None
+    change_percent: Decimal | None
+    baseline_observed_days: int
+    comparison_observed_days: int
+
+
+class PeriodCurrencyComparison(BaseModel):
+    currency: str
+    baseline_spend_amount: Decimal
+    comparison_spend_amount: Decimal
+    baseline_paid_amount: Decimal
+    comparison_paid_amount: Decimal
+    baseline_refunded_amount: Decimal
+    comparison_refunded_amount: Decimal
+    baseline_net_paid_amount: Decimal
+    comparison_net_paid_amount: Decimal
+
+
+class CampaignPortfolioPeriodComparison(BaseModel):
+    generated_at: datetime
+    baseline_start: date
+    baseline_end: date
+    comparison_start: date
+    comparison_end: date
+    baseline_calendar_days: int
+    comparison_calendar_days: int
+    baseline_campaign_count: int
+    comparison_campaign_count: int
+    baseline_measurement_record_count: int
+    comparison_measurement_record_count: int
+    baseline_recorded_days: int
+    comparison_recorded_days: int
+    metrics: dict[str, PeriodMetricComparison]
+    financial_outcomes_by_currency: list[PeriodCurrencyComparison]
+    commerce_scope_status: Literal["complete", "partial", "not_authorized"]
+    interpretation: str
+
+
 class CampaignPortfolioCurrencyOutcome(BaseModel):
     currency: str
     spend_measurement_count: int
@@ -716,6 +757,218 @@ def _spreadsheet_safe_cell(value: object) -> str:
     if text.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + text
     return text
+
+
+@router.get(
+    "/portfolio-period-comparison",
+    response_model=CampaignPortfolioPeriodComparison,
+    operation_id="getCRMCampaignPortfolioPeriodComparison",
+)
+async def get_campaign_portfolio_period_comparison(
+    baseline_start: date = Query(...),
+    baseline_end: date = Query(...),
+    comparison_start: date = Query(...),
+    comparison_end: date = Query(...),
+    organization_unit_id: UUID | None = None,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignPortfolioPeriodComparison:
+    """Compare recorded campaign outcomes across two non-overlapping periods."""
+    if baseline_start > baseline_end or comparison_start > comparison_end:
+        raise HTTPException(status_code=422, detail="Each period start must be on or before its end")
+    if baseline_end >= comparison_start:
+        raise HTTPException(status_code=422, detail="Baseline period must end before comparison period starts")
+    if (baseline_end - baseline_start).days > 365 or (comparison_end - comparison_start).days > 365:
+        raise HTTPException(status_code=422, detail="Each comparison period is limited to 366 calendar days")
+
+    allowed_units = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.campaign:view")
+    )).all())
+    if organization_unit_id is not None:
+        if organization_unit_id not in allowed_units:
+            raise HTTPException(status_code=403, detail="Campaign period comparison is not authorized")
+        allowed_units = {organization_unit_id}
+    commerce_allowed_units = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.commerce_event:view")
+    )).all())
+    selected_commerce_units = allowed_units & commerce_allowed_units
+    metric_keys = ("impressions", "clicks", "leads", "conversions")
+    metric_columns = {
+        key: getattr(CRMMarketingCampaignMeasurement, key) for key in metric_keys
+    }
+
+    async def measurement_snapshot(start: date, end: date) -> dict[str, object]:
+        expressions = [
+            func.sum(column).label(key)
+            for key, column in metric_columns.items()
+        ]
+        expressions.extend(
+            func.count(func.distinct(CRMMarketingCampaignMeasurement.measured_on))
+            .filter(column.is_not(None))
+            .label(f"{key}_days")
+            for key, column in metric_columns.items()
+        )
+        expressions.extend((
+            func.count(func.distinct(CRMMarketingCampaignMeasurement.campaign_id)).label("campaign_count"),
+            func.count(CRMMarketingCampaignMeasurement.id).label("record_count"),
+            func.count(func.distinct(CRMMarketingCampaignMeasurement.measured_on)).label("recorded_days"),
+        ))
+        row = (await context.session.execute(
+            select(*expressions).where(
+                CRMMarketingCampaignMeasurement.tenant_id == context.access.tenant_id,
+                CRMMarketingCampaignMeasurement.organization_unit_id.in_(allowed_units),
+                CRMMarketingCampaignMeasurement.measured_on >= start,
+                CRMMarketingCampaignMeasurement.measured_on <= end,
+            )
+        )).one()
+        snapshot = dict(row._mapping)
+        for key in metric_keys:
+            if snapshot[key] is not None:
+                snapshot[key] = int(snapshot[key])
+        return snapshot
+
+    baseline = await measurement_snapshot(baseline_start, baseline_end)
+    comparison = await measurement_snapshot(comparison_start, comparison_end)
+    metric_comparisons: dict[str, PeriodMetricComparison] = {}
+    for key in metric_keys:
+        before = baseline[key]
+        after = comparison[key]
+        change = after - before if before is not None and after is not None else None
+        change_percent = (
+            (Decimal(str(change)) * Decimal("100") / Decimal(str(before))).quantize(Decimal("0.01"))
+            if before not in (None, 0) and after is not None
+            else None
+        )
+        metric_comparisons[key] = PeriodMetricComparison(
+            baseline_value=before,
+            comparison_value=after,
+            change=change,
+            change_percent=change_percent,
+            baseline_observed_days=int(baseline[f"{key}_days"] or 0),
+            comparison_observed_days=int(comparison[f"{key}_days"] or 0),
+        )
+
+    currency_values: dict[str, dict[str, Decimal]] = {}
+    period_ranges = (
+        ("baseline", baseline_start, baseline_end),
+        ("comparison", comparison_start, comparison_end),
+    )
+    for prefix, start, end in period_ranges:
+        spend_rows = (await context.session.execute(
+            select(
+                CRMMarketingCampaignMeasurement.actual_spend_currency,
+                func.sum(CRMMarketingCampaignMeasurement.actual_spend_amount).label("amount"),
+            )
+            .where(
+                CRMMarketingCampaignMeasurement.tenant_id == context.access.tenant_id,
+                CRMMarketingCampaignMeasurement.organization_unit_id.in_(allowed_units),
+                CRMMarketingCampaignMeasurement.measured_on >= start,
+                CRMMarketingCampaignMeasurement.measured_on <= end,
+                CRMMarketingCampaignMeasurement.actual_spend_amount.is_not(None),
+                CRMMarketingCampaignMeasurement.actual_spend_currency.is_not(None),
+            )
+            .group_by(CRMMarketingCampaignMeasurement.actual_spend_currency)
+        )).all()
+        for row in spend_rows:
+            state = currency_values.setdefault(row.actual_spend_currency, {})
+            state[f"{prefix}_spend"] = row.amount or Decimal("0")
+        if selected_commerce_units:
+            event_start = datetime.combine(start, time.min, tzinfo=timezone.utc)
+            event_end = datetime.combine(end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            event_rows = (await context.session.execute(
+                select(
+                    CRMProductCommerceEvent.currency,
+                    CRMProductCommerceEvent.event_kind,
+                    func.sum(CRMProductCommerceEvent.amount).label("amount"),
+                )
+                .where(
+                    CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+                    CRMProductCommerceEvent.organization_unit_id.in_(selected_commerce_units),
+                    CRMProductCommerceEvent.occurred_at >= event_start,
+                    CRMProductCommerceEvent.occurred_at < event_end,
+                    CRMProductCommerceEvent.campaign_id.is_not(None),
+                )
+                .group_by(
+                    CRMProductCommerceEvent.currency,
+                    CRMProductCommerceEvent.event_kind,
+                )
+            )).all()
+            for row in event_rows:
+                state = currency_values.setdefault(row.currency, {})
+                state[f"{prefix}_{row.event_kind}"] = row.amount or Decimal("0")
+
+    financial_outcomes = []
+    for currency, state in sorted(currency_values.items()):
+        baseline_spend = state.get("baseline_spend", Decimal("0"))
+        comparison_spend = state.get("comparison_spend", Decimal("0"))
+        baseline_paid = state.get("baseline_paid", Decimal("0"))
+        comparison_paid = state.get("comparison_paid", Decimal("0"))
+        baseline_refunded = state.get("baseline_refunded", Decimal("0"))
+        comparison_refunded = state.get("comparison_refunded", Decimal("0"))
+        financial_outcomes.append(PeriodCurrencyComparison(
+            currency=currency,
+            baseline_spend_amount=baseline_spend,
+            comparison_spend_amount=comparison_spend,
+            baseline_paid_amount=baseline_paid,
+            comparison_paid_amount=comparison_paid,
+            baseline_refunded_amount=baseline_refunded,
+            comparison_refunded_amount=comparison_refunded,
+            baseline_net_paid_amount=baseline_paid - baseline_refunded,
+            comparison_net_paid_amount=comparison_paid - comparison_refunded,
+        ))
+
+    authorized_scope_count = len(selected_commerce_units)
+    commerce_scope_status = (
+        "not_authorized"
+        if not authorized_scope_count
+        else "partial"
+        if authorized_scope_count < len(allowed_units)
+        else "complete"
+    )
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_campaign.period_comparison_viewed",
+        target_type="crm_campaign_portfolio_period_comparison",
+        target_key=str(organization_unit_id or context.access.tenant_id),
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "baseline_start": baseline_start.isoformat(),
+            "baseline_end": baseline_end.isoformat(),
+            "comparison_start": comparison_start.isoformat(),
+            "comparison_end": comparison_end.isoformat(),
+            "baseline_campaign_count": int(baseline["campaign_count"] or 0),
+            "comparison_campaign_count": int(comparison["campaign_count"] or 0),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignPortfolioPeriodComparison(
+        generated_at=datetime.now(timezone.utc),
+        baseline_start=baseline_start,
+        baseline_end=baseline_end,
+        comparison_start=comparison_start,
+        comparison_end=comparison_end,
+        baseline_calendar_days=(baseline_end - baseline_start).days + 1,
+        comparison_calendar_days=(comparison_end - comparison_start).days + 1,
+        baseline_campaign_count=int(baseline["campaign_count"] or 0),
+        comparison_campaign_count=int(comparison["campaign_count"] or 0),
+        baseline_measurement_record_count=int(baseline["record_count"] or 0),
+        comparison_measurement_record_count=int(comparison["record_count"] or 0),
+        baseline_recorded_days=int(baseline["recorded_days"] or 0),
+        comparison_recorded_days=int(comparison["recorded_days"] or 0),
+        metrics=metric_comparisons,
+        financial_outcomes_by_currency=financial_outcomes,
+        commerce_scope_status=commerce_scope_status,
+        interpretation=(
+            "Observed totals and period-over-period changes are descriptive. "
+            "They do not establish causal attribution, normalize for campaign mix, "
+            "or issue an automatic recommendation. A percentage change is omitted "
+            "when the baseline metric is zero or unavailable."
+        ),
+    )
 
 
 @router.get(
