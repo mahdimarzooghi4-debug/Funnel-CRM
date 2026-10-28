@@ -244,6 +244,24 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         )
         assert ranked_page_response.status_code == 200, ranked_page_response.text
         ranked_page = ranked_page_response.json()
+        reason_filtered_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id), "attention_reason": "target_missed",
+                    "limit": 1},
+        )
+        assert reason_filtered_response.status_code == 200, reason_filtered_response.text
+        reason_filtered = reason_filtered_response.json()
+        status_filtered_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id),
+                    "status": "on_track_or_insufficient_signal"},
+        )
+        assert status_filtered_response.status_code == 200, status_filtered_response.text
+        status_filtered = status_filtered_response.json()
 
     assert workspace["campaign_name"] == "Decision workspace campaign"
     assert workspace["period_calendar_days"] == 7
@@ -300,6 +318,11 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert ranked_page["has_more"] is True
     assert len(ranked_page["items"]) == 1
     assert ranked_page["items"][0]["target_plan_id"] == str(plan_id)
+    assert reason_filtered["total_count"] == 1
+    assert reason_filtered["has_more"] is False
+    assert reason_filtered["items"][0]["target_plan_id"] == str(plan_id)
+    assert status_filtered["total_count"] == 1
+    assert status_filtered["items"][0]["target_plan_id"] == str(low_priority_plan_id)
     assert queue["items"][0]["target_plan_id"] == str(plan_id)
     assert queue["items"][0]["status"] == "review_required"
     assert queue["items"][0]["missed_metric_count"] == 2
