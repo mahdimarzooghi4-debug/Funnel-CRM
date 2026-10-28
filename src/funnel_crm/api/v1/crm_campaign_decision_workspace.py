@@ -200,6 +200,14 @@ async def get_campaign_portfolio_decision_queue(
     period_start: date = Query(...),
     period_end: date = Query(...),
     organization_unit_id: UUID | None = None,
+    status: Literal["review_required", "on_track_or_insufficient_signal"] | None = Query(default=None),
+    attention_reason: Literal[
+        "target_missed",
+        "net_commerce_target_missed",
+        "target_metrics_without_data",
+        "net_commerce_target_without_data",
+        "low_recorded_day_coverage",
+    ] | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantSessionContext = Depends(require_tenant_session),
@@ -467,6 +475,14 @@ async def get_campaign_portfolio_decision_queue(
         not bool(item.attention_reasons), -len(item.attention_reasons),
         item.period_end, item.campaign_name, str(item.target_plan_id),
     ))
+    if status is not None:
+        items = [item for item in items if item.status == status]
+    if attention_reason is not None:
+        items = [
+            item for item in items
+            if attention_reason in item.attention_reasons
+        ]
+    filtered_total = len(items)
     page_items = items[offset:offset + limit]
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id,
@@ -479,7 +495,10 @@ async def get_campaign_portfolio_decision_queue(
         organization_unit_id=organization_unit_id,
         before_state=None,
         after_state={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
-                     "total_count": total, "returned_count": len(page_items), "offset": offset, "limit": limit},
+                     "candidate_count": total, "total_count": filtered_total,
+                     "returned_count": len(page_items), "status_filter": status,
+                     "attention_reason_filter": attention_reason,
+                     "offset": offset, "limit": limit},
         correlation_id=None,
     ))
     await context.session.flush()
@@ -488,8 +507,8 @@ async def get_campaign_portfolio_decision_queue(
         period_start=period_start,
         period_end=period_end,
         items=page_items,
-        total_count=total,
-        has_more=offset + len(page_items) < total,
+        total_count=filtered_total,
+        has_more=offset + len(page_items) < filtered_total,
         basis=("Target plan evaluations, recorded-day coverage, and linked paid/refunded outcomes by "
                "currency; no causal attribution, source-specific spend allocation, or automatic action is applied."),
         automatic_recommendation_issued=False,
