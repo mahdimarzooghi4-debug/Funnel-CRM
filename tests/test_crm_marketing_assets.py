@@ -62,6 +62,7 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
             ),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.segment:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:view"),
         ])
         context.session.add(CRMMarketingCampaign(
