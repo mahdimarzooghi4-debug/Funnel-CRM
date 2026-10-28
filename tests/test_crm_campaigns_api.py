@@ -77,6 +77,7 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
             profile_kind="person", display_name="Campaign readiness profile",
             lifecycle_stage="lead",
         ))
+        await context.session.flush()
         context.session.add(CRMContactPoint(
             id=uuid4(), tenant_id=tenant_id, profile_id=profile_id,
             channel="email", encrypted_value=b"x" * 29,
