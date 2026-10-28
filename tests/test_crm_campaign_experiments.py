@@ -22,6 +22,7 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaignMeasurement,
     CRMProductCommerceEvent,
     CRMProfileSegment,
+    CRMWorkItem,
     Role,
     RoleAssignment,
     RolePermission,
@@ -344,6 +345,7 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
     segment_name = f"Experiment audience {uuid4().hex[:8]}"
     segment_criteria = {"profile_kinds": ["person"]}
     experiment_id: UUID
+    follow_up_work_item_id = uuid4()
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
@@ -367,6 +369,17 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 starts_at=None, ends_at=None, status="draft",
             ),
         ])
+        await context.session.flush()
+        context.session.add(CRMWorkItem(
+            id=follow_up_work_item_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            profile_id=None, opportunity_id=None, campaign_id=variant_id,
+            assigned_membership_id=None,
+            created_by_membership_id=context.access.membership_id,
+            title="Follow up on experiment decision",
+            description="Implement the selected variant in the next campaign.",
+            due_at=None, priority="normal", status="open", completed_at=None,
+            source_learning_review_id=None, source_outcome_id=None,
+        ))
         await context.session.flush()
         context.session.add_all([
             CRMMarketingCampaignMeasurement(
@@ -582,12 +595,14 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
                 "selected_variant_campaign_id": str(variant_id),
                 "rationale": "The observed conversion count was higher in the variant; coverage is incomplete.",
                 "next_action": "Run a longer follow-up with balanced daily reporting.",
+                "follow_up_work_item_id": str(follow_up_work_item_id),
             },
         )
         assert decision_response.status_code == 200, decision_response.text
         recorded_decision = decision_response.json()["decision"]
         assert recorded_decision["decision"] == "adopt_variant"
         assert recorded_decision["selected_variant_campaign_id"] == str(variant_id)
+        assert recorded_decision["follow_up_work_item_id"] == str(follow_up_work_item_id)
         assert recorded_decision["rationale"].startswith("The observed conversion")
         assert "recorded_at" in recorded_decision
         invalid_decision = await client.put(
