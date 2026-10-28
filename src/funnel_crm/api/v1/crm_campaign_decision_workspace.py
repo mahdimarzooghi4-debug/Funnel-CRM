@@ -645,6 +645,7 @@ async def get_campaign_portfolio_decision_queue(
         item for item in items
         if item.organization_unit_id in commerce_allowed_units
     ]
+    source_product_financials: dict[tuple[str, str], dict[str, object]] = {}
     if authorized_windows:
         commerce_windows = [
             and_(
@@ -666,7 +667,6 @@ async def get_campaign_portfolio_decision_queue(
             )
         )).all()
         order_references: dict[tuple[str, str], dict[str, set[tuple[str, str]]]] = {}
-        source_product_financials: dict[tuple[str, str], dict[str, object]] = {}
         for event in events:
             state = financial_by_currency.setdefault(
                 event.currency,
