@@ -111,9 +111,6 @@ async def get_campaign_readiness(
         "phone": "phone",
         "messaging": "phone",
         "social": "social_handle",
-        "web": "website",
-        "store": "postal_address",
-        "field": "postal_address",
     }
     communication_channel = channel_map.get(campaign.channel)
     eligibility_status: Literal["complete", "missing", "not_authorized", "unsupported"]
