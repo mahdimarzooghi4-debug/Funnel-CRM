@@ -94,6 +94,7 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
             headers=headers,
             json={
                 "organization_unit_id": str(root_id),
+                "campaign_id": str(campaign_id),
                 "channel": "social",
                 "asset_kind": "copy",
                 "title": "Launch post",
