@@ -195,10 +195,10 @@ class VariantReadout(BaseModel):
     source_labels: list[str]
     assignment: DeliveryCountReadout
     exposure: DeliveryCountReadout
-    metric_per_assigned: Decimal | None
-    metric_per_exposed: Decimal | None
-    metric_per_assigned_delta_vs_control: Decimal | None
-    metric_per_exposed_delta_vs_control: Decimal | None
+    metric_per_assigned: Decimal | None = None
+    metric_per_exposed: Decimal | None = None
+    metric_per_assigned_delta_vs_control: Decimal | None = None
+    metric_per_exposed_delta_vs_control: Decimal | None = None
     guardrails: list[GuardrailMetricReadout] = Field(default_factory=list)
 
 
