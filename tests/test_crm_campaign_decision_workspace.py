@@ -268,6 +268,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["overdue_learning_action_count"] == 1
     assert queue["items"][0]["unassigned_learning_action_count"] == 1
     assert queue["items"][0]["completed_learning_action_count"] == 1
+    assert queue["items"][0]["tracked_learning_action_count"] == 2
     assert Decimal(queue["items"][0]["learning_action_completion_rate_percent"]) == Decimal("50.00")
     queue_currency = {
         row["currency"]: row for row in queue["items"][0]["commerce_outcomes_by_currency"]
@@ -336,6 +337,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         assert restricted_item["commerce_data_status"] == "not_authorized"
         assert restricted_item["open_learning_action_count"] is None
         assert restricted_item["completed_learning_action_count"] is None
+        assert restricted_item["tracked_learning_action_count"] is None
         assert restricted_item["learning_action_completion_rate_percent"] is None
 
     async with tenant_session(
