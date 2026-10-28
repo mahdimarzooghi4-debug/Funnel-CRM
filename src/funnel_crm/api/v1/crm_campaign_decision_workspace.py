@@ -208,6 +208,11 @@ async def get_campaign_portfolio_decision_queue(
         "net_commerce_target_without_data",
         "low_recorded_day_coverage",
     ] | None = Query(default=None),
+    metric_key: Literal[
+        "impressions", "clicks", "leads", "conversions", "spend",
+        "cost_per_lead", "cost_per_conversion", "period_net_paid_to_spend",
+    ] | None = Query(default=None),
+    metric_status: Literal["met", "not_met", "no_data"] | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantSessionContext = Depends(require_tenant_session),
@@ -482,6 +487,19 @@ async def get_campaign_portfolio_decision_queue(
             item for item in items
             if attention_reason in item.attention_reasons
         ]
+    if metric_key is not None:
+        items = [item for item in items if metric_key in item.metrics]
+    if metric_status is not None:
+        if metric_key is not None:
+            items = [
+                item for item in items
+                if item.metrics[metric_key].status == metric_status
+            ]
+        else:
+            items = [
+                item for item in items
+                if any(metric.status == metric_status for metric in item.metrics.values())
+            ]
     filtered_total = len(items)
     page_items = items[offset:offset + limit]
     context.session.add(AuditEvent(
@@ -498,6 +516,8 @@ async def get_campaign_portfolio_decision_queue(
                      "candidate_count": total, "total_count": filtered_total,
                      "returned_count": len(page_items), "status_filter": status,
                      "attention_reason_filter": attention_reason,
+                     "metric_key_filter": metric_key,
+                     "metric_status_filter": metric_status,
                      "offset": offset, "limit": limit},
         correlation_id=None,
     ))
