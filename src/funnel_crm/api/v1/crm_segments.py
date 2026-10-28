@@ -611,7 +611,7 @@ async def _load_active_segment(
 async def review_crm_profile_segment_channel_reach(
     segment_id: UUID,
     purpose_key: str = Query(pattern=r"^[a-z][a-z0-9_.-]{0,79}$"),
-    channel: Literal["email", "phone", "postal_address", "social_handle", "website"],
+    channel: Literal["email", "phone", "postal_address", "social_handle", "website"] = Query(...),
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> CRMProfileSegmentChannelReach:
     segment = await _load_active_segment(context, segment_id)
