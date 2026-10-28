@@ -1,11 +1,15 @@
 """Evidence-backed decision workspace for one campaign target plan."""
 
+import csv
+import io
+import json
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func, select, tuple_
 
@@ -565,6 +569,116 @@ async def get_campaign_portfolio_decision_queue(
         basis=("Target plan evaluations, recorded-day coverage, and linked paid/refunded outcomes by "
                "currency; no causal attribution, source-specific spend allocation, or automatic action is applied."),
         automatic_recommendation_issued=False,
+    )
+
+
+def _spreadsheet_safe_cell(value: object) -> str:
+    text = "" if value is None else str(value)
+    if text.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + text
+    return text
+
+
+@router.get(
+    "/decision-queue/export.csv",
+    response_class=Response,
+    operation_id="exportCRMCampaignPortfolioDecisionQueueCsv",
+)
+async def export_campaign_portfolio_decision_queue_csv(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    organization_unit_id: UUID | None = None,
+    status: Literal["review_required", "on_track_or_insufficient_signal"] | None = Query(default=None),
+    attention_reason: Literal[
+        "target_missed",
+        "net_commerce_target_missed",
+        "target_metrics_without_data",
+        "net_commerce_target_without_data",
+        "low_recorded_day_coverage",
+    ] | None = Query(default=None),
+    metric_key: Literal[
+        "impressions", "clicks", "leads", "conversions", "spend",
+        "cost_per_lead", "cost_per_conversion", "period_net_paid_to_spend",
+    ] | None = Query(default=None),
+    metric_status: Literal["met", "not_met", "no_data"] | None = Query(default=None),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> Response:
+    """Export the complete filtered decision queue for spreadsheet analysis."""
+    queue = await get_campaign_portfolio_decision_queue(
+        period_start=period_start,
+        period_end=period_end,
+        organization_unit_id=organization_unit_id,
+        status=status,
+        attention_reason=attention_reason,
+        metric_key=metric_key,
+        metric_status=metric_status,
+        limit=5001,
+        offset=0,
+        context=context,
+    )
+    if queue.total_count > 5000:
+        raise HTTPException(
+            status_code=422,
+            detail="CSV export is limited to 5000 plans; narrow the period or filters",
+        )
+
+    metric_keys = sorted({key for item in queue.items for key in item.metrics})
+    headers = [
+        "campaign_name", "campaign_id", "organization_unit_id", "target_plan_id",
+        "period_start", "period_end", "status", "attention_reasons",
+        "missed_metric_count", "no_data_metric_count",
+        "recorded_day_coverage_percent", "measurement_record_count",
+        "latest_measurement_date", "commerce_data_status",
+        "commerce_outcomes_by_currency", "planned_learning_review_count",
+        "evaluated_learning_review_count", "open_learning_action_count",
+        "overdue_learning_action_count", "unassigned_learning_action_count",
+        "completed_learning_action_count", "tracked_learning_action_count",
+        "learning_action_completion_rate_percent",
+    ]
+    for key in metric_keys:
+        headers.extend((
+            f"metric_{key}_target", f"metric_{key}_actual",
+            f"metric_{key}_status", f"metric_{key}_currency",
+            f"metric_{key}_coverage_percent",
+        ))
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    for item in queue.items:
+        values: list[object] = [
+            item.campaign_name, item.campaign_id, item.organization_unit_id,
+            item.target_plan_id, item.period_start, item.period_end, item.status,
+            "|".join(item.attention_reasons), item.missed_metric_count,
+            item.no_data_metric_count, item.recorded_day_coverage_percent,
+            item.measurement_record_count, item.latest_measurement_date,
+            item.commerce_data_status,
+            json.dumps(
+                [row.model_dump(mode="json") for row in item.commerce_outcomes_by_currency],
+                ensure_ascii=False, separators=(",", ":"),
+            ),
+            item.planned_learning_review_count, item.evaluated_learning_review_count,
+            item.open_learning_action_count, item.overdue_learning_action_count,
+            item.unassigned_learning_action_count, item.completed_learning_action_count,
+            item.tracked_learning_action_count,
+            item.learning_action_completion_rate_percent,
+        ]
+        for key in metric_keys:
+            metric = item.metrics.get(key)
+            values.extend((
+                metric.target if metric else None,
+                metric.actual if metric else None,
+                metric.status if metric else None,
+                metric.currency if metric else None,
+                metric.recorded_day_coverage_percent if metric else None,
+            ))
+        writer.writerow([_spreadsheet_safe_cell(value) for value in values])
+
+    filename = f"campaign-decision-queue-{period_start}-{period_end}.csv"
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
