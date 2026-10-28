@@ -1,6 +1,6 @@
 """Assignable, scoped work queue for customer and marketing follow-up."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -10,11 +10,15 @@ from sqlalchemy import cast, func, select, String
 from sqlalchemy.orm import aliased
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
+from funnel_crm.api.v1.crm_campaign_targets import evaluate_net_paid_to_spend_target, evaluate_plan_metrics
 from funnel_crm.platform.crm_authorization import has_crm_permission
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMCustomerActivity,
     CRMMarketingCampaign,
+    CRMMarketingCampaignMeasurement,
+    CRMMarketingCampaignTargetPlan,
+    CRMProductCommerceEvent,
     CRMOpportunity,
     CRMPipeline,
     CRMSalesTarget,
@@ -32,6 +36,30 @@ FollowUpOutcomeCode = Literal[
     "contact_made", "no_contact", "callback_requested", "not_interested", "other"
 ]
 ActivityChannel = Literal["online", "phone", "store", "field", "support", "campaign", "other"]
+
+
+class CampaignSignalWorkItemCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    campaign_id: UUID
+    target_plan_id: UUID
+    metric_key: str = Field(min_length=1, max_length=80)
+    assigned_membership_id: UUID | None = None
+    due_at: datetime | None = None
+    priority: WorkItemPriority = "high"
+    note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("due_at")
+    @classmethod
+    def require_due_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("due_at must include a timezone")
+        return value
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
 
 
 class WorkItemCreate(BaseModel):
@@ -353,6 +381,103 @@ async def create_work_item(
     context.session.add(item)
     await context.session.flush()
     _audit(context, item, "crm_work_item.created", None, _snapshot(item))
+    await context.session.flush()
+    return WorkItemRead.model_validate(item)
+
+
+
+@router.post(
+    "/from-campaign-signal",
+    response_model=WorkItemRead,
+    status_code=201,
+    operation_id="createCRMWorkItemFromCampaignSignal",
+)
+async def create_work_item_from_campaign_signal(
+    payload: CampaignSignalWorkItemCreate,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> WorkItemRead:
+    plan = await context.session.scalar(
+        select(CRMMarketingCampaignTargetPlan).where(
+            CRMMarketingCampaignTargetPlan.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaignTargetPlan.campaign_id == payload.campaign_id,
+            CRMMarketingCampaignTargetPlan.id == payload.target_plan_id,
+        )
+    )
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Campaign target plan not found")
+    campaign = await context.session.scalar(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaign.id == payload.campaign_id,
+            CRMMarketingCampaign.organization_unit_id == plan.organization_unit_id,
+        )
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="CRM campaign not found")
+    await _require_permission(context, "crm.campaign:view", campaign.organization_unit_id)
+    await _require_permission(context, "crm.work_item:create", campaign.organization_unit_id)
+    await _validate_assignee(context, payload.assigned_membership_id)
+
+    measurements = (await context.session.scalars(
+        select(CRMMarketingCampaignMeasurement).where(
+            CRMMarketingCampaignMeasurement.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaignMeasurement.organization_unit_id == campaign.organization_unit_id,
+            CRMMarketingCampaignMeasurement.campaign_id == campaign.id,
+            CRMMarketingCampaignMeasurement.measured_on >= plan.period_start,
+            CRMMarketingCampaignMeasurement.measured_on <= plan.period_end,
+        ).order_by(CRMMarketingCampaignMeasurement.measured_on)
+    )).all()
+    if payload.metric_key == "period_net_paid_to_spend":
+        await _require_permission(context, "crm.commerce_event:view", campaign.organization_unit_id)
+        events = (await context.session.scalars(
+            select(CRMProductCommerceEvent).where(
+                CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+                CRMProductCommerceEvent.organization_unit_id == campaign.organization_unit_id,
+                CRMProductCommerceEvent.campaign_id == campaign.id,
+                CRMProductCommerceEvent.occurred_at >= datetime.combine(plan.period_start, time.min, tzinfo=timezone.utc),
+                CRMProductCommerceEvent.occurred_at < datetime.combine(plan.period_end + timedelta(days=1), time.min, tzinfo=timezone.utc),
+            ).order_by(CRMProductCommerceEvent.occurred_at)
+        )).all()
+        metric = evaluate_net_paid_to_spend_target(plan, list(measurements), list(events))
+    else:
+        metric = evaluate_plan_metrics(plan, list(measurements)).get(payload.metric_key)
+    if metric is None:
+        raise HTTPException(status_code=422, detail="Metric is not part of this campaign target plan")
+    has_signal = metric.observed_days < metric.period_days or metric.status == "not_met"
+    if not has_signal:
+        raise HTTPException(status_code=409, detail="The selected metric has no current follow-up signal")
+
+    signal_kind = "measurement_gap" if metric.observed_days < metric.period_days else "target_gap"
+    metric_label = payload.metric_key.replace("_", " ")
+    title = f"Review {campaign.name}: {metric_label}"[:200]
+    evidence = (
+        f"Campaign performance signal ({signal_kind}). "
+        f"Actual: {metric.actual if metric.actual is not None else 'no data'}; "
+        f"target: {metric.target}; coverage: {metric.observed_days}/{metric.period_days} days."
+    )
+    description = evidence + (f"\\nManager note: {payload.note}" if payload.note else "")
+    item = CRMWorkItem(
+        id=uuid4(), tenant_id=context.access.tenant_id,
+        organization_unit_id=campaign.organization_unit_id,
+        profile_id=None, opportunity_id=None, campaign_id=campaign.id,
+        assigned_membership_id=payload.assigned_membership_id,
+        created_by_membership_id=context.access.membership_id,
+        title=title, description=description[:2000], due_at=payload.due_at,
+        priority=payload.priority, status="open", completed_at=None,
+    )
+    context.session.add(item)
+    await context.session.flush()
+    after = _snapshot(item)
+    after["source_campaign_signal"] = {
+        "target_plan_id": str(plan.id),
+        "metric_key": payload.metric_key,
+        "signal_type": signal_kind,
+        "actual": str(metric.actual) if metric.actual is not None else None,
+        "target": str(metric.target),
+        "observed_days": metric.observed_days,
+        "period_days": metric.period_days,
+    }
+    _audit(context, item, "crm_work_item.created_from_campaign_signal", None, after)
     await context.session.flush()
     return WorkItemRead.model_validate(item)
 
