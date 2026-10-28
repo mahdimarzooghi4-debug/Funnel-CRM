@@ -325,7 +325,8 @@ async def transition_campaign_lifecycle(
     return CampaignRead.model_validate(campaign)
 
 
-"/{campaign_id}/archive", status_code=status.HTTP_204_NO_CONTENT,
+@router.post(
+    "/{campaign_id}/archive", status_code=status.HTTP_204_NO_CONTENT,
     operation_id="archiveCRMMarketingCampaign",
 )
 async def archive_campaign(
