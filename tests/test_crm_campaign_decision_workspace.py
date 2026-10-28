@@ -122,6 +122,15 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             priority="normal", status="open", completed_at=None,
             source_learning_review_id=learning_review_id, source_outcome_id=None,
         ))
+        completed_learning_review_id = uuid4()
+        context.session.add(CRMMarketingLearningReview(
+            id=completed_learning_review_id, tenant_id=tenant_id,
+            organization_unit_id=root_id, campaign_id=campaign_id,
+            target_plan_id=plan_id, assessment="Completed action review",
+            corrective_action="Document campaign follow-up",
+            status="planned",
+        ))
+        await context.session.flush()
         context.session.add(CRMWorkItem(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
             profile_id=None, opportunity_id=None, campaign_id=campaign_id,
@@ -130,7 +139,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             title="Completed campaign follow-up", description=None,
             due_at=None, priority="normal", status="completed",
             completed_at=datetime.now(timezone.utc),
-            source_learning_review_id=learning_review_id, source_outcome_id=None,
+            source_learning_review_id=completed_learning_review_id, source_outcome_id=None,
         ))
         context.session.add_all([
             CRMMarketingCampaignMeasurement(
