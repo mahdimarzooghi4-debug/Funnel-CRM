@@ -71,7 +71,7 @@ async def test_marketing_calendar_combines_scoped_campaigns_and_work_items(
             segment_id=segment_id, name="October launch", objective_key="acquisition",
             channel="store", planned_budget_amount=None, planned_budget_currency=None,
             starts_at=datetime(2026, 10, 20, 9, tzinfo=timezone.utc),
-            ends_at=datetime(2026, 10, 22, 18, tzinfo=timezone.utc), status="active",
+            ends_at=datetime(2026, 10, 22, 18, tzinfo=timezone.utc), status="draft",
         ))
         context.session.add(CRMWorkItem(
             id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
