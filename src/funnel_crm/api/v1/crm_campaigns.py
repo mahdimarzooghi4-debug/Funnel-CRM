@@ -170,7 +170,13 @@ def _audit(context: TenantSessionContext, campaign: CRMMarketingCampaign, action
             target_key=str(campaign.id),
             organization_unit_id=campaign.organization_unit_id,
             before_state=None,
-            after_state={"status": campaign.status, "channel": campaign.channel, "planned_budget_amount": str(campaign.planned_budget_amount) if campaign.planned_budget_amount is not None else None, "planned_budget_currency": campaign.planned_budget_currency},
+            after_state={
+                "status": campaign.status,
+                "channel": campaign.channel,
+                "communication_purpose_key": campaign.communication_purpose_key,
+                "planned_budget_amount": str(campaign.planned_budget_amount) if campaign.planned_budget_amount is not None else None,
+                "planned_budget_currency": campaign.planned_budget_currency,
+            },
             correlation_id=None,
         )
     )
