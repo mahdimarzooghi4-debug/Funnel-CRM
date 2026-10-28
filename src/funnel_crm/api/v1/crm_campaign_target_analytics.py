@@ -453,9 +453,12 @@ async def review_campaign_target_portfolio(
     context: TenantSessionContext = Depends(require_tenant_session),
     organization_unit_id: UUID | None = None,
     grouped_by: Literal["channel", "objective"] = Query(default="channel"),
+    campaign_ids: list[UUID] | None = Query(default=None, min_length=2, max_length=20),
 ) -> CampaignTargetPortfolioRead:
     if period_start > period_end or (period_end - period_start).days >= 366:
         raise HTTPException(status_code=422, detail="Period must be ordered and no longer than 366 days")
+    if campaign_ids is not None and len(set(campaign_ids)) != len(campaign_ids):
+        raise HTTPException(status_code=422, detail="Campaign IDs must be unique")
 
     permitted_scopes = crm_scope_ids(context, permission_key="crm.campaign:view")
     if organization_unit_id is not None and organization_unit_id not in permitted_scopes:
@@ -487,6 +490,8 @@ async def review_campaign_target_portfolio(
         statement = statement.where(
             CRMMarketingCampaignTargetPlan.organization_unit_id == organization_unit_id
         )
+    if campaign_ids is not None:
+        statement = statement.where(CRMMarketingCampaign.id.in_(campaign_ids))
     result_rows = (await context.session.execute(
         statement.order_by(CRMMarketingCampaign.name, CRMMarketingCampaign.id).limit(1001)
     )).all()
@@ -592,6 +597,7 @@ async def review_campaign_target_portfolio(
         before_state=None,
         after_state={
             "grouped_by": grouped_by,
+            "campaign_ids": [str(campaign_id) for campaign_id in campaign_ids] if campaign_ids is not None else None,
             "campaign_count": len(items),
             "truncated": truncated,
         },
