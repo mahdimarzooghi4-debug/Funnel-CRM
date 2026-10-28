@@ -92,12 +92,11 @@ async def get_campaign_readiness(
     }
     for status, count in grouped_assets:
         asset_counts[status] = int(count)
-    active_assets = sum(asset_counts[key] for key in ("draft", "in_review", "approved", "rejected"))
     approved_count = asset_counts["approved"]
     pending_count = asset_counts["draft"] + asset_counts["in_review"] + asset_counts["rejected"]
     content_status: Literal["complete", "missing", "pending"] = (
         "complete" if approved_count > 0 and pending_count == 0
-        else "pending" if asset_counts["in_review"] > 0 or (approved_count > 0 and pending_count > 0)
+        else "pending" if pending_count > 0
         else "missing"
     )
     schedule_ready = campaign.starts_at is not None and campaign.ends_at is not None
