@@ -173,6 +173,8 @@ class PeriodMetricComparison(BaseModel):
     comparison_value: int | Decimal | None
     change: int | Decimal | None
     change_percent: Decimal | None
+    value_unit: Literal["count", "percent"]
+    change_unit: Literal["count", "percentage_points"]
     baseline_observed_days: int
     comparison_observed_days: int
 
@@ -867,6 +869,26 @@ async def get_campaign_portfolio_period_comparison(
             for key, column in metric_columns.items()
         )
         expressions.extend((
+            func.count(func.distinct(CRMMarketingCampaignMeasurement.measured_on))
+            .filter(
+                CRMMarketingCampaignMeasurement.impressions.is_not(None)
+                & CRMMarketingCampaignMeasurement.clicks.is_not(None)
+            )
+            .label("click_through_rate_days"),
+            func.count(func.distinct(CRMMarketingCampaignMeasurement.measured_on))
+            .filter(
+                CRMMarketingCampaignMeasurement.clicks.is_not(None)
+                & CRMMarketingCampaignMeasurement.leads.is_not(None)
+            )
+            .label("click_to_lead_rate_days"),
+            func.count(func.distinct(CRMMarketingCampaignMeasurement.measured_on))
+            .filter(
+                CRMMarketingCampaignMeasurement.leads.is_not(None)
+                & CRMMarketingCampaignMeasurement.conversions.is_not(None)
+            )
+            .label("lead_to_conversion_rate_days"),
+        ))
+        expressions.extend((
             func.count(func.distinct(CRMMarketingCampaignMeasurement.campaign_id)).label("campaign_count"),
             func.count(CRMMarketingCampaignMeasurement.id).label("record_count"),
             func.count(func.distinct(CRMMarketingCampaignMeasurement.measured_on)).label("recorded_days"),
@@ -902,8 +924,54 @@ async def get_campaign_portfolio_period_comparison(
             comparison_value=after,
             change=change,
             change_percent=change_percent,
+            value_unit="count",
+            change_unit="count",
             baseline_observed_days=int(baseline[f"{key}_days"] or 0),
             comparison_observed_days=int(comparison[f"{key}_days"] or 0),
+        )
+
+    for rate_key, numerator_key, denominator_key in (
+        ("click_through_rate", "clicks", "impressions"),
+        ("click_to_lead_rate", "leads", "clicks"),
+        ("lead_to_conversion_rate", "conversions", "leads"),
+    ):
+        before_denominator = baseline[denominator_key]
+        after_denominator = comparison[denominator_key]
+        before_rate = (
+            (Decimal(baseline[numerator_key]) * Decimal("100")
+             / Decimal(before_denominator)).quantize(Decimal("0.01"))
+            if baseline[numerator_key] is not None
+            and before_denominator is not None
+            and before_denominator > 0
+            else None
+        )
+        after_rate = (
+            (Decimal(comparison[numerator_key]) * Decimal("100")
+             / Decimal(after_denominator)).quantize(Decimal("0.01"))
+            if comparison[numerator_key] is not None
+            and after_denominator is not None
+            and after_denominator > 0
+            else None
+        )
+        rate_change = (
+            (after_rate - before_rate).quantize(Decimal("0.01"))
+            if before_rate is not None and after_rate is not None
+            else None
+        )
+        rate_change_percent = (
+            (rate_change * Decimal("100") / before_rate).quantize(Decimal("0.01"))
+            if before_rate not in (None, Decimal("0")) and rate_change is not None
+            else None
+        )
+        metric_comparisons[rate_key] = PeriodMetricComparison(
+            baseline_value=before_rate,
+            comparison_value=after_rate,
+            change=rate_change,
+            change_percent=rate_change_percent,
+            value_unit="percent",
+            change_unit="percentage_points",
+            baseline_observed_days=int(baseline[f"{rate_key}_days"] or 0),
+            comparison_observed_days=int(comparison[f"{rate_key}_days"] or 0),
         )
 
     currency_values: dict[str, dict[str, Decimal]] = {}

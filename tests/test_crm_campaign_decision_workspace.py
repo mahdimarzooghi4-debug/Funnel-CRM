@@ -168,7 +168,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 campaign_id=campaign_id, measured_on=date(2026, 10, 19),
                 source_label="verified analytics import",
                 impressions=60, clicks=5, reach=None, responses=None,
-                leads=None, conversions=None,
+                leads=2, conversions=1,
                 actual_spend_amount=Decimal("40.00"), actual_spend_currency="USD",
                 attributed_revenue_amount=None, attributed_revenue_currency=None,
             ),
@@ -177,7 +177,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 campaign_id=campaign_id, measured_on=date(2026, 10, 20),
                 source_label="verified analytics import",
                 impressions=20, clicks=2, reach=None, responses=None,
-                leads=None, conversions=None,
+                leads=1, conversions=1,
                 actual_spend_amount=Decimal("20.00"), actual_spend_currency="USD",
                 attributed_revenue_amount=None, attributed_revenue_currency=None,
             ),
@@ -299,8 +299,16 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert comparison["metrics"]["impressions"]["change"] == -41
     assert comparison["metrics"]["impressions"]["change_percent"] == "-67.21"
     assert comparison["metrics"]["clicks"]["change_percent"] == "-60.00"
-    assert comparison["metrics"]["leads"]["baseline_value"] is None
-    assert comparison["metrics"]["leads"]["change_percent"] is None
+    assert comparison["metrics"]["click_through_rate"]["baseline_value"] == "8.20"
+    assert comparison["metrics"]["click_through_rate"]["comparison_value"] == "10.00"
+    assert comparison["metrics"]["click_through_rate"]["change"] == "1.80"
+    assert comparison["metrics"]["click_through_rate"]["value_unit"] == "percent"
+    assert comparison["metrics"]["click_through_rate"]["change_unit"] == "percentage_points"
+    assert comparison["metrics"]["click_through_rate"]["baseline_observed_days"] == 1
+    assert comparison["metrics"]["click_to_lead_rate"]["baseline_value"] == "40.00"
+    assert comparison["metrics"]["click_to_lead_rate"]["comparison_value"] == "50.00"
+    assert comparison["metrics"]["lead_to_conversion_rate"]["comparison_value"] == "100.00"
+    assert comparison["metrics"]["leads"]["baseline_value"] == 2
     assert comparison["commerce_scope_status"] == "complete"
     comparison_financial = {
         row["currency"]: row
