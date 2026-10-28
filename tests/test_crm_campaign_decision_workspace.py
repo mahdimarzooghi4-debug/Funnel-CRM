@@ -271,7 +271,21 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         )
         assert metric_filtered_response.status_code == 200, metric_filtered_response.text
         metric_filtered = metric_filtered_response.json()
+        export_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue/export.csv",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id), "metric_key": "clicks",
+                    "metric_status": "not_met"},
+        )
 
+    assert export_response.status_code == 200, export_response.text
+    assert export_response.headers["content-type"].startswith("text/csv")
+    assert "attachment; filename=" in export_response.headers["content-disposition"]
+    assert "campaign_name" in export_response.text
+    assert "Decision workspace campaign" in export_response.text
+    assert str(plan_id) in export_response.text
+    assert "metric_clicks_status" in export_response.text
     assert workspace["campaign_name"] == "Decision workspace campaign"
     assert workspace["period_calendar_days"] == 7
     assert workspace["causal_attribution_applied"] is False
