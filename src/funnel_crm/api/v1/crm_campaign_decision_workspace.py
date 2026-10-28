@@ -164,7 +164,16 @@ class CampaignPortfolioDecisionItem(BaseModel):
     learning_action_completion_rate_percent: Decimal | None
 
 
+class CampaignDecisionQueueSummary(BaseModel):
+    total_count: int
+    campaign_count: int
+    status_counts: dict[str, int]
+    attention_reason_counts: dict[str, int]
+    metric_status_counts: dict[str, dict[str, int]]
+
+
 class CampaignPortfolioDecisionQueue(BaseModel):
+    summary: CampaignDecisionQueueSummary
     generated_at: datetime
     period_start: date
     period_end: date
@@ -500,7 +509,30 @@ async def get_campaign_portfolio_decision_queue(
                 item for item in items
                 if any(metric.status == metric_status for metric in item.metrics.values())
             ]
+    summary_status_counts = {
+        queue_status: sum(1 for item in items if item.status == queue_status)
+        for queue_status in ("review_required", "on_track_or_insufficient_signal")
+    }
+    summary_attention_reason_counts: dict[str, int] = {}
+    summary_metric_status_counts: dict[str, dict[str, int]] = {}
+    for item in items:
+        for reason in item.attention_reasons:
+            summary_attention_reason_counts[reason] = (
+                summary_attention_reason_counts.get(reason, 0) + 1
+            )
+        for key, metric in item.metrics.items():
+            outcome_counts = summary_metric_status_counts.setdefault(
+                key, {"met": 0, "not_met": 0, "no_data": 0}
+            )
+            outcome_counts[metric.status] += 1
     filtered_total = len(items)
+    summary = CampaignDecisionQueueSummary(
+        total_count=filtered_total,
+        campaign_count=len({item.campaign_id for item in items}),
+        status_counts=summary_status_counts,
+        attention_reason_counts=summary_attention_reason_counts,
+        metric_status_counts=summary_metric_status_counts,
+    )
     page_items = items[offset:offset + limit]
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id,
@@ -523,6 +555,7 @@ async def get_campaign_portfolio_decision_queue(
     ))
     await context.session.flush()
     return CampaignPortfolioDecisionQueue(
+        summary=summary,
         generated_at=datetime.now(timezone.utc),
         period_start=period_start,
         period_end=period_end,
