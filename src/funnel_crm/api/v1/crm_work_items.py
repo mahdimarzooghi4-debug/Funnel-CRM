@@ -169,6 +169,9 @@ class WorkItemRead(BaseModel):
     status: WorkItemStatus
     completed_at: datetime | None
     source_outcome_id: UUID | None
+    source_campaign_target_plan_id: UUID | None
+    source_campaign_metric_key: str | None
+    source_campaign_signal_type: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -325,6 +328,9 @@ def _snapshot(item: CRMWorkItem) -> dict:
         "campaign_id": str(item.campaign_id) if item.campaign_id else None,
         "source_learning_review_id": str(item.source_learning_review_id) if item.source_learning_review_id else None,
         "source_outcome_id": str(item.source_outcome_id) if item.source_outcome_id else None,
+        "source_campaign_target_plan_id": str(item.source_campaign_target_plan_id) if item.source_campaign_target_plan_id else None,
+        "source_campaign_metric_key": item.source_campaign_metric_key,
+        "source_campaign_signal_type": item.source_campaign_signal_type,
         "assigned_membership_id": str(item.assigned_membership_id) if item.assigned_membership_id else None,
         "title": item.title,
         "due_at": item.due_at.isoformat() if item.due_at else None,
@@ -377,6 +383,9 @@ async def create_work_item(
         created_by_membership_id=context.access.membership_id,
         title=payload.title, description=payload.description, due_at=payload.due_at,
         priority=payload.priority, status="open", completed_at=None,
+        source_campaign_target_plan_id=plan.id,
+        source_campaign_metric_key=payload.metric_key,
+        source_campaign_signal_type=signal_kind,
     )
     context.session.add(item)
     await context.session.flush()
@@ -401,7 +410,7 @@ async def create_work_item_from_campaign_signal(
             CRMMarketingCampaignTargetPlan.tenant_id == context.access.tenant_id,
             CRMMarketingCampaignTargetPlan.campaign_id == payload.campaign_id,
             CRMMarketingCampaignTargetPlan.id == payload.target_plan_id,
-        )
+        ).with_for_update()
     )
     if plan is None:
         raise HTTPException(status_code=404, detail="Campaign target plan not found")
@@ -446,6 +455,20 @@ async def create_work_item_from_campaign_signal(
     has_signal = metric.observed_days < metric.period_days or metric.status == "not_met"
     if not has_signal:
         raise HTTPException(status_code=409, detail="The selected metric has no current follow-up signal")
+    existing = await context.session.scalar(
+        select(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == context.access.tenant_id,
+            CRMWorkItem.campaign_id == campaign.id,
+            CRMWorkItem.source_campaign_target_plan_id == plan.id,
+            CRMWorkItem.source_campaign_metric_key == payload.metric_key,
+            CRMWorkItem.status.in_(["open", "in_progress"]),
+        )
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "An open follow-up already exists for this campaign signal", "work_item_id": str(existing.id)},
+        )
 
     signal_kind = "measurement_gap" if metric.observed_days < metric.period_days else "target_gap"
     metric_label = payload.metric_key.replace("_", " ")
