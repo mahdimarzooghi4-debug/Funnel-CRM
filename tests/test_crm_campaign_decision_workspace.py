@@ -262,7 +262,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["status"] == "review_required"
     assert queue["items"][0]["missed_metric_count"] == 2
     assert queue["items"][0]["commerce_data_status"] == "observed"
-    assert queue["items"][0]["planned_learning_review_count"] == 1
+    assert queue["items"][0]["planned_learning_review_count"] == 2
     assert queue["items"][0]["evaluated_learning_review_count"] == 0
     assert queue["items"][0]["open_learning_action_count"] == 1
     assert queue["items"][0]["overdue_learning_action_count"] == 1
