@@ -547,29 +547,6 @@ async def get_campaign_portfolio_decision_queue(
             outcome_counts[metric.status] += 1
     filtered_total = len(items)
     financial_by_currency: dict[str, dict[str, object]] = {}
-    for item in items:
-        if item.organization_unit_id not in commerce_allowed_units:
-            continue
-        for outcome in item.commerce_outcomes_by_currency:
-            state = financial_by_currency.setdefault(
-                outcome.currency,
-                {
-                    "spend_measurement_count": 0,
-                    "recorded_spend_amount": Decimal("0"),
-                    "paid_event_count": 0,
-                    "paid_order_count": 0,
-                    "paid_amount": Decimal("0"),
-                    "refund_event_count": 0,
-                    "refunded_order_count": 0,
-                    "refunded_amount": Decimal("0"),
-                },
-            )
-            state["paid_event_count"] += outcome.paid_event_count
-            state["paid_order_count"] += outcome.paid_order_count
-            state["paid_amount"] += outcome.paid_amount
-            state["refund_event_count"] += outcome.refund_event_count
-            state["refunded_order_count"] += outcome.refunded_order_count
-            state["refunded_amount"] += outcome.refunded_amount
     selected_windows = [
         item for item in items
     ]
