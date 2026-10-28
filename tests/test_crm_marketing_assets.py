@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import httpx
@@ -6,7 +7,8 @@ from fastapi import FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_marketing_assets import router
-from funnel_crm.platform.models import Role, RoleAssignment, RolePermission
+from funnel_crm.api.v1.crm_campaign_readiness import router as readiness_router
+from funnel_crm.platform.models import CRMMarketingCampaign, CRMProfileSegment, Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
 
@@ -23,6 +25,7 @@ def make_app(
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(readiness_router, prefix="/api/v1")
     return app
 
 
@@ -38,9 +41,15 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
     assert isinstance(root_id, UUID)
     assert isinstance(identity, AuthenticatedIdentity)
 
+    segment_id, campaign_id = uuid4(), uuid4()
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
+        context.session.add(CRMProfileSegment(
+            id=segment_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            name=f"Asset audience {uuid4().hex[:8]}",
+            criteria={"profile_kinds": ["person"]}, is_active=True,
+        ))
         role = Role(tenant_id=tenant_id, name=f"Asset manager {uuid4().hex[:8]}")
         context.session.add(role)
         await context.session.flush()
@@ -51,7 +60,15 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
             ),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:view"),
         ])
+        context.session.add(CRMMarketingCampaign(
+            id=campaign_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            segment_id=segment_id, name="Social launch", objective_key="acquisition",
+            channel="social", planned_budget_amount=None, planned_budget_currency=None,
+            starts_at=datetime(2026, 11, 2, 9, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 11, 6, 18, tzinfo=timezone.utc), status="draft",
+        ))
         await context.session.flush()
 
     app = make_app(runtime_session_factory, identity)
@@ -64,6 +81,7 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
             headers=headers,
             json={
                 "organization_unit_id": str(root_id),
+                "campaign_id": str(campaign_id),
                 "channel": "social",
                 "asset_kind": "copy",
                 "title": "Empty asset",
@@ -76,6 +94,7 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
             headers=headers,
             json={
                 "organization_unit_id": str(root_id),
+                "campaign_id": str(campaign_id),
                 "channel": "social",
                 "asset_kind": "copy",
                 "title": "Launch post",
@@ -93,6 +112,14 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
         )
         assert submitted.status_code == 200, submitted.text
         assert submitted.json()["status"] == "in_review"
+        readiness_pending = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness", headers=headers
+        )
+        assert readiness_pending.status_code == 200, readiness_pending.text
+        assert readiness_pending.json()["launch_readiness"] == "needs_attention"
+        pending_check = next(item for item in readiness_pending.json()["checks"] if item["key"] == "approved_content")
+        assert pending_check["status"] == "pending"
+        assert readiness_pending.json()["open_work_item_count"] == 0
 
         rejected_without_note = await client.post(
             f"/api/v1/crm/marketing-assets/{asset_id}/review",
@@ -128,6 +155,13 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
         assert approved.status_code == 200, approved.text
         assert approved.json()["status"] == "approved"
         assert approved.json()["reviewed_by_membership_id"] is not None
+        readiness_approved = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness", headers=headers
+        )
+        assert readiness_approved.status_code == 200, readiness_approved.text
+        assert readiness_approved.json()["launch_readiness"] == "ready_for_manager_review"
+        assert readiness_approved.json()["asset_counts"]["approved"] == 1
+        assert all(item["status"] == "complete" for item in readiness_approved.json()["checks"])
 
         immutable = await client.patch(
             f"/api/v1/crm/marketing-assets/{asset_id}",
