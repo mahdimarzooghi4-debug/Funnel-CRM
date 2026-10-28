@@ -164,6 +164,8 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.campaign:manage"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:create"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:record_outcome"),
+            RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.work_item:view"),
             RolePermission(tenant_id=tenant_id, role_id=role.id, permission_key="crm.commerce_event:view"),
         ])
         await context.session.flush()
@@ -255,6 +257,34 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         )
         assert duplicate_follow_up.status_code == 409
         assert duplicate_follow_up.json()["detail"]["work_item_id"] == follow_up.json()["id"]
+
+        outcome_payload = {
+            "request_id": str(uuid4()),
+            "decision_key": "adjusted",
+            "notes": "Refreshed the campaign creative based on the click gap.",
+        }
+        outcome = await client.post(
+            f"/api/v1/crm/work-items/{follow_up.json()['id']}/campaign-signal-outcomes",
+            headers=headers,
+            json=outcome_payload,
+        )
+        assert outcome.status_code == 201, outcome.text
+        assert outcome.json()["metric_actual"] == "75"
+        assert outcome.json()["metric_status"] == "not_met"
+        assert outcome.json()["decision_key"] == "adjusted"
+        repeated_outcome = await client.post(
+            f"/api/v1/crm/work-items/{follow_up.json()['id']}/campaign-signal-outcomes",
+            headers=headers,
+            json=outcome_payload,
+        )
+        assert repeated_outcome.status_code == 200, repeated_outcome.text
+        assert repeated_outcome.json()["id"] == outcome.json()["id"]
+        outcome_history = await client.get(
+            f"/api/v1/crm/work-items/{follow_up.json()['id']}/campaign-signal-outcomes",
+            headers=headers,
+        )
+        assert outcome_history.status_code == 200, outcome_history.text
+        assert len(outcome_history.json()) == 1
 
         assert metrics["spend"]["actual"] == "20.000000"
         assert metrics["spend"]["observed_days"] == 1
