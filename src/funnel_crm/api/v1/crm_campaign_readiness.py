@@ -128,13 +128,15 @@ async def get_campaign_readiness(
             "crm.contact_point:view",
             "crm.communication_consent:view",
         )
-        can_review_eligibility = all(
+        permission_results = [
             await has_crm_permission(
-                context, permission_key=permission,
+                context,
+                permission_key=permission,
                 organization_unit_id=campaign.organization_unit_id,
             )
             for permission in required_permissions
-        )
+        ]
+        can_review_eligibility = all(permission_results)
         if not can_review_eligibility:
             eligibility_status = "not_authorized"
             eligibility_explanation = "The caller cannot review audience contact and consent eligibility."
@@ -174,7 +176,10 @@ async def get_campaign_readiness(
                 f"{eligible_count} profile(s) have a verified {communication_channel} contact "
                 f"and current granted consent for purpose '{purpose_key}'."
                 if eligible_count > 0
-                else f"No profiles have both a verified {communication_channel} contact and current granted consent for purpose '{purpose_key}'."
+                else (
+                    f"No profiles have both a verified {communication_channel} contact and "
+                    f"current granted consent for purpose '{purpose_key}'."
+                )
             )
     checks = [
         CampaignReadinessCheck(
