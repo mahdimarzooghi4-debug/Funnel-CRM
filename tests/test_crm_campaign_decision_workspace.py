@@ -262,6 +262,15 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert queue["items"][0]["status"] == "review_required"
     assert queue["items"][0]["missed_metric_count"] == 2
     assert queue["items"][0]["latest_measurement_date"] == "2026-10-21"
+    queue_metrics = queue["items"][0]["metrics"]
+    assert queue_metrics["impressions"]["status"] == "met"
+    assert queue_metrics["impressions"]["target"] == 80
+    assert queue_metrics["impressions"]["actual"] == 80
+    assert queue_metrics["clicks"]["status"] == "not_met"
+    assert queue_metrics["clicks"]["target"] == 10
+    assert queue_metrics["clicks"]["actual"] == 7
+    assert Decimal(queue_metrics["period_net_paid_to_spend"]["actual"]) == Decimal("1.833333")
+    assert queue_metrics["period_net_paid_to_spend"]["status"] == "not_met"
     assert queue["items"][0]["commerce_data_status"] == "observed"
     assert queue["items"][0]["planned_learning_review_count"] == 2
     assert queue["items"][0]["evaluated_learning_review_count"] == 0

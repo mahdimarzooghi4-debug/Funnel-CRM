@@ -126,6 +126,17 @@ class DecisionQueueCommerceCurrency(BaseModel):
     net_paid_amount_per_paid_order: Decimal | None
 
 
+class CampaignPortfolioDecisionMetric(BaseModel):
+    target: int | Decimal
+    actual: int | Decimal | None
+    status: Literal["met", "not_met", "no_data"]
+    currency: str | None
+    observed_days: int
+    paired_days: int
+    period_days: int
+    recorded_day_coverage_percent: Decimal
+
+
 class CampaignPortfolioDecisionItem(BaseModel):
     campaign_id: UUID
     campaign_name: str
@@ -140,6 +151,7 @@ class CampaignPortfolioDecisionItem(BaseModel):
     recorded_day_coverage_percent: Decimal
     measurement_record_count: int
     latest_measurement_date: date | None
+    metrics: dict[str, CampaignPortfolioDecisionMetric]
     commerce_outcomes_by_currency: list[DecisionQueueCommerceCurrency]
     commerce_data_status: Literal["observed", "no_linked_events", "not_authorized"]
     planned_learning_review_count: int
@@ -243,7 +255,10 @@ async def get_campaign_portfolio_decision_queue(
             )
         )).all())
         evaluated = evaluate_plan_metrics(plan, measurements)
-        metric_results = [value for key, value in evaluated.items() if key != "roas"]
+        metric_results_by_key = {
+            key: value for key, value in evaluated.items() if key != "roas"
+        }
+        metric_results = list(metric_results_by_key.values())
         net_result = None
         if plan.min_net_paid_to_spend is not None and plan.organization_unit_id in commerce_allowed_units:
             event_start = datetime.combine(plan.period_start, time.min, tzinfo=timezone.utc)
@@ -261,6 +276,7 @@ async def get_campaign_portfolio_decision_queue(
                 plan, measurements, list(commerce_events)
             )
             if net_result is not None:
+                metric_results_by_key["period_net_paid_to_spend"] = net_result
                 metric_results.append(net_result)
         queue_commerce: dict[str, dict[str, object]] = {}
         if plan.organization_unit_id in commerce_allowed_units:
@@ -337,6 +353,21 @@ async def get_campaign_portfolio_decision_queue(
             reasons.append("net_commerce_target_without_data")
         if coverage < Decimal("80"):
             reasons.append("low_recorded_day_coverage")
+        queue_target_metrics = {
+            key: CampaignPortfolioDecisionMetric(
+                target=result.target,
+                actual=result.actual,
+                status=result.status,
+                currency=result.currency,
+                observed_days=result.observed_days,
+                paired_days=result.paired_days,
+                period_days=period_days,
+                recorded_day_coverage_percent=_coverage_percent(
+                    result.observed_days, period_days
+                ),
+            )
+            for key, result in sorted(metric_results_by_key.items())
+        }
         review_status_rows = (await context.session.execute(
             select(
                 CRMMarketingLearningReview.status,
@@ -415,6 +446,7 @@ async def get_campaign_portfolio_decision_queue(
             latest_measurement_date=max(
                 (row.measured_on for row in measurements), default=None
             ),
+            metrics=queue_target_metrics,
             commerce_outcomes_by_currency=queue_commerce_metrics,
             commerce_data_status=(
                 "observed"
