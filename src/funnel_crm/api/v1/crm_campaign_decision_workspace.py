@@ -820,7 +820,11 @@ async def get_campaign_portfolio_period_comparison(
                 CRMMarketingCampaignMeasurement.measured_on <= end,
             )
         )).one()
-        return dict(row._mapping)
+        snapshot = dict(row._mapping)
+        for key in metric_keys:
+            if snapshot[key] is not None:
+                snapshot[key] = int(snapshot[key])
+        return snapshot
 
     baseline = await measurement_snapshot(baseline_start, baseline_end)
     comparison = await measurement_snapshot(comparison_start, comparison_end)
