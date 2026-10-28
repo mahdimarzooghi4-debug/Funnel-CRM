@@ -574,6 +574,33 @@ async def test_campaign_experiment_readout_compares_variants_descriptively(
             else:
                 assert [Decimal(value) for value in observed] == expected_values
 
+        decision_response = await client.put(
+            f"/api/v1/crm/campaign-experiments/{experiment_id}/decision",
+            headers=headers,
+            json={
+                "decision": "adopt_variant",
+                "selected_variant_campaign_id": str(variant_id),
+                "rationale": "The observed conversion count was higher in the variant; coverage is incomplete.",
+                "next_action": "Run a longer follow-up with balanced daily reporting.",
+            },
+        )
+        assert decision_response.status_code == 200, decision_response.text
+        recorded_decision = decision_response.json()["decision"]
+        assert recorded_decision["decision"] == "adopt_variant"
+        assert recorded_decision["selected_variant_campaign_id"] == str(variant_id)
+        assert recorded_decision["rationale"].startswith("The observed conversion")
+        assert "recorded_at" in recorded_decision
+        invalid_decision = await client.put(
+            f"/api/v1/crm/campaign-experiments/{experiment_id}/decision",
+            headers=headers,
+            json={
+                "decision": "adopt_variant",
+                "selected_variant_campaign_id": str(uuid4()),
+                "rationale": "This campaign is outside the experiment.",
+            },
+        )
+        assert invalid_decision.status_code == 422
+
         csv_response = await client.get(
             f"/api/v1/crm/campaign-experiments/{experiment_id}/readout.csv",
             headers=headers,

@@ -1643,6 +1643,7 @@ class CRMMarketingCampaignExperiment(Base):
         CheckConstraint("length(trim(allocation_method)) BETWEEN 1 AND 250", name="ck_crm_marketing_campaign_experiments_allocation_method"),
         CheckConstraint("known_limitations IS NULL OR length(trim(known_limitations)) BETWEEN 1 AND 1000", name="ck_crm_marketing_campaign_experiments_known_limitations"),
         CheckConstraint("audience_snapshot IS NULL OR (jsonb_typeof(audience_snapshot) = 'object' AND octet_length(audience_snapshot::text) <= 8192)", name="ck_crm_marketing_campaign_experiments_audience_snapshot"),
+        CheckConstraint("decision IS NULL OR (jsonb_typeof(decision) = 'object' AND octet_length(decision::text) <= 8192)", name="ck_crm_marketing_campaign_experiments_decision"),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
             name="fk_crm_marketing_campaign_experiments_workspace", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
@@ -1669,6 +1670,7 @@ class CRMMarketingCampaignExperiment(Base):
     )
     known_limitations: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     audience_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    decision: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     period_start: Mapped[date] = mapped_column(Date(), nullable=False)
     period_end: Mapped[date] = mapped_column(Date(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
