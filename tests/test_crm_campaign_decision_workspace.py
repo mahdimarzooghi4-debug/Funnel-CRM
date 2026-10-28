@@ -262,6 +262,15 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         )
         assert status_filtered_response.status_code == 200, status_filtered_response.text
         status_filtered = status_filtered_response.json()
+        metric_filtered_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id), "metric_key": "clicks",
+                    "metric_status": "not_met"},
+        )
+        assert metric_filtered_response.status_code == 200, metric_filtered_response.text
+        metric_filtered = metric_filtered_response.json()
 
     assert workspace["campaign_name"] == "Decision workspace campaign"
     assert workspace["period_calendar_days"] == 7
@@ -323,6 +332,9 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert reason_filtered["items"][0]["target_plan_id"] == str(plan_id)
     assert status_filtered["total_count"] == 1
     assert status_filtered["items"][0]["target_plan_id"] == str(low_priority_plan_id)
+    assert metric_filtered["total_count"] == 1
+    assert metric_filtered["items"][0]["target_plan_id"] == str(plan_id)
+    assert metric_filtered["items"][0]["metrics"]["clicks"]["status"] == "not_met"
     assert queue["items"][0]["target_plan_id"] == str(plan_id)
     assert queue["items"][0]["status"] == "review_required"
     assert queue["items"][0]["missed_metric_count"] == 2
