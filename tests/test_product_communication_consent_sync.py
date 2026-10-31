@@ -19,6 +19,7 @@ from funnel_crm.platform.integration_processing import ClaimedIntegrationEvent
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMCommunicationConsentEvent,
+    CRMConsentProductSyncOutbox,
     CRMProfile,
     ProductConnection,
     ProductCustomerIdentity,
@@ -86,6 +87,7 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         supported_contract_versions=frozenset({
             ("crm.customer.communication_consent", 1),
             ("crm.customer.communication_eligibility", 1),
+            ("crm.customer.communication_consent_changes", 1),
         }),
     )
     profile_id = uuid4()
@@ -119,6 +121,10 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
                     },
                     {
                         "contract_name": "crm.customer.communication_eligibility",
+                        "contract_version": 1,
+                    },
+                    {
+                        "contract_name": "crm.customer.communication_consent_changes",
                         "contract_version": 1,
                     },
                 ],
@@ -383,6 +389,43 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         assert after_stale_batch.json()["checks"][0]["status"] == "granted"
         assert after_stale_batch.json()["checks"][0]["consent_event_id"] == granted_eligibility.json()["consent_event_id"]
 
+        first_changes = await client.post(
+            "/api/v1/integrations/communication-consent/changes",
+            json={
+                "tenant_id": str(tenant_id),
+                "after_sequence": 0,
+                "limit": 2,
+            },
+        )
+        assert first_changes.status_code == 200
+        first_page = first_changes.json()
+        assert [item["sequence"] for item in first_page["changes"]] == [1, 2]
+        assert [item["decision"] for item in first_page["changes"]] == [
+            "withdrawn", "granted",
+        ]
+        assert all(
+            item["external_customer_id"] == "store-customer-71"
+            for item in first_page["changes"]
+        )
+        assert first_page["next_sequence"] == 2
+        assert first_page["has_more"] is True
+
+        second_changes = await client.post(
+            "/api/v1/integrations/communication-consent/changes",
+            json={
+                "tenant_id": str(tenant_id),
+                "after_sequence": first_page["next_sequence"],
+                "limit": 2,
+            },
+        )
+        assert second_changes.status_code == 200
+        second_page = second_changes.json()
+        assert [item["sequence"] for item in second_page["changes"]] == [3]
+        assert second_page["changes"][0]["decision"] == "withdrawn"
+        assert second_page["changes"][0]["source_event_id"] == str(stale_event_id)
+        assert second_page["next_sequence"] == 3
+        assert second_page["has_more"] is False
+
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
@@ -435,6 +478,25 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
             and event.target_key == str(connection.connection_id)
             for event in eligibility_audits
         )
+        change_audits = (
+            await context.session.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.tenant_id == tenant_id,
+                    AuditEvent.action_key == "integration.communication_consent.changes_read",
+                )
+            )
+        ).all()
+        assert len(change_audits) == 2
+        assert all(
+            "external_customer_id" not in event.after_state for event in change_audits
+        )
+        outbox_count = await context.session.scalar(
+            select(func.count()).select_from(CRMConsentProductSyncOutbox).where(
+                CRMConsentProductSyncOutbox.tenant_id == tenant_id,
+                CRMConsentProductSyncOutbox.recipient_product == "funnel.store",
+            )
+        )
+        assert outbox_count == 3
 
     replay = ClaimedIntegrationEvent(
         id=uuid4(),
