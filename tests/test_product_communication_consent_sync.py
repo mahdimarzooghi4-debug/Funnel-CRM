@@ -10,7 +10,10 @@ from fastapi import FastAPI
 from sqlalchemy import func, select
 
 from funnel_crm.api.v1.integrations import VerifiedProductConnection, router
-from funnel_crm.platform.communication_consent_sync import PostgresProductConsentEventConsumer
+from funnel_crm.platform.communication_consent_sync import (
+    ConsentSyncError,
+    PostgresProductConsentEventConsumer,
+)
 from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.integration_processing import ClaimedIntegrationEvent
 from funnel_crm.platform.models import (
@@ -217,7 +220,11 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         lease_until=datetime.now(timezone.utc),
     )
     assert await consumer._process_one(replay) is False
-    with pytest.raises(Exception, match="crm.consent.invalid_payload"):
+    with pytest.raises(ConsentSyncError, match="crm.consent.source_event_conflict"):
+        await consumer._process_one(replace(replay, payload={
+            **replay.payload, "decision": "granted",
+        }))
+    with pytest.raises(ConsentSyncError, match="crm.consent.invalid_payload"):
         await consumer._process_one(replace(replay, payload={
             **replay.payload, "unexpected": "value",
         }))
