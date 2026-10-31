@@ -12,7 +12,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from funnel_crm.api.v1.integrations import VerifiedProductConnection
-from funnel_crm.platform.models import ProductConnection
+from funnel_crm.platform.models import ProductConnection, ProductConnectionCredential
 
 _TOKEN = re.compile(
     r"^fc1_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})\.([A-Za-z0-9_-]{43})$"
@@ -57,17 +57,29 @@ async def authenticate_product_credential(
                 text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
                 {"tenant_id": str(tenant_id)},
             )
-            connection = await session.scalar(
-                select(ProductConnection).where(
-                    ProductConnection.tenant_id == tenant_id,
-                    ProductConnection.credential_id == credential_id,
+            credential = await session.scalar(
+                select(ProductConnectionCredential).where(
+                    ProductConnectionCredential.tenant_id == tenant_id,
+                    ProductConnectionCredential.credential_id == credential_id,
                 )
             )
             if (
-                connection is None
-                or connection.revoked_at is not None
-                or not hmac.compare_digest(connection.credential_digest, presented_digest)
+                credential is None
+                or credential.revoked_at is not None
+                or not hmac.compare_digest(
+                    credential.credential_digest,
+                    presented_digest,
+                )
             ):
+                return None
+            connection = await session.scalar(
+                select(ProductConnection).where(
+                    ProductConnection.tenant_id == tenant_id,
+                    ProductConnection.id == credential.connection_id,
+                    ProductConnection.revoked_at.is_(None),
+                )
+            )
+            if connection is None:
                 return None
             contract_grants = frozenset(
                 (str(item["contract_name"]), int(item["contract_version"]))
