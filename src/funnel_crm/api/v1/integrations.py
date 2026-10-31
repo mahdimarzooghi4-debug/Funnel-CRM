@@ -158,6 +158,7 @@ class ProductConsentEligibilityResult(BaseModel):
     consent_event_id: int | None
     policy_version: str | None
     source_product: str | None
+    decision_at: datetime | None
     recorded_at: datetime | None
 
 
@@ -314,7 +315,7 @@ async def check_product_communication_eligibility(
                 return _audited_product_consent_result(session, connection,
                     status="unknown", allowed=False, decision=None,
                     consent_event_id=None, policy_version=None,
-                    source_product=None, recorded_at=None
+                    source_product=None, decision_at=None, recorded_at=None
                 )
 
             profile = await session.scalar(
@@ -329,7 +330,7 @@ async def check_product_communication_eligibility(
                 return _audited_product_consent_result(session, connection,
                     status="unknown", allowed=False, decision=None,
                     consent_event_id=None, policy_version=None,
-                    source_product=None, recorded_at=None
+                    source_product=None, decision_at=None, recorded_at=None
                 )
 
             latest = await session.scalar(
@@ -341,6 +342,7 @@ async def check_product_communication_eligibility(
                     CRMCommunicationConsentEvent.channel == payload.channel,
                 )
                 .order_by(
+                    CRMCommunicationConsentEvent.decision_at.desc(),
                     CRMCommunicationConsentEvent.recorded_at.desc(),
                     CRMCommunicationConsentEvent.id.desc(),
                 )
@@ -350,7 +352,7 @@ async def check_product_communication_eligibility(
                 return _audited_product_consent_result(session, connection,
                     status="unknown", allowed=False, decision=None,
                     consent_event_id=None, policy_version=None,
-                    source_product=None, recorded_at=None
+                    source_product=None, decision_at=None, recorded_at=None
                 )
             return _audited_product_consent_result(session, connection,
                 status=latest.decision,
@@ -359,6 +361,7 @@ async def check_product_communication_eligibility(
                 consent_event_id=latest.id,
                 policy_version=latest.policy_version,
                 source_product=latest.source_product,
+                decision_at=latest.decision_at,
                 recorded_at=latest.recorded_at,
             )
 
@@ -486,6 +489,7 @@ async def check_product_communication_eligibility_batch(
                                 CRMCommunicationConsentEvent.channel,
                             ),
                             order_by=(
+                                CRMCommunicationConsentEvent.decision_at.desc(),
                                 CRMCommunicationConsentEvent.recorded_at.desc(),
                                 CRMCommunicationConsentEvent.id.desc(),
                             ),
@@ -535,6 +539,7 @@ async def check_product_communication_eligibility_batch(
                         consent_event_id=None,
                         policy_version=None,
                         source_product=None,
+                        decision_at=None,
                         recorded_at=None,
                     )
                 else:
@@ -545,6 +550,7 @@ async def check_product_communication_eligibility_batch(
                         consent_event_id=latest.id,
                         policy_version=latest.policy_version,
                         source_product=latest.source_product,
+                        decision_at=latest.decision_at,
                         recorded_at=latest.recorded_at,
                     )
                 results.append(

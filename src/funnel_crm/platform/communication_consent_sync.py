@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -151,6 +152,8 @@ class PostgresProductConsentEventConsumer:
             payload = CommunicationConsentPayload.model_validate(event.payload)
         except ValidationError as exc:
             raise ConsentSyncError("crm.consent.invalid_payload") from exc
+        if event.occurred_at > datetime.now(timezone.utc) + timedelta(minutes=5):
+            raise ConsentSyncError("crm.consent.invalid_event_time")
 
         async with self._session_factory() as session:
             async with session.begin():
@@ -200,6 +203,7 @@ class PostgresProductConsentEventConsumer:
                         channel=payload.channel,
                         decision=payload.decision,
                         policy_version=payload.policy_version,
+                        decision_at=event.occurred_at,
                         source_product=event.source_product,
                         source_event_id=event.event_id,
                     )
@@ -227,6 +231,7 @@ class PostgresProductConsentEventConsumer:
                         or existing.purpose_key != payload.purpose_key
                         or existing.channel != payload.channel
                         or existing.decision != payload.decision
+                        or existing.decision_at != event.occurred_at
                         or existing.policy_version != payload.policy_version
                     ):
                         raise ConsentSyncError("crm.consent.source_event_conflict")

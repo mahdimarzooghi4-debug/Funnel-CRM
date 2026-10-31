@@ -49,6 +49,7 @@ class CommunicationConsentRead(BaseModel):
     policy_version: str
     source_product: str | None
     source_event_id: UUID | None
+    decision_at: datetime
     recorded_at: datetime
 
 
@@ -61,6 +62,7 @@ class CommunicationEligibility(BaseModel):
     channel: str
     allowed: bool
     decision: str | None
+    decision_at: datetime | None
     recorded_at: datetime | None
 
 
@@ -183,6 +185,7 @@ async def get_communication_eligibility(
             CRMCommunicationConsentEvent.channel == channel,
         )
         .order_by(
+            CRMCommunicationConsentEvent.decision_at.desc(),
             CRMCommunicationConsentEvent.recorded_at.desc(),
             CRMCommunicationConsentEvent.id.desc(),
         )
@@ -193,5 +196,6 @@ async def get_communication_eligibility(
         channel=channel,
         allowed=latest is not None and latest.decision == "granted",
         decision=latest.decision if latest else None,
+        decision_at=latest.decision_at if latest else None,
         recorded_at=latest.recorded_at if latest else None,
     )

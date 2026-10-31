@@ -1428,11 +1428,12 @@ class CRMCommunicationConsentEvent(Base):
             ondelete="CASCADE",
         ),
         Index(
-            "ix_crm_consent_latest_by_scope",
+            "ix_crm_consent_latest_by_decision_time",
             "tenant_id",
             "profile_id",
             "purpose_key",
             "channel",
+            "decision_at",
             "recorded_at",
             "id",
         ),
@@ -1455,6 +1456,12 @@ class CRMCommunicationConsentEvent(Base):
     policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
     source_product: Mapped[str | None] = mapped_column(String(80), nullable=True)
     source_event_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    decision_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("clock_timestamp()"),
+    )
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
     )
