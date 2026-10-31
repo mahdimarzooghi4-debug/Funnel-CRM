@@ -19,6 +19,7 @@ from funnel_crm.platform.integration_processing import ClaimedIntegrationEvent
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMCommunicationConsentEvent,
+    CRMConsentProductSyncCheckpoint,
     CRMConsentProductSyncOutbox,
     CRMProfile,
     ProductConnection,
@@ -410,6 +411,31 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         assert first_page["next_sequence"] == 2
         assert first_page["has_more"] is True
 
+        acknowledged = await client.post(
+            "/api/v1/integrations/communication-consent/changes/ack",
+            json={
+                "tenant_id": str(tenant_id),
+                "acknowledged_sequence": first_page["next_sequence"],
+            },
+        )
+        assert acknowledged.status_code == 200
+        assert acknowledged.json()["acknowledged_sequence"] == 2
+        repeated_ack = await client.post(
+            "/api/v1/integrations/communication-consent/changes/ack",
+            json={"tenant_id": str(tenant_id), "acknowledged_sequence": 2},
+        )
+        assert repeated_ack.status_code == 200
+        backward_ack = await client.post(
+            "/api/v1/integrations/communication-consent/changes/ack",
+            json={"tenant_id": str(tenant_id), "acknowledged_sequence": 1},
+        )
+        assert backward_ack.status_code == 409
+        future_ack = await client.post(
+            "/api/v1/integrations/communication-consent/changes/ack",
+            json={"tenant_id": str(tenant_id), "acknowledged_sequence": 99},
+        )
+        assert future_ack.status_code == 409
+
         second_changes = await client.post(
             "/api/v1/integrations/communication-consent/changes",
             json={
@@ -425,6 +451,15 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         assert second_page["changes"][0]["source_event_id"] == str(stale_event_id)
         assert second_page["next_sequence"] == 3
         assert second_page["has_more"] is False
+        final_ack = await client.post(
+            "/api/v1/integrations/communication-consent/changes/ack",
+            json={
+                "tenant_id": str(tenant_id),
+                "acknowledged_sequence": second_page["next_sequence"],
+            },
+        )
+        assert final_ack.status_code == 200
+        assert final_ack.json()["acknowledged_sequence"] == 3
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
@@ -490,6 +525,23 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         assert all(
             "external_customer_id" not in event.after_state for event in change_audits
         )
+        ack_audits = (
+            await context.session.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.tenant_id == tenant_id,
+                    AuditEvent.action_key == "integration.communication_consent.changes_acknowledged",
+                )
+            )
+        ).all()
+        assert len(ack_audits) == 3
+        checkpoint = await context.session.scalar(
+            select(CRMConsentProductSyncCheckpoint).where(
+                CRMConsentProductSyncCheckpoint.tenant_id == tenant_id,
+                CRMConsentProductSyncCheckpoint.recipient_product == "funnel.store",
+            )
+        )
+        assert checkpoint is not None
+        assert checkpoint.last_acked_sequence == 3
         outbox_count = await context.session.scalar(
             select(func.count()).select_from(CRMConsentProductSyncOutbox).where(
                 CRMConsentProductSyncOutbox.tenant_id == tenant_id,
