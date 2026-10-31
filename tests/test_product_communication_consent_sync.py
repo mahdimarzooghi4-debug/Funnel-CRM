@@ -355,6 +355,28 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
             )
         )
         assert audit_count == 2
+        eligibility_audits = (
+            await context.session.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.tenant_id == tenant_id,
+                    AuditEvent.action_key == "integration.communication_eligibility.checked",
+                )
+            )
+        ).all()
+        assert len(eligibility_audits) == 6
+        assert sum(event.after_state["check_count"] for event in eligibility_audits) == 8
+        assert sum(event.after_state["granted_count"] for event in eligibility_audits) == 2
+        assert sum(event.after_state["withdrawn_count"] for event in eligibility_audits) == 2
+        assert sum(event.after_state["unknown_count"] for event in eligibility_audits) == 4
+        assert all(
+            "external_customer_id" not in event.after_state
+            for event in eligibility_audits
+        )
+        assert all(
+            event.target_type == "product_connection"
+            and event.target_key == str(connection.connection_id)
+            for event in eligibility_audits
+        )
 
     replay = ClaimedIntegrationEvent(
         id=uuid4(),
