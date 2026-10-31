@@ -63,10 +63,10 @@ async def run_worker(
     once: bool = False,
 ) -> None:
     """Process both CRM customer and commerce event contracts for configured tenants."""
-    engine = create_async_engine(database_url, pool_pre_ping=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
     payload_keyring = IntegrationPayloadKeyring.from_environment()
     contact_keyring = ContactPointKeyring.from_environment()
+    engine = create_async_engine(database_url, pool_pre_ping=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
     customer_consumer = PostgresProductEventConsumer(
         session_factory,
         payload_keyring=payload_keyring,
