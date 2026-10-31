@@ -143,6 +143,18 @@ class ProductConsentChangesCheck(BaseModel):
     limit: int = Field(default=100, ge=1, le=100)
 
 
+class ProductConsentChangesAckCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+    acknowledged_sequence: int = Field(ge=0)
+
+
+class ProductConsentChangesAckResult(BaseModel):
+    source_product: str
+    acknowledged_sequence: int
+
+
 class ProductConsentChangeItem(BaseModel):
     """One product-specific consent change with its stable cursor."""
 
@@ -521,6 +533,139 @@ async def read_product_communication_consent_changes(
                 ],
                 next_sequence=next_sequence,
                 has_more=has_more,
+            )
+
+
+@router.post(
+    "/communication-consent/changes/ack",
+    operation_id="acknowledgeProductCommunicationConsentChanges",
+    summary="Acknowledge processed consent changes",
+    responses={
+        401: {"description": "Missing or invalid product credential"},
+        403: {"description": "Connection is inactive or lacks the change-feed contract"},
+        409: {"description": "Cursor moves backward or beyond the produced feed"},
+        503: {"description": "CRM consent service is not configured"},
+    },
+)
+async def acknowledge_product_communication_consent_changes(
+    payload: ProductConsentChangesAckCheck, request: Request
+) -> ProductConsentChangesAckResult:
+    """Persist a monotonic product cursor only after its changes are applied."""
+    connection = getattr(request.state, "verified_product_connection", None)
+    if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=payload.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid product credential is required",
+        )
+    if not connection.active:
+        raise HTTPException(status_code=403, detail="Connection is disabled")
+    if payload.tenant_id != connection.tenant_id:
+        raise HTTPException(status_code=403, detail="Workspace is outside this connection")
+    if (
+        "crm.customer.communication_consent_changes",
+        1,
+    ) not in connection.supported_contract_versions:
+        raise HTTPException(status_code=403, detail="Consent change-feed contract is not granted")
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CRM consent service is not configured",
+        )
+
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select, text
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from funnel_crm.platform.models import (
+        AuditEvent,
+        CRMConsentProductSyncCheckpoint,
+        CRMConsentProductSyncSequence,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(connection.tenant_id)},
+            )
+            sequence = await session.scalar(
+                select(CRMConsentProductSyncSequence.last_sequence).where(
+                    CRMConsentProductSyncSequence.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncSequence.recipient_product
+                    == connection.source_product,
+                )
+            )
+            produced_sequence = sequence or 0
+            if payload.acknowledged_sequence > produced_sequence:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Acknowledgement is beyond the produced consent feed",
+                )
+
+            checkpoint_table = CRMConsentProductSyncCheckpoint.__table__
+            await session.execute(
+                pg_insert(CRMConsentProductSyncCheckpoint)
+                .values(
+                    tenant_id=connection.tenant_id,
+                    recipient_product=connection.source_product,
+                    last_acked_sequence=0,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        checkpoint_table.c.tenant_id,
+                        checkpoint_table.c.recipient_product,
+                    ]
+                )
+            )
+            checkpoint = await session.scalar(
+                select(CRMConsentProductSyncCheckpoint)
+                .where(
+                    CRMConsentProductSyncCheckpoint.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncCheckpoint.recipient_product
+                    == connection.source_product,
+                )
+                .with_for_update()
+            )
+            if checkpoint is None:
+                raise RuntimeError("consent feed checkpoint could not be loaded")
+            if payload.acknowledged_sequence < checkpoint.last_acked_sequence:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Acknowledgement cannot move the product cursor backward",
+                )
+            checkpoint.last_acked_sequence = payload.acknowledged_sequence
+            checkpoint.updated_at = datetime.now(timezone.utc)
+            session.add(
+                AuditEvent(
+                    tenant_id=connection.tenant_id,
+                    actor_kind="system",
+                    actor_identity_id=None,
+                    actor_membership_id=None,
+                    action_key="integration.communication_consent.changes_acknowledged",
+                    target_type="product_connection",
+                    target_key=str(connection.connection_id),
+                    before_state=None,
+                    after_state={
+                        "source_product": connection.source_product,
+                        "acknowledged_sequence": payload.acknowledged_sequence,
+                    },
+                    correlation_id=uuid4(),
+                )
+            )
+            return ProductConsentChangesAckResult(
+                source_product=connection.source_product,
+                acknowledged_sequence=checkpoint.last_acked_sequence,
             )
 
 
