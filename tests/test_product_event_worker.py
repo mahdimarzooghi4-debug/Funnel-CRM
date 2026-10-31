@@ -94,6 +94,7 @@ async def test_registered_tenants_process_concurrently_within_configured_bound()
         customer_consumer=TrackingConsumer(),
         commerce_consumer=TrackingConsumer(),
         legacy_commerce_consumer=TrackingConsumer(),
+        consent_consumer=TrackingConsumer(),
     )
 
     assert visited == set(tenant_ids)
@@ -122,9 +123,11 @@ async def test_consumer_failure_does_not_skip_other_consumer(caplog) -> None:
         customer_consumer=BrokenConsumer(),
         commerce_consumer=HealthyConsumer(),
         legacy_commerce_consumer=HealthyConsumer(),
+        consent_consumer=HealthyConsumer(),
     )
 
-    assert calls == [tenant_id, tenant_id, tenant_id]
+    assert calls == [tenant_id, tenant_id, tenant_id, tenant_id]
     assert "consumer=customer" in caplog.text
     assert "consumer=commerce claimed=2 processed=1 failed=1 retry_scheduled=1" in caplog.text
     assert "consumer=legacy_commerce claimed=2 processed=1 failed=1 retry_scheduled=1" in caplog.text
+    assert "consumer=consent claimed=2 processed=1 failed=1 retry_scheduled=1" in caplog.text
