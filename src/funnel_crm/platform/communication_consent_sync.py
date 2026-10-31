@@ -200,6 +200,7 @@ class PostgresProductConsentEventConsumer:
                         channel=payload.channel,
                         decision=payload.decision,
                         policy_version=payload.policy_version,
+                        decision_at=event.occurred_at,
                         source_product=event.source_product,
                         source_event_id=event.event_id,
                     )
