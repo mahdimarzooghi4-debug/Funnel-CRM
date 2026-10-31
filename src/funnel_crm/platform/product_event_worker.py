@@ -56,6 +56,41 @@ def configured_poll_seconds(raw: str | None = None) -> float:
     return seconds
 
 
+async def process_tenant_batch(
+    tenant_id: UUID,
+    *,
+    customer_consumer: Any,
+    commerce_consumer: Any,
+) -> None:
+    """Run each consumer independently and report aggregate processing counts."""
+    for consumer_name, consumer in (
+        ("customer", customer_consumer),
+        ("commerce", commerce_consumer),
+    ):
+        try:
+            result = await consumer.process_batch(tenant_id)
+        except Exception as exc:
+            logger.error(
+                "Product event consumer failed tenant=%s consumer=%s error_type=%s",
+                tenant_id,
+                consumer_name,
+                type(exc).__name__,
+            )
+            continue
+        if not result.claimed:
+            continue
+        log = logger.warning if result.failed else logger.info
+        log(
+            "Product event batch tenant=%s consumer=%s claimed=%s processed=%s failed=%s retry_scheduled=%s",
+            tenant_id,
+            consumer_name,
+            result.claimed,
+            result.processed,
+            result.failed,
+            result.retry_scheduled,
+        )
+
+
 async def run_worker(
     *,
     tenant_ids: tuple[UUID, ...],
