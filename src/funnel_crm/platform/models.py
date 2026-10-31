@@ -1418,7 +1418,14 @@ class CRMCommunicationConsentEvent(Base):
             name="ck_crm_consent_source_pair",
         ),
         CheckConstraint(
-            "source_product IS NULL OR source_product ~ '^[a-z0-9][a-z0-9._-]{1,79}
+            "(source_product IS NULL) = (source_event_id IS NULL)",
+            name="ck_crm_consent_source_pair",
+        ),
+        CheckConstraint(
+            "source_product IS NULL OR source_product ~ '^[a-z0-9][a-z0-9._-]{1,79}$'",
+            name="ck_crm_consent_source_product",
+        ),
+        ForeignKeyConstraint(
             ["tenant_id", "profile_id"],
             ["crm_profiles.tenant_id", "crm_profiles.id"],
             name="fk_crm_consent_profile_same_tenant",
