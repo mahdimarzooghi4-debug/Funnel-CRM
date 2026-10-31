@@ -156,6 +156,9 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         assert eligibility.status_code == 200
         assert eligibility.json()["status"] == "withdrawn"
         assert eligibility.json()["allowed"] is False
+        assert eligibility.json()["consent_event_id"] > 0
+        assert eligibility.json()["policy_version"] == "2026-01"
+        assert eligibility.json()["source_product"] == "funnel.store"
 
         unknown_identity = await client.post(
             "/api/v1/integrations/communication-eligibility/check",
@@ -171,6 +174,9 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
             "status": "unknown",
             "allowed": False,
             "decision": None,
+            "consent_event_id": None,
+            "policy_version": None,
+            "source_product": None,
             "recorded_at": None,
         }
 
