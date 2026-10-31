@@ -41,6 +41,9 @@ class CampaignManagerReview(BaseModel):
     reviewed_by_identity_id: UUID | None
     reviewed_at: datetime
     follow_up_work_item_id: UUID | None
+    follow_up_status: Literal["open", "in_progress", "completed", "cancelled"] | None
+    follow_up_assigned_membership_id: UUID | None
+    follow_up_due_at: datetime | None
 
 
 class CampaignReadinessResponse(BaseModel):
@@ -403,16 +406,28 @@ async def get_campaign_readiness(
     )
     latest_manager_review = None
     if latest_review_event is not None and latest_review_event.after_state is not None:
+        follow_up_id_value = latest_review_event.after_state.get("follow_up_work_item_id")
+        follow_up_item = None
+        if work_item_data_visible and follow_up_id_value:
+            follow_up_item = await context.session.scalar(
+                select(CRMWorkItem).where(
+                    CRMWorkItem.tenant_id == context.access.tenant_id,
+                    CRMWorkItem.organization_unit_id == campaign.organization_unit_id,
+                    CRMWorkItem.campaign_id == campaign.id,
+                    CRMWorkItem.id == UUID(follow_up_id_value),
+                )
+            )
         latest_manager_review = CampaignManagerReview(
             decision=latest_review_event.after_state["decision"],
             note=latest_review_event.after_state.get("note"),
             reviewed_by_identity_id=latest_review_event.actor_identity_id,
             reviewed_at=latest_review_event.occurred_at,
-            follow_up_work_item_id=(
-                UUID(latest_review_event.after_state["follow_up_work_item_id"])
-                if latest_review_event.after_state.get("follow_up_work_item_id")
-                else None
+            follow_up_work_item_id=follow_up_item.id if follow_up_item is not None else None,
+            follow_up_status=follow_up_item.status if follow_up_item is not None else None,
+            follow_up_assigned_membership_id=(
+                follow_up_item.assigned_membership_id if follow_up_item is not None else None
             ),
+            follow_up_due_at=follow_up_item.due_at if follow_up_item is not None else None,
         )
     return CampaignReadinessResponse(
         campaign_id=campaign.id,
