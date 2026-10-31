@@ -45,7 +45,7 @@ def upgrade() -> None:
         CREATE OR REPLACE FUNCTION capture_crm_communication_consent_audit_event()
         RETURNS trigger
         LANGUAGE plpgsql
-        AS $
+        AS $consent$
         DECLARE
             actor_identity_value uuid;
             actor_membership_value uuid;
@@ -128,7 +128,7 @@ def upgrade() -> None:
             );
             RETURN NEW;
         END;
-        $
+        $consent$
         """
     )
 
@@ -140,7 +140,7 @@ def downgrade() -> None:
         CREATE OR REPLACE FUNCTION capture_crm_communication_consent_audit_event()
         RETURNS trigger
         LANGUAGE plpgsql
-        AS $
+        AS $consent$
         DECLARE
             actor_identity_value uuid;
             actor_membership_value uuid;
@@ -183,7 +183,7 @@ def downgrade() -> None:
             );
             RETURN NEW;
         END;
-        $
+        $consent$
         """
     )
 
