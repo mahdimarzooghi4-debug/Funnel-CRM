@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
@@ -199,7 +200,58 @@ class PostgresProductCommerceEventConsumer:
                     currency=payload.currency,
                     occurred_at=event.occurred_at,
                 )
-                session.add(commerce_event)
+                inserted_id = await session.scalar(
+                    pg_insert(CRMProductCommerceEvent)
+                    .values(
+                        id=commerce_event.id,
+                        tenant_id=commerce_event.tenant_id,
+                        organization_unit_id=commerce_event.organization_unit_id,
+                        campaign_id=commerce_event.campaign_id,
+                        profile_id=commerce_event.profile_id,
+                        seller_membership_id=commerce_event.seller_membership_id,
+                        source_product=commerce_event.source_product,
+                        source_event_id=commerce_event.source_event_id,
+                        event_type=commerce_event.event_type,
+                        order_reference=commerce_event.order_reference,
+                        event_kind=commerce_event.event_kind,
+                        amount=commerce_event.amount,
+                        currency=commerce_event.currency,
+                        occurred_at=commerce_event.occurred_at,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            "tenant_id", "source_product", "source_event_id"
+                        ]
+                    )
+                    .returning(CRMProductCommerceEvent.id)
+                )
+                if inserted_id is None:
+                    prior = await session.scalar(
+                        select(CRMProductCommerceEvent)
+                        .where(
+                            CRMProductCommerceEvent.tenant_id == event.tenant_id,
+                            CRMProductCommerceEvent.source_product == event.source_product,
+                            CRMProductCommerceEvent.source_event_id == event.event_id,
+                        )
+                        .with_for_update()
+                    )
+                    same_fact = prior is not None and (
+                        prior.organization_unit_id == profile.organization_unit_id
+                        and prior.campaign_id == payload.campaign_id
+                        and prior.profile_id == profile.id
+                        and prior.event_type == event.event_type
+                        and prior.order_reference == payload.order_reference
+                        and prior.event_kind == kind
+                        and prior.amount == payload.amount
+                        and prior.currency == payload.currency
+                        and prior.occurred_at == event.occurred_at
+                    )
+                    if not same_fact:
+                        raise CommerceSyncError(
+                            "crm.commerce.source_event_conflict"
+                        )
+                    return
+
                 session.add(
                     AuditEvent(
                         tenant_id=event.tenant_id,
