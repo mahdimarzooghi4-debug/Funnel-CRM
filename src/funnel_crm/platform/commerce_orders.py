@@ -102,7 +102,7 @@ class PostgresCommerceOrderEventConsumer:
                     )
                 except LeaseLostError:
                     continue
-            try:
+                try:
                     inserted = await self.consume(claim)
                 except (CommerceOrderEventError, LeaseLostError):
                     failed += 1
