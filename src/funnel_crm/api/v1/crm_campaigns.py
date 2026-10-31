@@ -10,7 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
-from funnel_crm.api.v1.crm_campaign_readiness import get_campaign_readiness
+from funnel_crm.api.v1.crm_campaign_readiness import (
+    _campaign_readiness_basis,
+    get_campaign_readiness,
+)
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import AuditEvent, CRMMarketingCampaign, CRMMarketingCampaignAsset, CRMProfileSegment
 from funnel_crm.platform.tenant_context import TenantSessionContext
@@ -340,23 +343,39 @@ async def transition_campaign_lifecycle(
             campaign_id=campaign.id,
             context=context,
         )
-        current_readiness_basis = {
-            "campaign_updated_at": campaign.updated_at.isoformat(),
-            "segment_id": str(campaign.segment_id),
-            "channel": campaign.channel,
-            "communication_purpose_key": campaign.communication_purpose_key,
-            "starts_at": campaign.starts_at.isoformat() if campaign.starts_at else None,
-            "ends_at": campaign.ends_at.isoformat() if campaign.ends_at else None,
-            "asset_counts": current_readiness.asset_counts,
-            "checks": {
-                check.key: {"status": check.status, "count": check.count}
-                for check in current_readiness.checks
-            },
-        }
+        current_readiness_basis = _campaign_readiness_basis(campaign, current_readiness)
         if latest_readiness_review.after_state.get("readiness_basis") != current_readiness_basis:
             raise HTTPException(
                 status_code=409,
                 detail="Campaign readiness changed after the manager review; review it again before scheduling",
+            )
+    if payload.action == "launch":
+        latest_activation_review = await context.session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == context.access.tenant_id,
+                AuditEvent.target_type == "crm_marketing_campaign_readiness_review",
+                AuditEvent.target_key == str(campaign.id),
+                AuditEvent.action_key == "crm_marketing_campaign.readiness_reviewed",
+            ).order_by(AuditEvent.occurred_at.desc(), AuditEvent.event_id.desc()).limit(1)
+        )
+        if (
+            latest_activation_review is None
+            or latest_activation_review.after_state is None
+            or latest_activation_review.after_state.get("decision") != "proceed_to_launch"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Campaign needs a current manager decision to proceed to activation",
+            )
+        current_readiness = await get_campaign_readiness(
+            campaign_id=campaign.id,
+            context=context,
+        )
+        current_readiness_basis = _campaign_readiness_basis(campaign, current_readiness)
+        if latest_activation_review.after_state.get("readiness_basis") != current_readiness_basis:
+            raise HTTPException(
+                status_code=409,
+                detail="Campaign readiness changed after the manager review; review it again before activation",
             )
     previous_status = campaign.status
     campaign.status = next_status
