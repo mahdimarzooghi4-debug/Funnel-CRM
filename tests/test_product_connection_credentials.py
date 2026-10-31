@@ -9,10 +9,11 @@ from fastapi import FastAPI
 from sqlalchemy import select
 
 from funnel_crm.api.v1.integrations import router as integrations_router
+from funnel_crm.api.v1.integration_event_operations import router as event_operations_router
 from funnel_crm.api.v1.product_connections import router as connections_router
 from funnel_crm.platform.integration_auth import authenticate_product_credential
 from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
-from funnel_crm.platform.models import AuditEvent, ProductConnection, Role, RoleAssignment, RolePermission
+from funnel_crm.platform.models import AuditEvent, IntegrationEventInbox, ProductConnection, Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
 
@@ -29,6 +30,7 @@ def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
         return await call_next(request)
 
     app.include_router(integrations_router, prefix="/api/v1")
+    app.include_router(event_operations_router, prefix="/api/v1")
     app.include_router(connections_router, prefix="/api/v1")
     return app
 
@@ -114,12 +116,55 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
         assert "credential" not in listed.json()[0]
         assert token not in listed.text
 
+        event_body = event(tenant_id)
         accepted = await client.post(
             "/api/v1/integrations/events",
             headers={"Authorization": f"Bearer {token}"},
-            json=event(tenant_id),
+            json=event_body,
         )
         assert accepted.status_code == 202
+
+        async with tenant_session(
+            runtime_session_factory,
+            requested_tenant_id=tenant_id,
+            identity=identity,
+        ) as context:
+            inbox_row = await context.session.scalar(
+                select(IntegrationEventInbox).where(
+                    IntegrationEventInbox.tenant_id == tenant_id,
+                    IntegrationEventInbox.event_id == UUID(event_body["event_id"]),
+                )
+            )
+            assert inbox_row is not None
+            inbox_row.processing_status = "failed"
+            inbox_row.attempt_count = 8
+            inbox_row.last_error_code = "consumer_unavailable"
+            event_row_id = inbox_row.id
+
+        failed = await client.get(
+            "/api/v1/integrations/events/failed",
+            headers=headers,
+        )
+        assert failed.status_code == 200
+        assert len(failed.json()) == 1
+        assert failed.json()[0]["id"] == str(event_row_id)
+        assert failed.json()[0]["last_error_code"] == "consumer_unavailable"
+        assert "payload" not in failed.text
+        assert "order_id" not in failed.text
+
+        retried = await client.post(
+            f"/api/v1/integrations/events/{event_row_id}/retry",
+            headers=headers,
+        )
+        assert retried.status_code == 200
+        assert retried.json()["processing_status"] == "received"
+        assert retried.json()["attempt_count"] == 0
+
+        retry_again = await client.post(
+            f"/api/v1/integrations/events/{event_row_id}/retry",
+            headers=headers,
+        )
+        assert retry_again.status_code == 409
 
         invalid_token = token[:-1] + ("A" if token[-1] != "A" else "B")
         invalid = await client.post(
@@ -170,6 +215,23 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
         assert {item.action_key for item in events} == {
             "product_connection.created",
             "product_connection.revoked",
+        }
+        retry_audit = await context.session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == tenant_id,
+                AuditEvent.action_key == "integration.event.requeued",
+                AuditEvent.target_key == str(event_row_id),
+            )
+        )
+        assert retry_audit is not None
+        assert retry_audit.before_state == {
+            "processing_status": "failed",
+            "attempt_count": 8,
+            "last_error_code": "consumer_unavailable",
+        }
+        assert retry_audit.after_state == {
+            "processing_status": "received",
+            "attempt_count": 0,
         }
 
 
