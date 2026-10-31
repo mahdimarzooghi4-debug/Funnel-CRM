@@ -259,6 +259,7 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
         ).all()
         assert {item.action_key for item in events} == {
             "product_connection.created",
+            "product_connection.credential_rotated",
             "product_connection.revoked",
         }
         rotation_audit = await context.session.scalar(
