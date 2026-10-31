@@ -67,7 +67,7 @@ class ProductConnectionRead(BaseModel):
 
 
 class ProductConsentSyncHealthItem(BaseModel):
-    connection_id: UUID
+    connection_ids: list[UUID]
     source_product: str
     status: str
     produced_sequence: int
@@ -236,16 +236,20 @@ async def list_product_consent_sync_health(
         pending_by_product = {
             product: count for product, count in pending_rows
         }
-        items = []
+        connection_ids_by_product: dict[str, list[UUID]] = {}
         for connection in connections:
-            product = connection.source_product
+            connection_ids_by_product.setdefault(connection.source_product, []).append(
+                connection.id
+            )
+        items = []
+        for product in products:
             produced = sequence_by_product.get(product, 0)
             checkpoint = checkpoint_by_product.get(product)
             acknowledged = checkpoint.last_acked_sequence if checkpoint else 0
             pending = pending_by_product.get(product, 0)
             items.append(
                 ProductConsentSyncHealthItem(
-                    connection_id=connection.id,
+                    connection_ids=connection_ids_by_product[product],
                     source_product=product,
                     status="behind" if pending else "in_sync",
                     produced_sequence=produced,
@@ -272,7 +276,7 @@ async def list_product_consent_sync_health(
             organization_unit_id=root_id,
             before_state=None,
             after_state={
-                "connection_count": len(result.items),
+                "connection_count": len(connections),
                 "behind_product_count": result.behind_product_count,
                 "pending_total": result.pending_total,
             },
