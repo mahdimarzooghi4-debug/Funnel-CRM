@@ -5,7 +5,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import exists, func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
@@ -47,6 +47,7 @@ class CampaignReadinessResponse(BaseModel):
     asset_counts: dict[AssetStatus, int]
     open_work_item_count: int | None
     work_item_data_visible: bool
+    latest_manager_review: CampaignManagerReview | None
     generated_at: datetime
     basis: str
 
@@ -62,6 +63,27 @@ class CampaignReadinessPortfolioResponse(BaseModel):
     needs_attention_count: int
     attention_by_check: dict[str, int]
     items: list[CampaignReadinessResponse]
+
+class CampaignManagerReview(BaseModel):
+    decision: Literal["proceed_to_schedule", "request_changes", "hold"]
+    note: str | None
+    reviewed_by_identity_id: UUID | None
+    reviewed_at: datetime
+
+
+class CampaignReadinessReviewDecision(BaseModel):
+    decision: Literal["proceed_to_schedule", "request_changes", "hold"]
+    note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("note must contain a non-whitespace character")
+        return normalized
 
 
 @router.get(
@@ -328,6 +350,22 @@ async def get_campaign_readiness(
                 CRMWorkItem.status.in_(("open", "in_progress")),
             )
         ) or 0)
+    latest_review_event = await context.session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.tenant_id == context.access.tenant_id,
+            AuditEvent.target_type == "crm_marketing_campaign_readiness_review",
+            AuditEvent.target_key == str(campaign.id),
+            AuditEvent.action_key == "crm_marketing_campaign.readiness_reviewed",
+        ).order_by(AuditEvent.occurred_at.desc(), AuditEvent.event_id.desc()).limit(1)
+    )
+    latest_manager_review = None
+    if latest_review_event is not None and latest_review_event.after_state is not None:
+        latest_manager_review = CampaignManagerReview(
+            decision=latest_review_event.after_state["decision"],
+            note=latest_review_event.after_state.get("note"),
+            reviewed_by_identity_id=latest_review_event.actor_identity_id,
+            reviewed_at=latest_review_event.occurred_at,
+        )
     return CampaignReadinessResponse(
         campaign_id=campaign.id,
         campaign_name=campaign.name,
@@ -345,6 +383,7 @@ async def get_campaign_readiness(
         asset_counts=asset_counts,
         open_work_item_count=open_work_item_count,
         work_item_data_visible=work_item_data_visible,
+        latest_manager_review=latest_manager_review,
         generated_at=datetime.now(timezone.utc),
         basis=(
             "Readiness is a checklist for manager review, not an automatic launch approval. "
@@ -354,3 +393,50 @@ async def get_campaign_readiness(
             "Open work items are shown only when the caller has work-item view permission."
         ),
     )
+
+
+@router.post(
+    "/{campaign_id}/readiness-review",
+    response_model=CampaignReadinessResponse,
+    operation_id="recordCRMCampaignReadinessReview",
+)
+async def record_campaign_readiness_review(
+    campaign_id: UUID,
+    payload: CampaignReadinessReviewDecision,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignReadinessResponse:
+    campaign = await context.session.scalar(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaign.id == campaign_id,
+        )
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if not await has_crm_permission(
+        context,
+        permission_key="crm.campaign:manage",
+        organization_unit_id=campaign.organization_unit_id,
+    ):
+        raise HTTPException(status_code=403, detail="Campaign review is not authorized for this organization scope")
+    readiness = await get_campaign_readiness(campaign_id=campaign_id, context=context)
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign.readiness_reviewed",
+        target_type="crm_marketing_campaign_readiness_review",
+        target_key=str(campaign.id),
+        organization_unit_id=campaign.organization_unit_id,
+        before_state=None,
+        after_state={
+            "decision": payload.decision,
+            "note": payload.note,
+            "readiness": readiness.launch_readiness,
+            "check_statuses": {check.key: check.status for check in readiness.checks},
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return await get_campaign_readiness(campaign_id=campaign_id, context=context)
