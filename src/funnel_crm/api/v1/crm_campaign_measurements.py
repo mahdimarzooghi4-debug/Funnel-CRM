@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
-from funnel_crm.platform.crm_authorization import has_crm_permission
+from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingCampaign,
@@ -313,4 +313,160 @@ async def get_campaign_measurement_summary(
         incentive_cost_by_currency=incentive_cost,
         refunded_amount_by_currency=refunded,
         attributed_revenue_by_currency=revenue,
+    )
+
+
+class CampaignPerformanceItem(BaseModel):
+    campaign_id: UUID
+    name: str
+    status: str
+    channel: str
+    objective_key: str
+    planned_budget_amount: Decimal | None
+    planned_budget_currency: str | None
+    record_count: int
+    source_labels: list[str]
+    coverage_days: dict[str, int]
+    totals: dict[str, int | None]
+    click_through_rate_percent: float | None
+    lead_rate_per_click_percent: float | None
+    conversion_rate_per_click_percent: float | None
+    actual_spend_by_currency: dict[str, Decimal]
+    attributed_revenue_by_currency: dict[str, Decimal]
+
+
+class CampaignPerformancePortfolioRead(BaseModel):
+    period_start: date
+    period_end: date
+    campaign_count: int
+    measured_campaign_count: int
+    items: list[CampaignPerformanceItem]
+    truncated: bool
+
+
+@router.get(
+    "/performance",
+    response_model=CampaignPerformancePortfolioRead,
+    operation_id="getCRMMarketingCampaignPerformancePortfolio",
+    summary="Compare campaign outcomes in an authorized organization scope",
+)
+async def get_campaign_performance_portfolio(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignPerformancePortfolioRead:
+    if period_start > period_end:
+        raise HTTPException(status_code=422, detail="period_start must not be after period_end")
+    if (period_end - period_start).days > 365:
+        raise HTTPException(status_code=422, detail="Performance portfolios are limited to 366 calendar days")
+
+    tenant_id = context.access.tenant_id
+    scoped_organization_ids = crm_scope_ids(context, permission_key="crm.campaign:view")
+    campaign_rows = (await context.session.scalars(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == tenant_id,
+            CRMMarketingCampaign.organization_unit_id.in_(scoped_organization_ids),
+        ).order_by(CRMMarketingCampaign.name, CRMMarketingCampaign.id).limit(501)
+    )).all()
+    truncated = len(campaign_rows) > 500
+    campaigns = campaign_rows[:500]
+    campaign_ids = [campaign.id for campaign in campaigns]
+    measurements = []
+    if campaign_ids:
+        measurements = (await context.session.scalars(
+            select(CRMMarketingCampaignMeasurement).where(
+                CRMMarketingCampaignMeasurement.tenant_id == tenant_id,
+                CRMMarketingCampaignMeasurement.campaign_id.in_(campaign_ids),
+                CRMMarketingCampaignMeasurement.measured_on >= period_start,
+                CRMMarketingCampaignMeasurement.measured_on <= period_end,
+            ).order_by(CRMMarketingCampaignMeasurement.campaign_id,
+                       CRMMarketingCampaignMeasurement.measured_on)
+        )).all()
+
+    by_campaign: dict[UUID, list[CRMMarketingCampaignMeasurement]] = {
+        campaign_id: [] for campaign_id in campaign_ids
+    }
+    for row in measurements:
+        by_campaign[row.campaign_id].append(row)
+
+    metric_keys = (
+        "impressions", "reach", "clicks", "responses", "leads", "conversions",
+        "assigned_count", "exposure_count", "return_count",
+    )
+
+    def currency_totals(rows, amount_key: str, currency_key: str) -> dict[str, Decimal]:
+        totals: dict[str, Decimal] = {}
+        for row in rows:
+            amount = getattr(row, amount_key)
+            currency = getattr(row, currency_key)
+            if amount is not None and currency is not None:
+                totals[currency] = totals.get(currency, Decimal("0")) + amount
+        return totals
+
+    items: list[CampaignPerformanceItem] = []
+    for campaign in campaigns:
+        rows = by_campaign[campaign.id]
+        totals: dict[str, int | None] = {}
+        coverage: dict[str, int] = {}
+        for key in metric_keys:
+            observed = [getattr(row, key) for row in rows if getattr(row, key) is not None]
+            coverage[key] = len(observed)
+            totals[key] = sum(observed) if observed else None
+
+        def paired_rate(numerator_key: str, denominator_key: str) -> float | None:
+            paired = [
+                (getattr(row, numerator_key), getattr(row, denominator_key))
+                for row in rows
+                if getattr(row, numerator_key) is not None
+                and getattr(row, denominator_key) is not None
+            ]
+            denominator = sum(pair[1] for pair in paired)
+            return round(100 * sum(pair[0] for pair in paired) / denominator, 4) if paired and denominator else None
+
+        items.append(CampaignPerformanceItem(
+            campaign_id=campaign.id,
+            name=campaign.name,
+            status=campaign.status,
+            channel=campaign.channel,
+            objective_key=campaign.objective_key,
+            planned_budget_amount=campaign.planned_budget_amount,
+            planned_budget_currency=campaign.planned_budget_currency,
+            record_count=len(rows),
+            source_labels=sorted({row.source_label for row in rows}),
+            coverage_days=coverage,
+            totals=totals,
+            click_through_rate_percent=paired_rate("clicks", "impressions"),
+            lead_rate_per_click_percent=paired_rate("leads", "clicks"),
+            conversion_rate_per_click_percent=paired_rate("conversions", "clicks"),
+            actual_spend_by_currency=currency_totals(rows, "actual_spend_amount", "actual_spend_currency"),
+            attributed_revenue_by_currency=currency_totals(rows, "attributed_revenue_amount", "attributed_revenue_currency"),
+        ))
+
+    context.session.add(AuditEvent(
+        tenant_id=tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign.performance_portfolio_viewed",
+        target_type="crm_marketing_campaign_performance_portfolio",
+        target_key="organization_scope",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "campaign_count": len(campaigns),
+            "measured_campaign_count": sum(bool(by_campaign[campaign.id]) for campaign in campaigns),
+            "truncated": truncated,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignPerformancePortfolioRead(
+        period_start=period_start,
+        period_end=period_end,
+        campaign_count=len(campaigns),
+        measured_campaign_count=sum(bool(by_campaign[campaign.id]) for campaign in campaigns),
+        items=items,
+        truncated=truncated,
     )
