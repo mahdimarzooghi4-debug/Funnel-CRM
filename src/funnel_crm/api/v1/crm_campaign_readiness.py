@@ -522,6 +522,19 @@ async def record_campaign_readiness_review(
             if active_assignee is None:
                 raise HTTPException(status_code=422, detail="Follow-up assignee must be an active workspace member")
     readiness = await get_campaign_readiness(campaign_id=campaign_id, context=context)
+    readiness_basis = {
+        "campaign_updated_at": campaign.updated_at.isoformat(),
+        "segment_id": str(campaign.segment_id),
+        "channel": campaign.channel,
+        "communication_purpose_key": campaign.communication_purpose_key,
+        "starts_at": campaign.starts_at.isoformat() if campaign.starts_at else None,
+        "ends_at": campaign.ends_at.isoformat() if campaign.ends_at else None,
+        "asset_counts": readiness.asset_counts,
+        "checks": {
+            check.key: {"status": check.status, "count": check.count}
+            for check in readiness.checks
+        },
+    }
     follow_up_item = None
     if payload.follow_up is not None:
         follow_up_item = CRMWorkItem(
@@ -574,6 +587,7 @@ async def record_campaign_readiness_review(
             "note": payload.note,
             "readiness": readiness.launch_readiness,
             "check_statuses": {check.key: check.status for check in readiness.checks},
+            "readiness_basis": readiness_basis,
             "follow_up_work_item_id": str(follow_up_item.id) if follow_up_item else None,
         },
         correlation_id=None,

@@ -170,6 +170,31 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
         assert readiness_checks["approved_content"]["status"] == "complete"
         assert readiness_checks["channel_eligibility"]["status"] == "not_authorized"
 
+        proceed_review = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
+            headers=headers,
+            json={"decision": "proceed_to_schedule"},
+        )
+        assert proceed_review.status_code == 200, proceed_review.text
+        changed_after_review = await client.patch(
+            f"/api/v1/crm/campaigns/{campaign_id}",
+            headers=headers,
+            json={"objective_key": "retention"},
+        )
+        assert changed_after_review.status_code == 200, changed_after_review.text
+        stale_schedule = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/lifecycle",
+            headers=headers,
+            json={"action": "schedule"},
+        )
+        assert stale_schedule.status_code == 409
+        refreshed_proceed_review = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
+            headers=headers,
+            json={"decision": "proceed_to_schedule"},
+        )
+        assert refreshed_proceed_review.status_code == 200, refreshed_proceed_review.text
+
         for action, expected in [("schedule", "scheduled"), ("launch", "active"), ("pause", "paused"), ("resume", "active"), ("complete", "completed"), ("archive", "archived")]:
             transition = await client.post(f"/api/v1/crm/campaigns/{campaign_id}/lifecycle", headers=headers, json={"action": action})
             assert transition.status_code == 200, transition.text
