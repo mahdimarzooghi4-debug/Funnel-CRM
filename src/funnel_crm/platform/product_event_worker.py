@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -55,6 +56,41 @@ def configured_poll_seconds(raw: str | None = None) -> float:
     return seconds
 
 
+async def process_tenant_batch(
+    tenant_id: UUID,
+    *,
+    customer_consumer: Any,
+    commerce_consumer: Any,
+) -> None:
+    """Run each consumer independently and report aggregate processing counts."""
+    for consumer_name, consumer in (
+        ("customer", customer_consumer),
+        ("commerce", commerce_consumer),
+    ):
+        try:
+            result = await consumer.process_batch(tenant_id)
+        except Exception as exc:
+            logger.error(
+                "Product event consumer failed tenant=%s consumer=%s error_type=%s",
+                tenant_id,
+                consumer_name,
+                type(exc).__name__,
+            )
+            continue
+        if not result.claimed:
+            continue
+        log = logger.warning if result.failed else logger.info
+        log(
+            "Product event batch tenant=%s consumer=%s claimed=%s processed=%s failed=%s retry_scheduled=%s",
+            tenant_id,
+            consumer_name,
+            result.claimed,
+            result.processed,
+            result.failed,
+            result.retry_scheduled,
+        )
+
+
 async def run_worker(
     *,
     tenant_ids: tuple[UUID, ...],
@@ -79,19 +115,11 @@ async def run_worker(
     try:
         while True:
             for tenant_id in tenant_ids:
-                try:
-                    customer = await customer_consumer.process_batch(tenant_id)
-                    commerce = await commerce_consumer.process_batch(tenant_id)
-                    if customer.claimed or commerce.claimed:
-                        logger.info(
-                            "Processed product events tenant=%s customer=%s commerce=%s",
-                            tenant_id,
-                            customer.processed,
-                            commerce.processed,
-                        )
-                except Exception:
-                    # One tenant or batch must not stop processing other configured tenants.
-                    logger.exception("Product event batch failed tenant=%s", tenant_id)
+                await process_tenant_batch(
+                    tenant_id,
+                    customer_consumer=customer_consumer,
+                    commerce_consumer=commerce_consumer,
+                )
             if once:
                 return
             await asyncio.sleep(poll_seconds)
