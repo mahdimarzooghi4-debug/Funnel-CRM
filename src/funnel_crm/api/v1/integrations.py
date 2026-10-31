@@ -150,6 +150,20 @@ class ProductConsentChangesAckCheck(BaseModel):
     acknowledged_sequence: int = Field(ge=0)
 
 
+class ProductConsentChangesStatusCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+
+
+class ProductConsentChangesStatusResult(BaseModel):
+    source_product: str
+    produced_sequence: int
+    acknowledged_sequence: int
+    pending_count: int
+    checkpoint_updated_at: datetime | None
+
+
 class ProductConsentChangesAckResult(BaseModel):
     source_product: str
     acknowledged_sequence: int
@@ -666,6 +680,121 @@ async def acknowledge_product_communication_consent_changes(
             return ProductConsentChangesAckResult(
                 source_product=connection.source_product,
                 acknowledged_sequence=checkpoint.last_acked_sequence,
+            )
+
+
+@router.post(
+    "/communication-consent/changes/status",
+    operation_id="getProductCommunicationConsentSyncStatus",
+    summary="Read consent change-feed synchronization status",
+    responses={
+        401: {"description": "Missing or invalid product credential"},
+        403: {"description": "Connection is inactive or lacks the change-feed contract"},
+        503: {"description": "CRM consent service is not configured"},
+    },
+)
+async def get_product_communication_consent_sync_status(
+    payload: ProductConsentChangesStatusCheck, request: Request
+) -> ProductConsentChangesStatusResult:
+    """Report produced, acknowledged, and pending changes for this product."""
+    connection = getattr(request.state, "verified_product_connection", None)
+    if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=payload.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid product credential is required",
+        )
+    if not connection.active:
+        raise HTTPException(status_code=403, detail="Connection is disabled")
+    if payload.tenant_id != connection.tenant_id:
+        raise HTTPException(status_code=403, detail="Workspace is outside this connection")
+    if (
+        "crm.customer.communication_consent_changes",
+        1,
+    ) not in connection.supported_contract_versions:
+        raise HTTPException(status_code=403, detail="Consent change-feed contract is not granted")
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CRM consent service is not configured",
+        )
+
+    from sqlalchemy import func, select, text
+
+    from funnel_crm.platform.models import (
+        AuditEvent,
+        CRMConsentProductSyncCheckpoint,
+        CRMConsentProductSyncOutbox,
+        CRMConsentProductSyncSequence,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(connection.tenant_id)},
+            )
+            produced_sequence = await session.scalar(
+                select(CRMConsentProductSyncSequence.last_sequence).where(
+                    CRMConsentProductSyncSequence.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncSequence.recipient_product
+                    == connection.source_product,
+                )
+            ) or 0
+            checkpoint = await session.scalar(
+                select(CRMConsentProductSyncCheckpoint).where(
+                    CRMConsentProductSyncCheckpoint.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncCheckpoint.recipient_product
+                    == connection.source_product,
+                )
+            )
+            acknowledged_sequence = (
+                checkpoint.last_acked_sequence if checkpoint is not None else 0
+            )
+            pending_count = await session.scalar(
+                select(func.count()).select_from(CRMConsentProductSyncOutbox).where(
+                    CRMConsentProductSyncOutbox.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncOutbox.recipient_product
+                    == connection.source_product,
+                    CRMConsentProductSyncOutbox.sequence > acknowledged_sequence,
+                )
+            ) or 0
+            session.add(
+                AuditEvent(
+                    tenant_id=connection.tenant_id,
+                    actor_kind="system",
+                    actor_identity_id=None,
+                    actor_membership_id=None,
+                    action_key="integration.communication_consent.changes_status_read",
+                    target_type="product_connection",
+                    target_key=str(connection.connection_id),
+                    before_state=None,
+                    after_state={
+                        "source_product": connection.source_product,
+                        "produced_sequence": produced_sequence,
+                        "acknowledged_sequence": acknowledged_sequence,
+                        "pending_count": pending_count,
+                    },
+                    correlation_id=uuid4(),
+                )
+            )
+            return ProductConsentChangesStatusResult(
+                source_product=connection.source_product,
+                produced_sequence=produced_sequence,
+                acknowledged_sequence=acknowledged_sequence,
+                pending_count=pending_count,
+                checkpoint_updated_at=(
+                    checkpoint.updated_at if checkpoint is not None else None
+                ),
             )
 
 
