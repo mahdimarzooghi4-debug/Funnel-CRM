@@ -185,7 +185,10 @@ async def run_worker(
         session_factory,
         payload_keyring=payload_keyring,
     )
-    consent_consumer = PostgresProductConsentEventConsumer(session_factory)
+    consent_consumer = PostgresProductConsentEventConsumer(
+        session_factory,
+        payload_keyring=payload_keyring,
+    )
     shutdown = stop_event or asyncio.Event()
     try:
         while not shutdown.is_set():
