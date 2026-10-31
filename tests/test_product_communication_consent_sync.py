@@ -194,6 +194,84 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         assert missing_consent.json()["allowed"] is False
         assert missing_consent.json()["consent_event_id"] is None
 
+        batch = await client.post(
+            "/api/v1/integrations/communication-eligibility/check-batch",
+            json={
+                "tenant_id": str(tenant_id),
+                "checks": [
+                    {
+                        "reference": "withdrawal-1",
+                        "external_customer_id": "store-customer-71",
+                        "purpose_key": "product_updates",
+                        "channel": "email",
+                    },
+                    {
+                        "reference": "unknown-purpose",
+                        "external_customer_id": "store-customer-71",
+                        "purpose_key": "product_reviews",
+                        "channel": "email",
+                    },
+                    {
+                        "reference": "unmapped",
+                        "external_customer_id": "unmapped-customer",
+                        "purpose_key": "product_updates",
+                        "channel": "email",
+                    },
+                ],
+            },
+        )
+        assert batch.status_code == 200
+        batch_items = batch.json()["checks"]
+        assert [item["reference"] for item in batch_items] == [
+            "withdrawal-1", "unknown-purpose", "unmapped",
+        ]
+        assert [item["status"] for item in batch_items] == [
+            "withdrawn", "unknown", "unknown",
+        ]
+        assert [item["allowed"] for item in batch_items] == [False, False, False]
+        assert batch_items[0]["consent_event_id"] == eligibility.json()["consent_event_id"]
+        assert batch_items[0]["policy_version"] == "2026-01"
+        assert batch_items[1]["consent_event_id"] is None
+
+        too_many_checks = await client.post(
+            "/api/v1/integrations/communication-eligibility/check-batch",
+            json={
+                "tenant_id": str(tenant_id),
+                "checks": [
+                    {
+                        "reference": f"ref-{index}",
+                        "external_customer_id": "store-customer-71",
+                        "purpose_key": "product_updates",
+                        "channel": "email",
+                    }
+                    for index in range(101)
+                ],
+            },
+        )
+        assert too_many_checks.status_code == 422
+
+        duplicate_references = await client.post(
+            "/api/v1/integrations/communication-eligibility/check-batch",
+            json={
+                "tenant_id": str(tenant_id),
+                "checks": [
+                    {
+                        "reference": "same",
+                        "external_customer_id": "store-customer-71",
+                        "purpose_key": "product_updates",
+                        "channel": "email",
+                    },
+                    {
+                        "reference": "same",
+                        "external_customer_id": "unmapped-customer",
+                        "purpose_key": "product_updates",
+                        "channel": "email",
+                    },
+                ],
+            },
+        )
+        assert duplicate_references.status_code == 422
+
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
