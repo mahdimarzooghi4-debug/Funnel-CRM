@@ -180,6 +180,58 @@ async def list_product_connections(
     return [_read(row) for row in rows]
 
 
+
+@router.post(
+    "/{connection_id}/rotate-credential",
+    response_model=ProductConnectionCreated,
+    operation_id="rotateProductConnectionCredential",
+    summary="Replace a product credential and return the new token once",
+)
+async def rotate_product_connection_credential(
+    connection_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> ProductConnectionCreated:
+    root_id = await _require_manage(context)
+    connection = await context.session.scalar(
+        select(ProductConnection)
+        .where(
+            ProductConnection.tenant_id == context.access.tenant_id,
+            ProductConnection.id == connection_id,
+        )
+        .with_for_update()
+    )
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Product connection not found")
+    if connection.revoked_at is not None:
+        raise HTTPException(status_code=409, detail="A revoked product connection cannot be rotated")
+
+    previous_credential_id = connection.credential_id
+    credential_id, digest, raw_credential = issue_product_credential()
+    connection.credential_id = credential_id
+    connection.credential_digest = digest
+    await context.session.flush()
+    context.session.add(
+        AuditEvent(
+            tenant_id=context.access.tenant_id,
+            actor_kind="user",
+            actor_identity_id=context.access.identity_id,
+            actor_membership_id=context.access.membership_id,
+            action_key="product_connection.credential_rotated",
+            target_type="product_connection",
+            target_key=str(connection.id),
+            organization_unit_id=root_id,
+            before_state={"credential_id": str(previous_credential_id)},
+            after_state={"credential_id": str(credential_id)},
+            correlation_id=None,
+        )
+    )
+    await context.session.flush()
+    return ProductConnectionCreated(
+        **_read(connection).model_dump(),
+        credential=raw_credential,
+    )
+
+
 @router.post(
     "/{connection_id}/revoke",
     status_code=status.HTTP_204_NO_CONTENT,
