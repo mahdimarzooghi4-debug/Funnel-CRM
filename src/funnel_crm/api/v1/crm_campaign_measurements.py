@@ -774,6 +774,15 @@ async def get_campaign_channel_performance(
                     result[currency] = result.get(currency, Decimal("0")) + amount
             return result
 
+        planned_budget_by_currency: dict[str, Decimal] = {}
+        for campaign in campaigns:
+            if campaign.planned_budget_amount is not None and campaign.planned_budget_currency is not None:
+                currency = campaign.planned_budget_currency
+                planned_budget_by_currency[currency] = (
+                    planned_budget_by_currency.get(currency, Decimal("0"))
+                    + campaign.planned_budget_amount
+                )
+
         result_items.append(CampaignChannelPerformanceItem(
             channel=channel,
             campaign_count=len(campaigns),
@@ -785,7 +794,7 @@ async def get_campaign_channel_performance(
             click_through_rate_percent=rates["click_through_rate_percent"],
             lead_rate_per_click_percent=rates["lead_rate_per_click_percent"],
             conversion_rate_per_click_percent=rates["conversion_rate_per_click_percent"],
-            planned_budget_by_currency=sum_currency_map("planned_budget_by_currency"),
+            planned_budget_by_currency=planned_budget_by_currency,
             actual_spend_by_currency=sum_currency_map("actual_spend_by_currency"),
             attributed_revenue_by_currency=sum_currency_map("attributed_revenue_by_currency"),
         ))
