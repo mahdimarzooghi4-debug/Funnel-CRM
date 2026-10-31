@@ -258,7 +258,9 @@ async def check_product_communication_eligibility(
             )
             if profile is None:
                 return ProductConsentEligibilityResult(
-                    status="unknown", allowed=False, decision=None, recorded_at=None
+                    status="unknown", allowed=False, decision=None,
+                    consent_event_id=None, policy_version=None,
+                    source_product=None, recorded_at=None
                 )
 
             latest = await session.scalar(
@@ -277,7 +279,9 @@ async def check_product_communication_eligibility(
             )
             if latest is None:
                 return ProductConsentEligibilityResult(
-                    status="unknown", allowed=False, decision=None, recorded_at=None
+                    status="unknown", allowed=False, decision=None,
+                    consent_event_id=None, policy_version=None,
+                    source_product=None, recorded_at=None
                 )
             return ProductConsentEligibilityResult(
                 status=latest.decision,
