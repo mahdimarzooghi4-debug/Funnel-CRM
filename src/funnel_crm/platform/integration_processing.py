@@ -246,10 +246,19 @@ class PostgresProductEventProcessor:
                                 key_id=row.payload_key_id,
                                 ciphertext=row.encrypted_payload,
                             )
-                        except IntegrationPayloadCryptoError as exc:
-                            raise ValueError(
-                                "claimed integration payload cannot be safely decrypted"
-                            ) from exc
+                        except Exception as exc:
+                            row.processing_status = "failed"
+                            row.attempt_count += 1
+                            row.lease_token = None
+                            row.lease_until = None
+                            row.last_error_code = "integration.payload.decryption_failed"
+                            logger.error(
+                                "Product event payload could not be decrypted tenant=%s event=%s error_type=%s",
+                                tenant_id,
+                                row.id,
+                                type(exc).__name__,
+                            )
+                            continue
                     token = uuid4()
                     lease_until = now + timedelta(seconds=self._lease_seconds)
                     row.processing_status = "processing"
