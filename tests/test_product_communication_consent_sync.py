@@ -77,6 +77,7 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         allowed_event_types=frozenset({"customer.communication_consent.changed"}),
         supported_contract_versions=frozenset({
             ("crm.customer.communication_consent", 1),
+            ("crm.customer.communication_eligibility", 1),
         }),
     )
     profile_id = uuid4()
@@ -103,10 +104,16 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
                 credential_id=uuid4(), credential_digest=b"d" * 32,
                 source_product="funnel.store",
                 allowed_event_types=["customer.communication_consent.changed"],
-                contract_grants=[{
-                    "contract_name": "crm.customer.communication_consent",
-                    "contract_version": 1,
-                }],
+                contract_grants=[
+                    {
+                        "contract_name": "crm.customer.communication_consent",
+                        "contract_version": 1,
+                    },
+                    {
+                        "contract_name": "crm.customer.communication_eligibility",
+                        "contract_version": 1,
+                    },
+                ],
             ),
         ])
         await context.session.flush()
@@ -130,6 +137,39 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
     assert result.claimed == 1
     assert result.processed == 1
     assert result.failed == 0
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        eligibility = await client.post(
+            "/api/v1/integrations/communication-eligibility/check",
+            json={
+                "tenant_id": str(tenant_id),
+                "external_customer_id": "store-customer-71",
+                "purpose_key": "product_updates",
+                "channel": "email",
+            },
+        )
+        assert eligibility.status_code == 200
+        assert eligibility.json()["status"] == "withdrawn"
+        assert eligibility.json()["allowed"] is False
+
+        unknown_identity = await client.post(
+            "/api/v1/integrations/communication-eligibility/check",
+            json={
+                "tenant_id": str(tenant_id),
+                "external_customer_id": "unmapped-customer",
+                "purpose_key": "product_updates",
+                "channel": "email",
+            },
+        )
+        assert unknown_identity.status_code == 200
+        assert unknown_identity.json() == {
+            "status": "unknown",
+            "allowed": False,
+            "decision": None,
+            "recorded_at": None,
+        }
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
