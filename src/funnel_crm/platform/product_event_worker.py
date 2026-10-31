@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 from typing import Any, Iterable
 from uuid import UUID
 
@@ -141,12 +142,25 @@ async def process_tenant_batches(
     await asyncio.gather(*(process_one(tenant_id) for tenant_id in tenant_ids))
 
 
+
+async def wait_for_poll_or_shutdown(
+    stop_event: asyncio.Event, poll_seconds: float
+) -> bool:
+    """Wait for the next poll, returning early when graceful shutdown is requested."""
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=poll_seconds)
+    except asyncio.TimeoutError:
+        return False
+    return True
+
+
 async def run_worker(
     *,
     poll_seconds: float,
     database_url: str,
     once: bool = False,
     tenant_concurrency: int = 4,
+    stop_event: asyncio.Event | None = None,
 ) -> None:
     """Process CRM customer and commerce events for all registered workspaces."""
     payload_keyring = IntegrationPayloadKeyring.from_environment()
@@ -166,8 +180,9 @@ async def run_worker(
         session_factory,
         payload_keyring=payload_keyring,
     )
+    shutdown = stop_event or asyncio.Event()
     try:
-        while True:
+        while not shutdown.is_set():
             try:
                 tenant_ids = await load_worker_tenant_ids(session_factory)
             except Exception as exc:
@@ -183,25 +198,42 @@ async def run_worker(
                 commerce_consumer=commerce_consumer,
                 legacy_commerce_consumer=legacy_commerce_consumer,
             )
-            if once:
+            if once or shutdown.is_set():
                 return
-            await asyncio.sleep(poll_seconds)
+            if await wait_for_poll_or_shutdown(shutdown, poll_seconds):
+                logger.info("Product event worker received graceful shutdown")
+                return
     finally:
         await engine.dispose()
 
 
 async def main() -> None:
-    """Validate deployment configuration and run the worker until stopped."""
+    """Validate configuration and drain the current worker cycle on termination."""
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise ValueError("DATABASE_URL is required")
-    await run_worker(
-        poll_seconds=configured_poll_seconds(),
-        database_url=database_url,
-        tenant_concurrency=configured_tenant_concurrency(),
-        once=os.environ.get("FUNNEL_CRM_EVENT_WORKER_ONCE", "").lower()
-        in {"1", "true", "yes"},
-    )
+
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    installed_signals: list[signal.Signals] = []
+    for stop_signal in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(stop_signal, stop_event.set)
+        except (NotImplementedError, RuntimeError):
+            continue
+        installed_signals.append(stop_signal)
+    try:
+        await run_worker(
+            poll_seconds=configured_poll_seconds(),
+            database_url=database_url,
+            tenant_concurrency=configured_tenant_concurrency(),
+            once=os.environ.get("FUNNEL_CRM_EVENT_WORKER_ONCE", "").lower()
+            in {"1", "true", "yes"},
+            stop_event=stop_event,
+        )
+    finally:
+        for stop_signal in installed_signals:
+            loop.remove_signal_handler(stop_signal)
 
 
 if __name__ == "__main__":
