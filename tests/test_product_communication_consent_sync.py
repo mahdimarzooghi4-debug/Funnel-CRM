@@ -330,17 +330,24 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
-        consent = await context.session.scalar(
-            select(CRMCommunicationConsentEvent).where(
-                CRMCommunicationConsentEvent.tenant_id == tenant_id,
-                CRMCommunicationConsentEvent.profile_id == profile_id,
+        consents = (
+            await context.session.scalars(
+                select(CRMCommunicationConsentEvent).where(
+                    CRMCommunicationConsentEvent.tenant_id == tenant_id,
+                    CRMCommunicationConsentEvent.profile_id == profile_id,
+                )
             )
-        )
-        assert consent is not None
-        assert consent.purpose_key == "product_updates"
-        assert consent.channel == "email"
-        assert consent.decision == "withdrawn"
-        assert consent.source_product == "funnel.store"
+        ).all()
+        assert len(consents) == 2
+        assert {
+            (consent.source_event_id, consent.decision) for consent in consents
+        } == {
+            (event_id, "withdrawn"),
+            (granted_event_id, "granted"),
+        }
+        assert all(consent.purpose_key == "product_updates" for consent in consents)
+        assert all(consent.channel == "email" for consent in consents)
+        assert all(consent.source_product == "funnel.store" for consent in consents)
         assert consent.source_event_id == event_id
         audit_count = await context.session.scalar(
             select(func.count()).select_from(AuditEvent).where(
@@ -348,7 +355,7 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
                 AuditEvent.action_key == "integration.communication_consent.recorded",
             )
         )
-        assert audit_count == 1
+        assert audit_count == 2
 
     replay = ClaimedIntegrationEvent(
         id=uuid4(),
@@ -390,7 +397,7 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
                 CRMCommunicationConsentEvent.tenant_id == tenant_id,
                 CRMCommunicationConsentEvent.profile_id == profile_id,
             )
-        ) == 1
+        ) == 2
         assert await context.session.scalar(
             select(func.count()).select_from(AuditEvent).where(
                 AuditEvent.tenant_id == tenant_id,
