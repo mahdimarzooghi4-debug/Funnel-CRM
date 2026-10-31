@@ -133,6 +133,37 @@ class ProductConsentEligibilityItem(BaseModel):
         return value
 
 
+class ProductConsentChangesCheck(BaseModel):
+    """Request a page of durable consent changes for this product."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+    after_sequence: int = Field(default=0, ge=0)
+    limit: int = Field(default=100, ge=1, le=100)
+
+
+class ProductConsentChangeItem(BaseModel):
+    """One product-specific consent change with its stable cursor."""
+
+    sequence: int
+    consent_event_id: int
+    external_customer_id: str
+    purpose_key: str
+    channel: str
+    decision: Literal["granted", "withdrawn"]
+    policy_version: str
+    decision_at: datetime
+    source_product: str | None
+    source_event_id: UUID | None
+
+
+class ProductConsentChangesResult(BaseModel):
+    changes: list[ProductConsentChangeItem]
+    next_sequence: int
+    has_more: bool
+
+
 class ProductConsentEligibilityBatchCheck(BaseModel):
     """A bounded set of checks scoped to one workspace."""
 
@@ -376,6 +407,121 @@ class ProductConsentEligibilityBatchResult(BaseModel):
     """Ordered results for one bounded batch request."""
 
     checks: list[ProductConsentEligibilityBatchItemResult]
+
+
+@router.post(
+    "/communication-consent/changes",
+    operation_id="readProductCommunicationConsentChanges",
+    summary="Read durable consent changes for a connected product",
+    responses={
+        401: {"description": "Missing or invalid product credential"},
+        403: {"description": "Connection is inactive or lacks the change-feed contract"},
+        503: {"description": "CRM consent service is not configured"},
+    },
+)
+async def read_product_communication_consent_changes(
+    payload: ProductConsentChangesCheck, request: Request
+) -> ProductConsentChangesResult:
+    """Return a bounded, commit-ordered page of product-mapped consent changes."""
+    connection = getattr(request.state, "verified_product_connection", None)
+    if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=payload.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid product credential is required",
+        )
+    if not connection.active:
+        raise HTTPException(status_code=403, detail="Connection is disabled")
+    if payload.tenant_id != connection.tenant_id:
+        raise HTTPException(status_code=403, detail="Workspace is outside this connection")
+    if (
+        "crm.customer.communication_consent_changes",
+        1,
+    ) not in connection.supported_contract_versions:
+        raise HTTPException(status_code=403, detail="Consent change-feed contract is not granted")
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CRM consent service is not configured",
+        )
+
+    from sqlalchemy import select, text
+
+    from funnel_crm.platform.models import (
+        AuditEvent,
+        CRMConsentProductSyncOutbox,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(connection.tenant_id)},
+            )
+            rows = (
+                await session.scalars(
+                    select(CRMConsentProductSyncOutbox)
+                    .where(
+                        CRMConsentProductSyncOutbox.tenant_id == connection.tenant_id,
+                        CRMConsentProductSyncOutbox.recipient_product
+                        == connection.source_product,
+                        CRMConsentProductSyncOutbox.sequence > payload.after_sequence,
+                    )
+                    .order_by(CRMConsentProductSyncOutbox.sequence.asc())
+                    .limit(payload.limit + 1)
+                )
+            ).all()
+            has_more = len(rows) > payload.limit
+            page = rows[: payload.limit]
+            next_sequence = page[-1].sequence if page else payload.after_sequence
+            session.add(
+                AuditEvent(
+                    tenant_id=connection.tenant_id,
+                    actor_kind="system",
+                    actor_identity_id=None,
+                    actor_membership_id=None,
+                    action_key="integration.communication_consent.changes_read",
+                    target_type="product_connection",
+                    target_key=str(connection.connection_id),
+                    before_state=None,
+                    after_state={
+                        "source_product": connection.source_product,
+                        "after_sequence": payload.after_sequence,
+                        "next_sequence": next_sequence,
+                        "change_count": len(page),
+                        "has_more": has_more,
+                    },
+                    correlation_id=uuid4(),
+                )
+            )
+            return ProductConsentChangesResult(
+                changes=[
+                    ProductConsentChangeItem(
+                        sequence=row.sequence,
+                        consent_event_id=row.consent_event_id,
+                        external_customer_id=row.external_customer_id,
+                        purpose_key=row.purpose_key,
+                        channel=row.channel,
+                        decision=row.decision,
+                        policy_version=row.policy_version,
+                        decision_at=row.decision_at,
+                        source_product=row.source_product,
+                        source_event_id=row.source_event_id,
+                    )
+                    for row in page
+                ],
+                next_sequence=next_sequence,
+                has_more=has_more,
+            )
 
 
 @router.post(
