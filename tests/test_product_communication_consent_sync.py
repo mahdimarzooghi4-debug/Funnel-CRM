@@ -396,11 +396,12 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         ).all()
         assert len(consents) == 3
         assert {
-            (consent.source_event_id, consent.decision) for consent in consents
+            (consent.source_event_id, consent.decision, consent.decision_at)
+            for consent in consents
         } == {
-            (event_id, "withdrawn"),
-            (granted_event_id, "granted"),
-            (stale_event_id, "withdrawn"),
+            (event_id, "withdrawn", withdrawn_at),
+            (granted_event_id, "granted", granted_at),
+            (stale_event_id, "withdrawn", withdrawn_at - timedelta(seconds=1)),
         }
         assert all(consent.purpose_key == "product_updates" for consent in consents)
         assert all(consent.channel == "email" for consent in consents)
@@ -445,7 +446,7 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         contract_name=consumer.CONTRACT_NAME,
         contract_version=consumer.CONTRACT_VERSION,
         correlation_id=uuid4(),
-        occurred_at=datetime.now(timezone.utc),
+        occurred_at=withdrawn_at,
         payload={
             "external_customer_id": "store-customer-71",
             "purpose_key": "product_updates",
@@ -458,6 +459,14 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         lease_until=datetime.now(timezone.utc),
     )
     assert await consumer._process_one(replay) is False
+    with pytest.raises(ConsentSyncError, match="crm.consent.source_event_conflict"):
+        await consumer._process_one(replace(
+            replay, occurred_at=replay.occurred_at + timedelta(seconds=2)
+        ))
+    with pytest.raises(ConsentSyncError, match="crm.consent.invalid_event_time"):
+        await consumer._process_one(replace(
+            replay, occurred_at=datetime.now(timezone.utc) + timedelta(days=1)
+        ))
     with pytest.raises(ConsentSyncError, match="crm.consent.source_event_conflict"):
         await consumer._process_one(replace(replay, payload={
             **replay.payload, "decision": "granted",
