@@ -173,3 +173,7 @@ async def test_paid_and_refunded_product_events_become_real_crm_commerce_facts(
         assert len(audits) == 2
         assert all("order_reference" not in audit.after_state for audit in audits)
         assert all("amount" not in audit.after_state for audit in audits)
+
+        # Keep the shared tenant fixture clean: commerce facts reference profiles.
+        for fact in facts:
+            await context.session.delete(fact)
