@@ -1467,6 +1467,97 @@ class CRMCommunicationConsentEvent(Base):
     )
 
 
+class CRMConsentProductSyncSequence(Base):
+    """Commit-ordered sequence allocated per tenant and product."""
+
+    __tablename__ = "crm_consent_product_sync_sequences"
+    __table_args__ = (
+        CheckConstraint("last_sequence >= 0", name="ck_crm_consent_sync_sequence_nonnegative"),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_crm_consent_sync_sequence_workspace",
+            ondelete="CASCADE",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    recipient_product: Mapped[str] = mapped_column(String(80), primary_key=True)
+    last_sequence: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+
+
+class CRMConsentProductSyncOutbox(Base):
+    """Append-only consent changes queued for products with mapped identities."""
+
+    __tablename__ = "crm_consent_product_sync_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(recipient_product)) BETWEEN 2 AND 80",
+            name="ck_crm_consent_sync_outbox_product",
+        ),
+        CheckConstraint(
+            "length(trim(external_customer_id)) BETWEEN 1 AND 200",
+            name="ck_crm_consent_sync_outbox_external_id",
+        ),
+        CheckConstraint(
+            "decision IN ('granted', 'withdrawn')",
+            name="ck_crm_consent_sync_outbox_decision",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "recipient_product",
+            "sequence",
+            name="uq_crm_consent_sync_outbox_sequence",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "recipient_product",
+            "consent_event_id",
+            name="uq_crm_consent_sync_outbox_event",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_crm_consent_sync_outbox_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["consent_event_id"],
+            ["crm_communication_consent_events.id"],
+            name="fk_crm_consent_sync_outbox_event",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_crm_consent_sync_outbox_recipient_cursor",
+            "tenant_id",
+            "recipient_product",
+            "sequence",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    recipient_product: Mapped[str] = mapped_column(String(80), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    consent_event_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    external_customer_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    purpose_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_product: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_event_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
 class ProductCustomerIdentity(Base):
     """Stable source-product customer key mapped to one CRM profile per tenant."""
 
