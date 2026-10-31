@@ -420,6 +420,15 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         )
         assert acknowledged.status_code == 200
         assert acknowledged.json()["acknowledged_sequence"] == 2
+        midway_status = await client.post(
+            "/api/v1/integrations/communication-consent/changes/status",
+            json={"tenant_id": str(tenant_id)},
+        )
+        assert midway_status.status_code == 200
+        assert midway_status.json()["produced_sequence"] == 3
+        assert midway_status.json()["acknowledged_sequence"] == 2
+        assert midway_status.json()["pending_count"] == 1
+        assert midway_status.json()["checkpoint_updated_at"] is not None
         repeated_ack = await client.post(
             "/api/v1/integrations/communication-consent/changes/ack",
             json={"tenant_id": str(tenant_id), "acknowledged_sequence": 2},
@@ -460,6 +469,14 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         )
         assert final_ack.status_code == 200
         assert final_ack.json()["acknowledged_sequence"] == 3
+        final_status = await client.post(
+            "/api/v1/integrations/communication-consent/changes/status",
+            json={"tenant_id": str(tenant_id)},
+        )
+        assert final_status.status_code == 200
+        assert final_status.json()["produced_sequence"] == 3
+        assert final_status.json()["acknowledged_sequence"] == 3
+        assert final_status.json()["pending_count"] == 0
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
@@ -534,6 +551,15 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
             )
         ).all()
         assert len(ack_audits) == 3
+        status_audits = (
+            await context.session.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.tenant_id == tenant_id,
+                    AuditEvent.action_key == "integration.communication_consent.changes_status_read",
+                )
+            )
+        ).all()
+        assert len(status_audits) == 2
         checkpoint = await context.session.scalar(
             select(CRMConsentProductSyncCheckpoint).where(
                 CRMConsentProductSyncCheckpoint.tenant_id == tenant_id,
