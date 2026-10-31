@@ -99,7 +99,11 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
                 "source_product": "funnel.store",
                 "allowed_event_types": ["order.created"],
                 "contract_grants": [
-                    {"contract_name": "commerce.order", "contract_version": 1}
+                    {"contract_name": "commerce.order", "contract_version": 1},
+                    {
+                        "contract_name": "crm.customer.communication_consent_changes",
+                        "contract_version": 1,
+                    },
                 ],
             },
         )
@@ -116,6 +120,21 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
         assert len(listed.json()) == 1
         assert "credential" not in listed.json()[0]
         assert token not in listed.text
+
+        sync_health = await client.get(
+            "/api/v1/integrations/connections/consent-sync",
+            headers=headers,
+        )
+        assert sync_health.status_code == 200
+        assert sync_health.json()["pending_total"] == 0
+        assert sync_health.json()["behind_product_count"] == 0
+        sync_item = sync_health.json()["items"][0]
+        assert sync_item["connection_ids"] == [connection_id]
+        assert sync_item["source_product"] == "funnel.store"
+        assert sync_item["status"] == "in_sync"
+        assert sync_item["produced_sequence"] == 0
+        assert sync_item["acknowledged_sequence"] == 0
+        assert sync_item["pending_count"] == 0
 
         event_body = event(tenant_id)
         accepted = await client.post(

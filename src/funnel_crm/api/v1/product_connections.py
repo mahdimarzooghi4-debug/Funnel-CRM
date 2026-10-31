@@ -7,13 +7,16 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import has_crm_permission
 from funnel_crm.platform.integration_auth import issue_product_credential
 from funnel_crm.platform.models import (
     AuditEvent,
+    CRMConsentProductSyncCheckpoint,
+    CRMConsentProductSyncOutbox,
+    CRMConsentProductSyncSequence,
     ProductConnection,
     ProductConnectionCredential,
     Workspace,
@@ -61,6 +64,22 @@ class ProductConnectionRead(BaseModel):
     contract_grants: list[ProductContractGrant]
     created_at: datetime
     revoked_at: datetime | None
+
+
+class ProductConsentSyncHealthItem(BaseModel):
+    connection_ids: list[UUID]
+    source_product: str
+    status: str
+    produced_sequence: int
+    acknowledged_sequence: int
+    pending_count: int
+    checkpoint_updated_at: datetime | None
+
+
+class ProductConsentSyncHealthRead(BaseModel):
+    items: list[ProductConsentSyncHealthItem]
+    pending_total: int
+    behind_product_count: int
 
 
 class ProductConnectionCreated(ProductConnectionRead):
@@ -133,6 +152,138 @@ def _read(connection: ProductConnection) -> ProductConnectionRead:
         created_at=connection.created_at,
         revoked_at=connection.revoked_at,
     )
+
+
+@router.get(
+    "/consent-sync",
+    response_model=ProductConsentSyncHealthRead,
+    operation_id="listProductConsentSyncHealth",
+    summary="List consent feed synchronization health for connected products",
+)
+async def list_product_consent_sync_health(
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> ProductConsentSyncHealthRead:
+    """Show each granted product's produced, acknowledged, and pending feed state."""
+    root_id = await _require_manage(context)
+    tenant_id = context.access.tenant_id
+    required_grant = [
+        {
+            "contract_name": "crm.customer.communication_consent_changes",
+            "contract_version": 1,
+        }
+    ]
+    connections = (
+        await context.session.scalars(
+            select(ProductConnection)
+            .where(
+                ProductConnection.tenant_id == tenant_id,
+                ProductConnection.revoked_at.is_(None),
+                ProductConnection.contract_grants.contains(required_grant),
+            )
+            .order_by(ProductConnection.source_product, ProductConnection.created_at)
+        )
+    ).all()
+    products = list(dict.fromkeys(connection.source_product for connection in connections))
+    if not products:
+        result = ProductConsentSyncHealthRead(items=[], pending_total=0, behind_product_count=0)
+    else:
+        sequences = (
+            await context.session.scalars(
+                select(CRMConsentProductSyncSequence).where(
+                    CRMConsentProductSyncSequence.tenant_id == tenant_id,
+                    CRMConsentProductSyncSequence.recipient_product.in_(products),
+                )
+            )
+        ).all()
+        checkpoints = (
+            await context.session.scalars(
+                select(CRMConsentProductSyncCheckpoint).where(
+                    CRMConsentProductSyncCheckpoint.tenant_id == tenant_id,
+                    CRMConsentProductSyncCheckpoint.recipient_product.in_(products),
+                )
+            )
+        ).all()
+        pending_rows = (
+            await context.session.execute(
+                select(
+                    CRMConsentProductSyncOutbox.recipient_product,
+                    func.count().label("pending_count"),
+                )
+                .outerjoin(
+                    CRMConsentProductSyncCheckpoint,
+                    and_(
+                        CRMConsentProductSyncCheckpoint.tenant_id
+                        == CRMConsentProductSyncOutbox.tenant_id,
+                        CRMConsentProductSyncCheckpoint.recipient_product
+                        == CRMConsentProductSyncOutbox.recipient_product,
+                    ),
+                )
+                .where(
+                    CRMConsentProductSyncOutbox.tenant_id == tenant_id,
+                    CRMConsentProductSyncOutbox.recipient_product.in_(products),
+                    CRMConsentProductSyncOutbox.sequence
+                    > func.coalesce(CRMConsentProductSyncCheckpoint.last_acked_sequence, 0),
+                )
+                .group_by(CRMConsentProductSyncOutbox.recipient_product)
+            )
+        ).all()
+        sequence_by_product = {
+            row.recipient_product: row.last_sequence for row in sequences
+        }
+        checkpoint_by_product = {
+            row.recipient_product: row for row in checkpoints
+        }
+        pending_by_product = {
+            product: count for product, count in pending_rows
+        }
+        connection_ids_by_product: dict[str, list[UUID]] = {}
+        for connection in connections:
+            connection_ids_by_product.setdefault(connection.source_product, []).append(
+                connection.id
+            )
+        items = []
+        for product in products:
+            produced = sequence_by_product.get(product, 0)
+            checkpoint = checkpoint_by_product.get(product)
+            acknowledged = checkpoint.last_acked_sequence if checkpoint else 0
+            pending = pending_by_product.get(product, 0)
+            items.append(
+                ProductConsentSyncHealthItem(
+                    connection_ids=connection_ids_by_product[product],
+                    source_product=product,
+                    status="behind" if pending else "in_sync",
+                    produced_sequence=produced,
+                    acknowledged_sequence=acknowledged,
+                    pending_count=pending,
+                    checkpoint_updated_at=checkpoint.updated_at if checkpoint else None,
+                )
+            )
+        result = ProductConsentSyncHealthRead(
+            items=items,
+            pending_total=sum(item.pending_count for item in items),
+            behind_product_count=sum(item.status == "behind" for item in items),
+        )
+
+    context.session.add(
+        AuditEvent(
+            tenant_id=tenant_id,
+            actor_kind="user",
+            actor_identity_id=context.access.identity_id,
+            actor_membership_id=context.access.membership_id,
+            action_key="product_connection.consent_sync_status.listed",
+            target_type="workspace",
+            target_key=str(tenant_id),
+            organization_unit_id=root_id,
+            before_state=None,
+            after_state={
+                "connection_count": len(connections),
+                "behind_product_count": result.behind_product_count,
+                "pending_total": result.pending_total,
+            },
+            correlation_id=None,
+        )
+    )
+    return result
 
 
 @router.post(
