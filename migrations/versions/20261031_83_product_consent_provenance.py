@@ -42,6 +42,22 @@ def upgrade() -> None:
     )
     op.execute(
         """
+        CREATE OR REPLACE FUNCTION protect_crm_communication_consent_event()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $consent$
+        BEGIN
+            IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
+                RETURN OLD;
+            END IF;
+            RAISE EXCEPTION 'communication consent events are append-only'
+                USING ERRCODE = '55000';
+        END;
+        $consent$
+        """
+    )
+    op.execute(
+        """
         CREATE OR REPLACE FUNCTION capture_crm_communication_consent_audit_event()
         RETURNS trigger
         LANGUAGE plpgsql
@@ -135,6 +151,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION protect_crm_communication_consent_event()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $consent$
+        BEGIN
+            RAISE EXCEPTION 'communication consent events are append-only'
+                USING ERRCODE = '55000';
+        END;
+        $consent$
+        """
+    )
     op.execute(
         """
         CREATE OR REPLACE FUNCTION capture_crm_communication_consent_audit_event()
