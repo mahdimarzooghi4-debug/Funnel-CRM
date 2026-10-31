@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
+from funnel_crm.platform.consent_product_sync import enqueue_consent_change_for_products
 from funnel_crm.platform.crm_authorization import has_crm_permission
 from funnel_crm.platform.models import CRMCommunicationConsentEvent, CRMProfile
 from funnel_crm.platform.tenant_context import TenantSessionContext
@@ -156,6 +157,19 @@ async def record_communication_consent(
     )
     context.session.add(event)
     await context.session.flush()
+    await enqueue_consent_change_for_products(
+        context.session,
+        tenant_id=context.access.tenant_id,
+        profile_id=profile.id,
+        consent_event_id=event.id,
+        purpose_key=event.purpose_key,
+        channel=event.channel,
+        decision=event.decision,
+        policy_version=event.policy_version,
+        decision_at=event.decision_at,
+        origin_product=event.source_product,
+        source_event_id=event.source_event_id,
+    )
     return CommunicationConsentRead.model_validate(event)
 
 
