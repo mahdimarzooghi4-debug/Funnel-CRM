@@ -688,3 +688,113 @@ async def compare_campaign_performance_periods(
         items=items,
         truncated=current.truncated or previous.truncated,
     )
+
+
+class CampaignChannelPerformanceItem(BaseModel):
+    channel: str
+    campaign_count: int
+    measured_campaign_count: int
+    source_labels: list[str]
+    coverage_days: dict[str, int]
+    totals: dict[str, int | None]
+    rate_bases: dict[str, dict[str, int]]
+    click_through_rate_percent: float | None
+    lead_rate_per_click_percent: float | None
+    conversion_rate_per_click_percent: float | None
+    planned_budget_by_currency: dict[str, Decimal]
+    actual_spend_by_currency: dict[str, Decimal]
+    attributed_revenue_by_currency: dict[str, Decimal]
+
+
+class CampaignChannelPerformanceRead(BaseModel):
+    period_start: date
+    period_end: date
+    channel_count: int
+    measured_campaign_count: int
+    items: list[CampaignChannelPerformanceItem]
+    truncated: bool
+
+
+@router.get(
+    "/performance/channels",
+    response_model=CampaignChannelPerformanceRead,
+    operation_id="getCRMMarketingCampaignChannelPerformance",
+    summary="Compare campaign outcomes grouped by channel",
+)
+async def get_campaign_channel_performance(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignChannelPerformanceRead:
+    portfolio = await get_campaign_performance_portfolio(
+        period_start=period_start, period_end=period_end, context=context
+    )
+    groups: dict[str, list[CampaignPerformanceItem]] = {}
+    for item in portfolio.items:
+        groups.setdefault(item.channel, []).append(item)
+
+    metric_keys = (
+        "impressions", "reach", "clicks", "responses", "leads", "conversions",
+        "assigned_count", "exposure_count", "return_count",
+    )
+    rate_keys = (
+        "click_through_rate_percent", "lead_rate_per_click_percent",
+        "conversion_rate_per_click_percent",
+    )
+    result_items: list[CampaignChannelPerformanceItem] = []
+    for channel, campaigns in sorted(groups.items()):
+        totals: dict[str, int | None] = {}
+        coverage: dict[str, int] = {}
+        for key in metric_keys:
+            values = [item.totals[key] for item in campaigns if item.totals[key] is not None]
+            totals[key] = sum(values) if values else None
+            coverage[key] = sum(item.coverage_days[key] for item in campaigns)
+
+        rate_bases: dict[str, dict[str, int]] = {}
+        rates: dict[str, float | None] = {}
+        for key in rate_keys:
+            bases = [
+                item.rate_bases[key]
+                for item in campaigns
+                if item.rate_bases.get(key)
+            ]
+            if bases:
+                numerator = sum(item["numerator"] for item in bases)
+                denominator = sum(item["denominator"] for item in bases)
+                rate_bases[key] = {"numerator": numerator, "denominator": denominator}
+                rates[key] = round(100 * numerator / denominator, 4) if denominator else None
+            else:
+                rate_bases[key] = {}
+                rates[key] = None
+
+        def sum_currency_map(attribute: str) -> dict[str, Decimal]:
+            result: dict[str, Decimal] = {}
+            for campaign in campaigns:
+                for currency, amount in getattr(campaign, attribute).items():
+                    result[currency] = result.get(currency, Decimal("0")) + amount
+            return result
+
+        result_items.append(CampaignChannelPerformanceItem(
+            channel=channel,
+            campaign_count=len(campaigns),
+            measured_campaign_count=sum(campaign.record_count > 0 for campaign in campaigns),
+            source_labels=sorted({label for campaign in campaigns for label in campaign.source_labels}),
+            coverage_days=coverage,
+            totals=totals,
+            rate_bases=rate_bases,
+            click_through_rate_percent=rates["click_through_rate_percent"],
+            lead_rate_per_click_percent=rates["lead_rate_per_click_percent"],
+            conversion_rate_per_click_percent=rates["conversion_rate_per_click_percent"],
+            planned_budget_by_currency=sum_currency_map("planned_budget_by_currency"),
+            actual_spend_by_currency=sum_currency_map("actual_spend_by_currency"),
+            attributed_revenue_by_currency=sum_currency_map("attributed_revenue_by_currency"),
+        ))
+
+    return CampaignChannelPerformanceRead(
+        period_start=period_start,
+        period_end=period_end,
+        channel_count=len(result_items),
+        measured_campaign_count=sum(item.measured_campaign_count for item in result_items),
+        items=result_items,
+        truncated=portfolio.truncated,
+    )
