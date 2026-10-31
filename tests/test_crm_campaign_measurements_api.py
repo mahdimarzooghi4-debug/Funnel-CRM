@@ -225,6 +225,41 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         assert item["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
         assert item["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
 
+        comparison = await client.get(
+            "/api/v1/crm/campaigns/performance/compare",
+            headers=headers,
+            params={
+                "current_start": second_day.isoformat(),
+                "current_end": second_day.isoformat(),
+                "previous_start": first_day.isoformat(),
+                "previous_end": first_day.isoformat(),
+            },
+        )
+        assert comparison.status_code == 200, comparison.text
+        compared = comparison.json()["items"][0]
+        assert compared["count_metrics"]["impressions"] == {
+            "current_value": 500.0,
+            "previous_value": 1000.0,
+            "delta": -500.0,
+            "change_percent": -50.0,
+        }
+        assert compared["rate_metrics"]["conversion_rate_per_click_percent"]["change_percent"] == 0.0
+        assert compared["spend_by_currency"]["EUR"]["previous_value"] is None
+        assert compared["spend_by_currency"]["EUR"]["delta"] is None
+        assert compared["spend_by_currency"]["USD"]["current_value"] is None
+
+        unequal_periods = await client.get(
+            "/api/v1/crm/campaigns/performance/compare",
+            headers=headers,
+            params={
+                "current_start": first_day.isoformat(),
+                "current_end": second_day.isoformat(),
+                "previous_start": first_day.isoformat(),
+                "previous_end": first_day.isoformat(),
+            },
+        )
+        assert unequal_periods.status_code == 422
+
         too_long = await client.get(
             "/api/v1/crm/campaigns/performance",
             headers=headers,
