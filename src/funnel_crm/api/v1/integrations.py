@@ -342,6 +342,7 @@ async def check_product_communication_eligibility(
                     CRMCommunicationConsentEvent.channel == payload.channel,
                 )
                 .order_by(
+                    CRMCommunicationConsentEvent.decision_at.desc(),
                     CRMCommunicationConsentEvent.recorded_at.desc(),
                     CRMCommunicationConsentEvent.id.desc(),
                 )
