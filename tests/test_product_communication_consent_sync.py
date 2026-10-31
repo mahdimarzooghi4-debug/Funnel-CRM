@@ -197,10 +197,3 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
                 AuditEvent.action_key == "integration.communication_consent.recorded",
             )
         ) == 1
-        row = await context.session.scalar(
-            select(CRMCommunicationConsentEvent).where(
-                CRMCommunicationConsentEvent.tenant_id == tenant_id,
-                CRMCommunicationConsentEvent.profile_id == profile_id,
-            )
-        )
-        await context.session.delete(row)
