@@ -192,7 +192,26 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
         )
         assert retry_again.status_code == 409
 
-        invalid_token = token[:-1] + ("A" if token[-1] != "A" else "B")
+        rotated = await client.post(
+            f"/api/v1/integrations/connections/{connection_id}/rotate-credential",
+            headers=headers,
+        )
+        assert rotated.status_code == 200
+        rotated_body = rotated.json()
+        replacement_token = rotated_body["credential"]
+        assert replacement_token.startswith("fc1_")
+        assert replacement_token != token
+        assert "credential_digest" not in rotated_body
+
+        stale_credential = await client.post(
+            "/api/v1/integrations/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json=event(tenant_id),
+        )
+        assert stale_credential.status_code == 401
+
+        token = replacement_token
+                invalid_token = token[:-1] + ("A" if token[-1] != "A" else "B")
         invalid = await client.post(
             "/api/v1/integrations/events",
             headers={"Authorization": f"Bearer {invalid_token}"},
@@ -242,6 +261,16 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
             "product_connection.created",
             "product_connection.revoked",
         }
+        rotation_audit = await context.session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == tenant_id,
+                AuditEvent.action_key == "product_connection.credential_rotated",
+                AuditEvent.target_key == connection_id,
+            )
+        )
+        assert rotation_audit is not None
+        assert "credential_digest" not in str(rotation_audit.before_state)
+        assert "credential_digest" not in str(rotation_audit.after_state)
         retry_audit = await context.session.scalar(
             select(AuditEvent).where(
                 AuditEvent.tenant_id == tenant_id,
