@@ -156,6 +156,9 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         assert eligibility.status_code == 200
         assert eligibility.json()["status"] == "withdrawn"
         assert eligibility.json()["allowed"] is False
+        assert eligibility.json()["consent_event_id"] > 0
+        assert eligibility.json()["policy_version"] == "2026-01"
+        assert eligibility.json()["source_product"] == "funnel.store"
 
         unknown_identity = await client.post(
             "/api/v1/integrations/communication-eligibility/check",
@@ -171,8 +174,25 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
             "status": "unknown",
             "allowed": False,
             "decision": None,
+            "consent_event_id": None,
+            "policy_version": None,
+            "source_product": None,
             "recorded_at": None,
         }
+
+        missing_consent = await client.post(
+            "/api/v1/integrations/communication-eligibility/check",
+            json={
+                "tenant_id": str(tenant_id),
+                "external_customer_id": "store-customer-71",
+                "purpose_key": "product_reviews",
+                "channel": "email",
+            },
+        )
+        assert missing_consent.status_code == 200
+        assert missing_consent.json()["status"] == "unknown"
+        assert missing_consent.json()["allowed"] is False
+        assert missing_consent.json()["consent_event_id"] is None
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity

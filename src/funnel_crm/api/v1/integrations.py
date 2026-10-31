@@ -120,6 +120,9 @@ class ProductConsentEligibilityResult(BaseModel):
     status: Literal["unknown", "granted", "withdrawn"]
     allowed: bool
     decision: Literal["granted", "withdrawn"] | None
+    consent_event_id: int | None
+    policy_version: str | None
+    source_product: str | None
     recorded_at: datetime | None
 
 
@@ -240,7 +243,9 @@ async def check_product_communication_eligibility(
             )
             if identity is None:
                 return ProductConsentEligibilityResult(
-                    status="unknown", allowed=False, decision=None, recorded_at=None
+                    status="unknown", allowed=False, decision=None,
+                    consent_event_id=None, policy_version=None,
+                    source_product=None, recorded_at=None
                 )
 
             profile = await session.scalar(
@@ -253,7 +258,9 @@ async def check_product_communication_eligibility(
             )
             if profile is None:
                 return ProductConsentEligibilityResult(
-                    status="unknown", allowed=False, decision=None, recorded_at=None
+                    status="unknown", allowed=False, decision=None,
+                    consent_event_id=None, policy_version=None,
+                    source_product=None, recorded_at=None
                 )
 
             latest = await session.scalar(
@@ -272,11 +279,16 @@ async def check_product_communication_eligibility(
             )
             if latest is None:
                 return ProductConsentEligibilityResult(
-                    status="unknown", allowed=False, decision=None, recorded_at=None
+                    status="unknown", allowed=False, decision=None,
+                    consent_event_id=None, policy_version=None,
+                    source_product=None, recorded_at=None
                 )
             return ProductConsentEligibilityResult(
                 status=latest.decision,
                 allowed=latest.decision == "granted",
                 decision=latest.decision,
+                consent_event_id=latest.id,
+                policy_version=latest.policy_version,
+                source_product=latest.source_product,
                 recorded_at=latest.recorded_at,
             )
