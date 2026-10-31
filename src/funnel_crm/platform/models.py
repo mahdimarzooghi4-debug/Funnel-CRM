@@ -614,6 +614,45 @@ class ProductConnection(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+
+class ProductConnectionCredential(Base):
+    """One individually revocable credential for a tenant product connection."""
+
+    __tablename__ = "product_connection_credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "octet_length(credential_digest) = 32",
+            name="ck_product_connection_credentials_digest",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "connection_id"],
+            ["product_connections.tenant_id", "product_connections.id"],
+            name="fk_product_connection_credentials_connection",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_product_connection_credentials_connection",
+            "tenant_id",
+            "connection_id",
+            "created_at",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    credential_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    connection_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    credential_digest: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
 class IntegrationEventInbox(Base):
     """Durable tenant-scoped receipt for an event from a verified product connection."""
 
