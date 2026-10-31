@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaigns import router
 from funnel_crm.api.v1.crm_campaign_readiness import router as readiness_router
+from funnel_crm.api.v1.crm_work_items import router as work_items_router
 from funnel_crm.api.v1.crm_communication_consent import router as consent_router
 from funnel_crm.platform.models import (
     CRMContactPoint,
@@ -38,6 +39,7 @@ def make_app(
 
     app.include_router(router, prefix="/api/v1")
     app.include_router(readiness_router, prefix="/api/v1")
+    app.include_router(work_items_router, prefix="/api/v1")
     app.include_router(consent_router, prefix="/api/v1")
     return app
 
@@ -131,6 +133,10 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
                 RolePermission(
                     tenant_id=tenant_id, role_id=role.id,
                     permission_key="crm.work_item:view",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.work_item:update",
                 ),
             ]
         )
@@ -241,7 +247,23 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         follow_up_id = review_result["latest_manager_review"]["follow_up_work_item_id"]
         assert UUID(follow_up_id)
         assert review_result["open_work_item_count"] == 1
+        assert review_result["latest_manager_review"]["follow_up_status"] == "open"
         assert review_result["launch_readiness"] == "needs_attention"
+        completed_task = await client.patch(
+            f"/api/v1/crm/work-items/{follow_up_id}",
+            headers=headers,
+            json={"status": "completed"},
+        )
+        assert completed_task.status_code == 200, completed_task.text
+        refreshed_readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        assert refreshed_readiness.status_code == 200, refreshed_readiness.text
+        refreshed_review = refreshed_readiness.json()["latest_manager_review"]
+        assert refreshed_review["follow_up_work_item_id"] == follow_up_id
+        assert refreshed_review["follow_up_status"] == "completed"
+        assert refreshed_readiness.json()["open_work_item_count"] == 0
 
         marketing_consent = await client.post(
             f"/api/v1/crm/profiles/{profile_id}/communication-consents",
