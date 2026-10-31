@@ -231,6 +231,23 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
             "consumed_percent": 4.0,
             "spend_in_other_currencies": {"EUR": "10.000000"},
         }
+
+        channels = await client.get(
+            "/api/v1/crm/campaigns/performance/channels",
+            headers=headers,
+            params={"period_start": first_day.isoformat(), "period_end": second_day.isoformat()},
+        )
+        assert channels.status_code == 200, channels.text
+        channel_report = channels.json()
+        assert channel_report["channel_count"] == 1
+        web = channel_report["items"][0]
+        assert web["channel"] == "web"
+        assert web["campaign_count"] == 1
+        assert web["totals"]["impressions"] == 1500
+        assert web["click_through_rate_percent"] == 5.0
+        assert web["lead_rate_per_click_percent"] == 12.0
+        assert web["planned_budget_by_currency"] == {"USD": "500.000000"}
+        assert web["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
         assert item["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
 
         comparison = await client.get(
