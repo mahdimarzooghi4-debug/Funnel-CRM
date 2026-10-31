@@ -81,7 +81,7 @@ class PostgresProductConsentEventConsumer:
             session_factory,
             lease_seconds=lease_seconds,
             max_attempts=max_attempts,
-            payload_keyring=payload_keyring,
+            keyring=payload_keyring,
         )
 
     async def process_batch(
