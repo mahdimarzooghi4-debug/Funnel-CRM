@@ -215,6 +215,13 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert empty_portfolio.json()["total_draft_campaigns"] == 0
         assert empty_portfolio.json()["items"] == []
 
+        missing_follow_up = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
+            headers=headers,
+            json={"decision": "request_changes"},
+        )
+        assert missing_follow_up.status_code == 422
+
         manager_review = await client.post(
             f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
             headers=headers,
