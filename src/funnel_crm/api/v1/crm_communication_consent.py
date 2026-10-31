@@ -47,6 +47,8 @@ class CommunicationConsentRead(BaseModel):
     channel: str
     decision: str
     policy_version: str
+    source_product: str | None
+    source_event_id: UUID | None
     recorded_at: datetime
 
 

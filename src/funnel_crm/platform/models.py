@@ -1398,7 +1398,7 @@ class CRMCommunicationConsentEvent(Base):
     __tablename__ = "crm_communication_consent_events"
     __table_args__ = (
         CheckConstraint(
-            "purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}"+chr(36)+"'",
+            "purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}$'",
             name="ck_crm_consent_purpose_key",
         ),
         CheckConstraint(
@@ -1412,6 +1412,14 @@ class CRMCommunicationConsentEvent(Base):
         CheckConstraint(
             "length(trim(policy_version)) BETWEEN 1 AND 64",
             name="ck_crm_consent_policy_version",
+        ),
+        CheckConstraint(
+            "(source_product IS NULL) = (source_event_id IS NULL)",
+            name="ck_crm_consent_source_pair",
+        ),
+        CheckConstraint(
+            "source_product IS NULL OR source_product ~ '^[a-z0-9][a-z0-9._-]{1,79}$'",
+            name="ck_crm_consent_source_product",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "profile_id"],
@@ -1428,6 +1436,14 @@ class CRMCommunicationConsentEvent(Base):
             "recorded_at",
             "id",
         ),
+        Index(
+            "uq_crm_consent_source_event",
+            "tenant_id",
+            "source_product",
+            "source_event_id",
+            unique=True,
+            postgresql_where=text("source_event_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -1437,10 +1453,11 @@ class CRMCommunicationConsentEvent(Base):
     channel: Mapped[str] = mapped_column(String(32), nullable=False)
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_product: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_event_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
     )
-
 
 
 class ProductCustomerIdentity(Base):

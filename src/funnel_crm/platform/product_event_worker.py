@@ -22,6 +22,7 @@ from funnel_crm.platform.commerce_event_sync import (
     PostgresProductCommerceEventConsumer,
 )
 from funnel_crm.platform.contact_point_crypto import ContactPointKeyring
+from funnel_crm.platform.communication_consent_sync import PostgresProductConsentEventConsumer
 from funnel_crm.platform.customer_profile_sync import PostgresProductEventConsumer
 from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 
@@ -85,12 +86,14 @@ async def process_tenant_batch(
     customer_consumer: Any,
     commerce_consumer: Any,
     legacy_commerce_consumer: Any,
+    consent_consumer: Any,
 ) -> None:
     """Run each consumer independently and report aggregate processing counts."""
     for consumer_name, consumer in (
         ("customer", customer_consumer),
         ("commerce", commerce_consumer),
         ("legacy_commerce", legacy_commerce_consumer),
+        ("consent", consent_consumer),
     ):
         try:
             result = await consumer.process_batch(tenant_id)
@@ -124,6 +127,7 @@ async def process_tenant_batches(
     customer_consumer: Any,
     commerce_consumer: Any,
     legacy_commerce_consumer: Any,
+    consent_consumer: Any,
 ) -> None:
     """Process tenant batches concurrently with a hard in-process bound."""
     if not 1 <= concurrency <= 32:
@@ -137,6 +141,7 @@ async def process_tenant_batches(
                 customer_consumer=customer_consumer,
                 commerce_consumer=commerce_consumer,
                 legacy_commerce_consumer=legacy_commerce_consumer,
+                consent_consumer=consent_consumer,
             )
 
     await asyncio.gather(*(process_one(tenant_id) for tenant_id in tenant_ids))
@@ -180,6 +185,10 @@ async def run_worker(
         session_factory,
         payload_keyring=payload_keyring,
     )
+    consent_consumer = PostgresProductConsentEventConsumer(
+        session_factory,
+        payload_keyring=payload_keyring,
+    )
     shutdown = stop_event or asyncio.Event()
     try:
         while not shutdown.is_set():
@@ -197,6 +206,7 @@ async def run_worker(
                 customer_consumer=customer_consumer,
                 commerce_consumer=commerce_consumer,
                 legacy_commerce_consumer=legacy_commerce_consumer,
+                consent_consumer=consent_consumer,
             )
             if once or shutdown.is_set():
                 return
