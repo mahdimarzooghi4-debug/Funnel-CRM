@@ -114,6 +114,41 @@ class ProductConsentEligibilityCheck(BaseModel):
         return value
 
 
+class ProductConsentEligibilityItem(BaseModel):
+    """One consent query in a bounded product batch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference: str = Field(min_length=1, max_length=100)
+    external_customer_id: str = Field(min_length=1, max_length=200)
+    purpose_key: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
+    channel: str = Field(pattern=r"^(email|phone|postal_address|social_handle|website)$")
+
+    @field_validator("reference", "external_customer_id")
+    @classmethod
+    def strip_required_values(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must not be blank")
+        return value
+
+
+class ProductConsentEligibilityBatchCheck(BaseModel):
+    """A bounded set of checks scoped to one workspace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+    checks: list[ProductConsentEligibilityItem] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def require_unique_references(self) -> "ProductConsentEligibilityBatchCheck":
+        references = [check.reference for check in self.checks]
+        if len(set(references)) != len(references):
+            raise ValueError("references must be unique")
+        return self
+
+
 class ProductConsentEligibilityResult(BaseModel):
     """Fail-closed result returned to the requesting product."""
 
@@ -292,3 +327,196 @@ async def check_product_communication_eligibility(
                 source_product=latest.source_product,
                 recorded_at=latest.recorded_at,
             )
+
+
+class ProductConsentEligibilityBatchItemResult(ProductConsentEligibilityResult):
+    """Eligibility result correlated to one caller-provided reference."""
+
+    reference: str
+
+
+class ProductConsentEligibilityBatchResult(BaseModel):
+    """Ordered results for one bounded batch request."""
+
+    checks: list[ProductConsentEligibilityBatchItemResult]
+
+
+@router.post(
+    "/communication-eligibility/check-batch",
+    operation_id="checkProductCommunicationEligibilityBatch",
+    summary="Check live CRM consent for a bounded batch of customers",
+    responses={
+        401: {"description": "Missing or invalid product credential"},
+        403: {"description": "Connection is inactive or lacks the read contract"},
+        503: {"description": "CRM consent service is not configured"},
+    },
+)
+async def check_product_communication_eligibility_batch(
+    payload: ProductConsentEligibilityBatchCheck, request: Request
+) -> ProductConsentEligibilityBatchResult:
+    """Resolve at most 100 checks with tenant-scoped set queries."""
+    connection = getattr(request.state, "verified_product_connection", None)
+    if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=payload.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid product credential is required",
+        )
+    if not connection.active:
+        raise HTTPException(status_code=403, detail="Connection is disabled")
+    if payload.tenant_id != connection.tenant_id:
+        raise HTTPException(status_code=403, detail="Workspace is outside this connection")
+    if ("crm.customer.communication_eligibility", 1) not in connection.supported_contract_versions:
+        raise HTTPException(status_code=403, detail="Consent eligibility contract is not granted")
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CRM consent service is not configured",
+        )
+
+    from sqlalchemy import func, select, text, tuple_
+
+    from funnel_crm.platform.models import (
+        CRMCommunicationConsentEvent,
+        CRMProfile,
+        ProductCustomerIdentity,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(connection.tenant_id)},
+            )
+            external_ids = list(dict.fromkeys(
+                check.external_customer_id for check in payload.checks
+            ))
+            identity_rows = (
+                await session.scalars(
+                    select(ProductCustomerIdentity).where(
+                        ProductCustomerIdentity.tenant_id == connection.tenant_id,
+                        ProductCustomerIdentity.source_product == connection.source_product,
+                        ProductCustomerIdentity.external_customer_id.in_(external_ids),
+                    )
+                )
+            ).all()
+            identity_by_external_id = {
+                identity.external_customer_id: identity for identity in identity_rows
+            }
+
+            profile_ids = list(dict.fromkeys(
+                identity.profile_id for identity in identity_rows
+            ))
+            profiles = (
+                await session.scalars(
+                    select(CRMProfile).where(
+                        CRMProfile.tenant_id == connection.tenant_id,
+                        CRMProfile.id.in_(profile_ids),
+                        CRMProfile.archived_at.is_(None),
+                        CRMProfile.merged_into_profile_id.is_(None),
+                    )
+                )
+            ).all() if profile_ids else []
+            valid_profile_ids = {profile.id for profile in profiles}
+
+            check_keys = {
+                (
+                    identity_by_external_id[check.external_customer_id].profile_id,
+                    check.purpose_key,
+                    check.channel,
+                )
+                for check in payload.checks
+                if check.external_customer_id in identity_by_external_id
+                and identity_by_external_id[check.external_customer_id].profile_id
+                in valid_profile_ids
+            }
+            latest_by_key = {}
+            if check_keys:
+                ranked_events = (
+                    select(
+                        CRMCommunicationConsentEvent.id.label("event_id"),
+                        func.row_number()
+                        .over(
+                            partition_by=(
+                                CRMCommunicationConsentEvent.profile_id,
+                                CRMCommunicationConsentEvent.purpose_key,
+                                CRMCommunicationConsentEvent.channel,
+                            ),
+                            order_by=(
+                                CRMCommunicationConsentEvent.recorded_at.desc(),
+                                CRMCommunicationConsentEvent.id.desc(),
+                            ),
+                        )
+                        .label("event_rank"),
+                    )
+                    .where(
+                        CRMCommunicationConsentEvent.tenant_id == connection.tenant_id,
+                        tuple_(
+                            CRMCommunicationConsentEvent.profile_id,
+                            CRMCommunicationConsentEvent.purpose_key,
+                            CRMCommunicationConsentEvent.channel,
+                        ).in_(list(check_keys)),
+                    )
+                    .subquery()
+                )
+                latest_rows = (
+                    await session.scalars(
+                        select(CRMCommunicationConsentEvent)
+                        .join(
+                            ranked_events,
+                            ranked_events.c.event_id == CRMCommunicationConsentEvent.id,
+                        )
+                        .where(ranked_events.c.event_rank == 1)
+                    )
+                ).all()
+                latest_by_key = {
+                    (row.profile_id, row.purpose_key, row.channel): row
+                    for row in latest_rows
+                }
+
+            results = []
+            for check in payload.checks:
+                identity = identity_by_external_id.get(check.external_customer_id)
+                profile_id = identity.profile_id if identity is not None else None
+                if profile_id not in valid_profile_ids:
+                    latest = None
+                else:
+                    latest = latest_by_key.get(
+                        (profile_id, check.purpose_key, check.channel)
+                    )
+                if latest is None:
+                    result = ProductConsentEligibilityResult(
+                        status="unknown",
+                        allowed=False,
+                        decision=None,
+                        consent_event_id=None,
+                        policy_version=None,
+                        source_product=None,
+                        recorded_at=None,
+                    )
+                else:
+                    result = ProductConsentEligibilityResult(
+                        status=latest.decision,
+                        allowed=latest.decision == "granted",
+                        decision=latest.decision,
+                        consent_event_id=latest.id,
+                        policy_version=latest.policy_version,
+                        source_product=latest.source_product,
+                        recorded_at=latest.recorded_at,
+                    )
+                results.append(
+                    ProductConsentEligibilityBatchItemResult(
+                        reference=check.reference,
+                        **result.model_dump(),
+                    )
+                )
+            return ProductConsentEligibilityBatchResult(checks=results)
