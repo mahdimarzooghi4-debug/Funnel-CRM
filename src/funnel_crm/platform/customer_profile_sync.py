@@ -160,7 +160,7 @@ class PostgresProductEventConsumer:
                     )
                 except LeaseLostError:
                     continue
-            try:
+                try:
                     await self._process_one(event)
                 except CustomerSyncError as exc:
                     result = await self._processor.fail(
