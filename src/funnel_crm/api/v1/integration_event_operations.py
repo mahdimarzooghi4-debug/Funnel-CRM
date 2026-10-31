@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import has_crm_permission
@@ -37,6 +37,16 @@ class ProductEventRetryRead(BaseModel):
     processing_status: str
     attempt_count: int
     available_at: datetime
+
+
+class ProductEventQueueHealthRead(BaseModel):
+    source_product: str
+    received_count: int
+    processing_count: int
+    processed_count: int
+    failed_count: int
+    oldest_unprocessed_at: datetime | None
+    latest_received_at: datetime | None
 
 
 async def _require_manage(context: TenantSessionContext) -> UUID:
@@ -95,6 +105,61 @@ async def list_failed_product_events(
             occurred_at=row.occurred_at,
             received_at=row.received_at,
             available_at=row.available_at,
+        )
+        for row in rows
+    ]
+
+
+
+@router.get(
+    "/health",
+    response_model=list[ProductEventQueueHealthRead],
+    operation_id="getProductEventQueueHealth",
+    summary="Summarize product event queue health by source product",
+)
+async def get_product_event_queue_health(
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> list[ProductEventQueueHealthRead]:
+    await _require_manage(context)
+    active_status = IntegrationEventInbox.processing_status.in_(("received", "processing"))
+    rows = (
+        await context.session.execute(
+            select(
+                IntegrationEventInbox.source_product,
+                func.count(IntegrationEventInbox.id)
+                .filter(IntegrationEventInbox.processing_status == "received")
+                .label("received_count"),
+                func.count(IntegrationEventInbox.id)
+                .filter(IntegrationEventInbox.processing_status == "processing")
+                .label("processing_count"),
+                func.count(IntegrationEventInbox.id)
+                .filter(IntegrationEventInbox.processing_status == "processed")
+                .label("processed_count"),
+                func.count(IntegrationEventInbox.id)
+                .filter(IntegrationEventInbox.processing_status == "failed")
+                .label("failed_count"),
+                func.min(
+                    case(
+                        (active_status, IntegrationEventInbox.received_at),
+                        else_=None,
+                    )
+                ).label("oldest_unprocessed_at"),
+                func.max(IntegrationEventInbox.received_at).label("latest_received_at"),
+            )
+            .where(IntegrationEventInbox.tenant_id == context.access.tenant_id)
+            .group_by(IntegrationEventInbox.source_product)
+            .order_by(IntegrationEventInbox.source_product)
+        )
+    ).all()
+    return [
+        ProductEventQueueHealthRead(
+            source_product=row.source_product,
+            received_count=row.received_count,
+            processing_count=row.processing_count,
+            processed_count=row.processed_count,
+            failed_count=row.failed_count,
+            oldest_unprocessed_at=row.oldest_unprocessed_at,
+            latest_received_at=row.latest_received_at,
         )
         for row in rows
     ]

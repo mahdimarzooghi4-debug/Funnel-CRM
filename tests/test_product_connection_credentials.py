@@ -152,6 +152,24 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
         assert "payload" not in failed.text
         assert "order_id" not in failed.text
 
+        health = await client.get(
+            "/api/v1/integrations/events/health",
+            headers=headers,
+        )
+        assert health.status_code == 200
+        assert health.json() == [
+            {
+                "source_product": "funnel.store",
+                "received_count": 0,
+                "processing_count": 0,
+                "processed_count": 0,
+                "failed_count": 1,
+                "oldest_unprocessed_at": None,
+                "latest_received_at": health.json()[0]["latest_received_at"],
+            }
+        ]
+        assert health.json()[0]["latest_received_at"] is not None
+
         retried = await client.post(
             f"/api/v1/integrations/events/{event_row_id}/retry",
             headers=headers,
@@ -159,6 +177,14 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
         assert retried.status_code == 200
         assert retried.json()["processing_status"] == "received"
         assert retried.json()["attempt_count"] == 0
+        healthy_again = await client.get(
+            "/api/v1/integrations/events/health",
+            headers=headers,
+        )
+        assert healthy_again.status_code == 200
+        assert healthy_again.json()[0]["received_count"] == 1
+        assert healthy_again.json()[0]["failed_count"] == 0
+        assert healthy_again.json()[0]["oldest_unprocessed_at"] is not None
 
         retry_again = await client.post(
             f"/api/v1/integrations/events/{event_row_id}/retry",
