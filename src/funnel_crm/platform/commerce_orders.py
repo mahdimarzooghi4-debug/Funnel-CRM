@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
@@ -12,6 +13,7 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.integration_processing import (
     ClaimedIntegrationEvent,
     LeaseLostError,
@@ -53,6 +55,15 @@ class CommerceOrderEventError(ValueError):
     """An event does not meet the commerce contract or CRM scope."""
 
 
+@dataclass(frozen=True)
+class CommerceOrderBatchResult:
+    claimed: int
+    processed: int
+    duplicate: int
+    failed: int
+    retry_scheduled: int
+
+
 class PostgresCommerceOrderEventConsumer:
     """Atomically store one order fact and complete its inbox lease.
 
@@ -60,9 +71,55 @@ class PostgresCommerceOrderEventConsumer:
     source amounts and are never silently netted against paid-order amounts.
     """
 
-    def __init__(self, session_factory: async_sessionmaker):
+    def __init__(
+        self,
+        session_factory: async_sessionmaker,
+        *,
+        payload_keyring: IntegrationPayloadKeyring | None = None,
+    ):
         self._session_factory = session_factory
-        self._processor = PostgresProductEventProcessor(session_factory)
+        self._processor = PostgresProductEventProcessor(
+            session_factory, keyring=payload_keyring
+        )
+
+    async def process_batch(
+        self, tenant_id: UUID, *, limit: int = 10
+    ) -> CommerceOrderBatchResult:
+        claims = await self._processor.claim(
+            tenant_id,
+            limit=limit,
+            contract_name="commerce.order",
+            contract_version=1,
+        )
+        processed = duplicate = failed = retry_scheduled = 0
+        for claim in claims:
+            try:
+                inserted = await self.consume(claim)
+            except (CommerceOrderEventError, LeaseLostError):
+                failed += 1
+            except Exception:
+                try:
+                    result = await self._processor.fail(
+                        tenant_id,
+                        claim.id,
+                        lease_token=claim.lease_token,
+                        error_code="commerce_order.processing_error",
+                        retryable=True,
+                    )
+                except LeaseLostError:
+                    result = None
+                failed += 1
+                retry_scheduled += result is not None and result.status == "received"
+            else:
+                processed += 1
+                duplicate += not inserted
+        return CommerceOrderBatchResult(
+            claimed=len(claims),
+            processed=processed,
+            duplicate=duplicate,
+            failed=failed,
+            retry_scheduled=retry_scheduled,
+        )
 
     async def consume(self, claim: ClaimedIntegrationEvent) -> bool:
         try:
