@@ -1558,6 +1558,37 @@ class CRMConsentProductSyncOutbox(Base):
     )
 
 
+class CRMConsentProductSyncCheckpoint(Base):
+    """Latest product-confirmed cursor for its consent change feed."""
+
+    __tablename__ = "crm_consent_product_sync_checkpoints"
+    __table_args__ = (
+        CheckConstraint(
+            "last_acked_sequence >= 0",
+            name="ck_crm_consent_sync_checkpoint_nonnegative",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_crm_consent_sync_checkpoint_workspace",
+            ondelete="CASCADE",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    recipient_product: Mapped[str] = mapped_column(String(80), primary_key=True)
+    last_acked_sequence: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
 class ProductCustomerIdentity(Base):
     """Stable source-product customer key mapped to one CRM profile per tenant."""
 
