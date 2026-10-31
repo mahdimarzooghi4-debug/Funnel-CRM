@@ -195,8 +195,42 @@ async def test_campaign_asset_review_lifecycle_is_scoped_and_audited(
         )
         assert refreshed_proceed_review.status_code == 200, refreshed_proceed_review.text
 
-        for action, expected in [("schedule", "scheduled"), ("launch", "active"), ("pause", "paused"), ("resume", "active"), ("complete", "completed"), ("archive", "archived")]:
-            transition = await client.post(f"/api/v1/crm/campaigns/{campaign_id}/lifecycle", headers=headers, json={"action": action})
+        scheduled = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/lifecycle",
+            headers=headers,
+            json={"action": "schedule"},
+        )
+        assert scheduled.status_code == 200, scheduled.text
+        assert scheduled.json()["status"] == "scheduled"
+
+        launch_without_review = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/lifecycle",
+            headers=headers,
+            json={"action": "launch"},
+        )
+        assert launch_without_review.status_code == 409
+        activation_review = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
+            headers=headers,
+            json={"decision": "proceed_to_launch"},
+        )
+        assert activation_review.status_code == 200, activation_review.text
+        assert activation_review.json()["latest_manager_review"]["decision"] == "proceed_to_launch"
+
+        launched = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/lifecycle",
+            headers=headers,
+            json={"action": "launch"},
+        )
+        assert launched.status_code == 200, launched.text
+        assert launched.json()["status"] == "active"
+
+        for action, expected in [("pause", "paused"), ("resume", "active"), ("complete", "completed"), ("archive", "archived")]:
+            transition = await client.post(
+                f"/api/v1/crm/campaigns/{campaign_id}/lifecycle",
+                headers=headers,
+                json={"action": action},
+            )
             assert transition.status_code == 200, transition.text
             assert transition.json()["status"] == expected
 
