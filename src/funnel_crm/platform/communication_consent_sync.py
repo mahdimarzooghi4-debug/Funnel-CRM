@@ -72,6 +72,7 @@ class PostgresProductConsentEventConsumer:
         self,
         session_factory: async_sessionmaker[Any],
         *,
+        payload_keyring: Any | None = None,
         lease_seconds: int = 60,
         max_attempts: int = 8,
     ) -> None:
@@ -80,6 +81,7 @@ class PostgresProductConsentEventConsumer:
             session_factory,
             lease_seconds=lease_seconds,
             max_attempts=max_attempts,
+            payload_keyring=payload_keyring,
         )
 
     async def process_batch(
