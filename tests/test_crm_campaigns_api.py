@@ -124,6 +124,14 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
                     tenant_id=tenant_id, role_id=role.id,
                     permission_key="crm.communication_consent:record",
                 ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.work_item:create",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.work_item:view",
+                ),
             ]
         )
         await context.session.flush()
@@ -210,12 +218,22 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         manager_review = await client.post(
             f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
             headers=headers,
-            json={"decision": "hold", "note": "Wait for audience consent"},
+            json={
+                "decision": "hold",
+                "note": "Wait for audience consent",
+                "follow_up": {
+                    "title": "Resolve consent gap",
+                    "priority": "high",
+                },
+            },
         )
         assert manager_review.status_code == 200, manager_review.text
         review_result = manager_review.json()
         assert review_result["latest_manager_review"]["decision"] == "hold"
         assert review_result["latest_manager_review"]["note"] == "Wait for audience consent"
+        follow_up_id = review_result["latest_manager_review"]["follow_up_work_item_id"]
+        assert UUID(follow_up_id)
+        assert review_result["open_work_item_count"] == 1
         assert review_result["launch_readiness"] == "needs_attention"
 
         marketing_consent = await client.post(
