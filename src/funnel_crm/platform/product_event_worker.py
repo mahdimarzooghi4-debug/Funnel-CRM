@@ -16,6 +16,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from funnel_crm.platform.commerce_orders import PostgresCommerceOrderEventConsumer
 from funnel_crm.platform.commerce_event_sync import (
     PostgresProductCommerceEventConsumer,
 )
@@ -67,11 +68,13 @@ async def process_tenant_batch(
     *,
     customer_consumer: Any,
     commerce_consumer: Any,
+    legacy_commerce_consumer: Any,
 ) -> None:
     """Run each consumer independently and report aggregate processing counts."""
     for consumer_name, consumer in (
         ("customer", customer_consumer),
         ("commerce", commerce_consumer),
+        ("legacy_commerce", legacy_commerce_consumer),
     ):
         try:
             result = await consumer.process_batch(tenant_id)
@@ -117,6 +120,10 @@ async def run_worker(
         session_factory,
         payload_keyring=payload_keyring,
     )
+    legacy_commerce_consumer = PostgresCommerceOrderEventConsumer(
+        session_factory,
+        payload_keyring=payload_keyring,
+    )
     try:
         while True:
             try:
@@ -132,6 +139,7 @@ async def run_worker(
                     tenant_id,
                     customer_consumer=customer_consumer,
                     commerce_consumer=commerce_consumer,
+                    legacy_commerce_consumer=legacy_commerce_consumer,
                 )
             if once:
                 return
