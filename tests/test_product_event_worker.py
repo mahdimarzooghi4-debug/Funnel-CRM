@@ -13,7 +13,21 @@ from funnel_crm.platform.product_event_worker import (
     process_tenant_batch,
     process_tenant_batches,
     tenant_ids_from_registry,
+    wait_for_poll_or_shutdown,
 )
+
+
+
+@pytest.mark.asyncio
+async def test_worker_poll_wait_is_interrupted_by_shutdown() -> None:
+    stop_event = asyncio.Event()
+    stop_event.set()
+    assert await wait_for_poll_or_shutdown(stop_event, 60) is True
+
+
+@pytest.mark.asyncio
+async def test_worker_poll_wait_times_out_for_next_cycle() -> None:
+    assert await wait_for_poll_or_shutdown(asyncio.Event(), 0.001) is False
 
 
 def test_registry_tenant_ids_are_unique() -> None:
