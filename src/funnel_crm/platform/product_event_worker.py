@@ -1,6 +1,6 @@
 """Run tenant-scoped product event consumers as a standalone worker.
 
-Configure FUNNEL_CRM_EVENT_WORKER_TENANT_IDS with comma-separated workspace UUIDs.
+The worker discovers workspace IDs from a read-only registry.
 Run one worker service per configured tenant set; the API process remains isolated
 from background event processing.
 """
@@ -46,6 +46,7 @@ async def load_worker_tenant_ids(
             )
         )
         return tenant_ids_from_registry(result.scalars().all())
+
 
 def configured_poll_seconds(raw: str | None = None) -> float:
     """Return a bounded delay between polling cycles."""
@@ -102,7 +103,7 @@ async def run_worker(
     database_url: str,
     once: bool = False,
 ) -> None:
-    """Process both CRM customer and commerce event contracts for configured tenants."""
+    """Process CRM customer and commerce events for all registered workspaces."""
     payload_keyring = IntegrationPayloadKeyring.from_environment()
     contact_keyring = ContactPointKeyring.from_environment()
     engine = create_async_engine(database_url, pool_pre_ping=True)
