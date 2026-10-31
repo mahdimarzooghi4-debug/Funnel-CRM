@@ -17,10 +17,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, or_, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from funnel_crm.platform.integration_payload_crypto import (
-    IntegrationPayloadCryptoError,
-    IntegrationPayloadKeyring,
-)
+from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.models import IntegrationEventInbox
 
 logger = logging.getLogger(__name__)
