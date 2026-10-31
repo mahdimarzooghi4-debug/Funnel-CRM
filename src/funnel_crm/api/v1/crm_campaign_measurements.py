@@ -109,7 +109,6 @@ class CampaignMeasurementTotals(BaseModel):
     incentive_cost_by_currency: dict[str, Decimal]
     refunded_amount_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
-    budget_consumption: CampaignBudgetConsumption
 
 
 async def _require_permission(
@@ -343,6 +342,7 @@ class CampaignPerformanceItem(BaseModel):
     conversion_rate_per_click_percent: float | None
     actual_spend_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
+    budget_consumption: CampaignBudgetConsumption
 
 
 class CampaignPerformancePortfolioRead(BaseModel):
