@@ -479,6 +479,13 @@ class CampaignMetricComparison(BaseModel):
     change_percent: float | None
 
 
+class CampaignAmountComparison(BaseModel):
+    current_value: Decimal | None
+    previous_value: Decimal | None
+    delta: Decimal | None
+    change_percent: float | None
+
+
 class CampaignPerformanceComparisonItem(BaseModel):
     campaign_id: UUID
     name: str
@@ -486,8 +493,8 @@ class CampaignPerformanceComparisonItem(BaseModel):
     previous: CampaignPerformanceItem | None
     count_metrics: dict[str, CampaignMetricComparison]
     rate_metrics: dict[str, CampaignMetricComparison]
-    spend_by_currency: dict[str, CampaignMetricComparison]
-    revenue_by_currency: dict[str, CampaignMetricComparison]
+    spend_by_currency: dict[str, CampaignAmountComparison]
+    revenue_by_currency: dict[str, CampaignAmountComparison]
 
 
 class CampaignPerformanceComparisonRead(BaseModel):
@@ -564,16 +571,29 @@ async def compare_campaign_performance_periods(
         current_rates = current_item.model_dump() if current_item else {}
         previous_rates = previous_item.model_dump() if previous_item else {}
 
-        def compare_currency(metric_key: str) -> dict[str, CampaignMetricComparison]:
+        def compare_currency(metric_key: str) -> dict[str, CampaignAmountComparison]:
             current_amounts = getattr(current_item, metric_key) if current_item else {}
             previous_amounts = getattr(previous_item, metric_key) if previous_item else {}
-            return {
-                currency: _metric_comparison(
-                    float(current_amounts[currency]) if currency in current_amounts else None,
-                    float(previous_amounts[currency]) if currency in previous_amounts else None,
+            comparisons: dict[str, CampaignAmountComparison] = {}
+            for currency in sorted(current_amounts.keys() | previous_amounts.keys()):
+                current_amount = current_amounts.get(currency)
+                previous_amount = previous_amounts.get(currency)
+                delta = (
+                    current_amount - previous_amount
+                    if current_amount is not None and previous_amount is not None
+                    else None
                 )
-                for currency in sorted(current_amounts.keys() | previous_amounts.keys())
-            }
+                comparisons[currency] = CampaignAmountComparison(
+                    current_value=current_amount,
+                    previous_value=previous_amount,
+                    delta=delta,
+                    change_percent=(
+                        round(float(100 * delta / previous_amount), 4)
+                        if delta is not None and previous_amount != 0
+                        else None
+                    ),
+                )
+            return comparisons
 
         count_comparisons = {
             key: _metric_comparison(
