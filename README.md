@@ -26,3 +26,16 @@ The service provides:
 The platform model provisions each workspace with its own root organization. Composite foreign keys prevent organization-parent and workspace-root references from crossing tenant boundaries. PostgreSQL integration tests run against the versioned schema.
 
 Readiness currently confirms application initialization. Infrastructure health checks will be added with the corresponding service integration.
+
+
+## Product event worker
+
+Run event consumers in a dedicated worker process, separate from HTTP request handling:
+
+```sh
+python -m funnel_crm.platform.product_event_worker
+```
+
+Configure `DATABASE_URL`, `FUNNEL_CRM_EVENT_WORKER_TENANT_IDS` (comma-separated workspace UUIDs), `FUNNEL_CRM_INTEGRATION_PAYLOAD_KEYRING`, and `FUNNEL_CRM_CONTACT_KEYRING`. The worker polls every 5 seconds by default; `FUNNEL_CRM_EVENT_WORKER_POLL_SECONDS` can be set from 0.25 to 300. `FUNNEL_CRM_EVENT_WORKER_ONCE=true` runs one polling cycle for controlled jobs.
+
+The worker processes customer profile/activity contracts and paid/refunded commerce events. Tenant IDs are explicit to preserve RLS boundaries; add newly provisioned workspaces to the worker configuration before their queued product events can be processed. Do not expose keyring values in logs.
