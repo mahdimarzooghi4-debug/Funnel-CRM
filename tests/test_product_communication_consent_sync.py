@@ -43,7 +43,9 @@ def make_app(connection: VerifiedProductConnection, session_factory) -> FastAPI:
     return app
 
 
-def consent_event(tenant_id: UUID, event_id: UUID) -> dict:
+def consent_event(
+    tenant_id: UUID, event_id: UUID, decision: str = "withdrawn"
+) -> dict:
     return {
         "event_id": str(event_id),
         "tenant_id": str(tenant_id),
@@ -57,7 +59,7 @@ def consent_event(tenant_id: UUID, event_id: UUID) -> dict:
             "external_customer_id": "store-customer-71",
             "purpose_key": "product_updates",
             "channel": "email",
-            "decision": "withdrawn",
+            "decision": decision,
             "policy_version": "2026-01",
         },
     }
@@ -272,28 +274,87 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         )
         assert duplicate_references.status_code == 422
 
+    granted_event_id = uuid4()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        granted_event = await client.post(
+            "/api/v1/integrations/events",
+            json=consent_event(tenant_id, granted_event_id, decision="granted"),
+        )
+        assert granted_event.status_code == 202
+    granted_result = await consumer.process_batch(tenant_id)
+    assert granted_result.claimed == 1
+    assert granted_result.processed == 1
+    assert granted_result.failed == 0
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        granted_eligibility = await client.post(
+            "/api/v1/integrations/communication-eligibility/check",
+            json={
+                "tenant_id": str(tenant_id),
+                "external_customer_id": "store-customer-71",
+                "purpose_key": "product_updates",
+                "channel": "email",
+            },
+        )
+        assert granted_eligibility.status_code == 200
+        assert granted_eligibility.json()["status"] == "granted"
+        assert granted_eligibility.json()["allowed"] is True
+        assert granted_eligibility.json()["policy_version"] == "2026-01"
+        assert granted_eligibility.json()["source_product"] == "funnel.store"
+
+        granted_batch = await client.post(
+            "/api/v1/integrations/communication-eligibility/check-batch",
+            json={
+                "tenant_id": str(tenant_id),
+                "checks": [{
+                    "reference": "granted-1",
+                    "external_customer_id": "store-customer-71",
+                    "purpose_key": "product_updates",
+                    "channel": "email",
+                }],
+            },
+        )
+        assert granted_batch.status_code == 200
+        granted_item = granted_batch.json()["checks"][0]
+        assert granted_item["reference"] == "granted-1"
+        assert granted_item["status"] == "granted"
+        assert granted_item["allowed"] is True
+        assert granted_item["consent_event_id"] == granted_eligibility.json()["consent_event_id"]
+        assert granted_item["policy_version"] == "2026-01"
+        assert granted_item["source_product"] == "funnel.store"
+
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
-        consent = await context.session.scalar(
-            select(CRMCommunicationConsentEvent).where(
-                CRMCommunicationConsentEvent.tenant_id == tenant_id,
-                CRMCommunicationConsentEvent.profile_id == profile_id,
+        consents = (
+            await context.session.scalars(
+                select(CRMCommunicationConsentEvent).where(
+                    CRMCommunicationConsentEvent.tenant_id == tenant_id,
+                    CRMCommunicationConsentEvent.profile_id == profile_id,
+                )
             )
-        )
-        assert consent is not None
-        assert consent.purpose_key == "product_updates"
-        assert consent.channel == "email"
-        assert consent.decision == "withdrawn"
-        assert consent.source_product == "funnel.store"
-        assert consent.source_event_id == event_id
+        ).all()
+        assert len(consents) == 2
+        assert {
+            (consent.source_event_id, consent.decision) for consent in consents
+        } == {
+            (event_id, "withdrawn"),
+            (granted_event_id, "granted"),
+        }
+        assert all(consent.purpose_key == "product_updates" for consent in consents)
+        assert all(consent.channel == "email" for consent in consents)
+        assert all(consent.source_product == "funnel.store" for consent in consents)
         audit_count = await context.session.scalar(
             select(func.count()).select_from(AuditEvent).where(
                 AuditEvent.tenant_id == tenant_id,
                 AuditEvent.action_key == "integration.communication_consent.recorded",
             )
         )
-        assert audit_count == 1
+        assert audit_count == 2
 
     replay = ClaimedIntegrationEvent(
         id=uuid4(),
@@ -335,10 +396,10 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
                 CRMCommunicationConsentEvent.tenant_id == tenant_id,
                 CRMCommunicationConsentEvent.profile_id == profile_id,
             )
-        ) == 1
+        ) == 2
         assert await context.session.scalar(
             select(func.count()).select_from(AuditEvent).where(
                 AuditEvent.tenant_id == tenant_id,
                 AuditEvent.action_key == "integration.communication_consent.recorded",
             )
-        ) == 1
+        ) == 2
