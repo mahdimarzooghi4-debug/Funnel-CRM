@@ -20,3 +20,9 @@ REVOKE INSERT, UPDATE, DELETE ON TABLE permission_definitions FROM funnel_crm_ru
 
 -- Audit history can be read and appended, but never changed through the runtime role.
 REVOKE UPDATE, DELETE ON TABLE audit_events FROM funnel_crm_runtime;
+
+
+-- The worker may discover workspace IDs from this non-PII registry, but only
+-- the workspace creation trigger may add or remove entries.
+GRANT SELECT ON TABLE product_event_worker_tenants TO funnel_crm_runtime;
+REVOKE INSERT, UPDATE, DELETE ON TABLE product_event_worker_tenants FROM funnel_crm_runtime;
