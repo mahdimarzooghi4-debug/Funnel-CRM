@@ -2,10 +2,10 @@
 
 from datetime import datetime, timezone
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import exists, func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
@@ -20,6 +20,7 @@ from funnel_crm.platform.models import (
     CRMProfile,
     CRMProfileSegment,
     CRMWorkItem,
+    WorkspaceMembership,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -32,6 +33,14 @@ class CampaignReadinessCheck(BaseModel):
     status: Literal["complete", "missing", "pending", "inactive", "not_authorized", "unsupported"]
     count: int | None
     explanation: str
+
+
+class CampaignManagerReview(BaseModel):
+    decision: Literal["proceed_to_schedule", "request_changes", "hold"]
+    note: str | None
+    reviewed_by_identity_id: UUID | None
+    reviewed_at: datetime
+    follow_up_work_item_id: UUID | None
 
 
 class CampaignReadinessResponse(BaseModel):
@@ -47,6 +56,7 @@ class CampaignReadinessResponse(BaseModel):
     asset_counts: dict[AssetStatus, int]
     open_work_item_count: int | None
     work_item_data_visible: bool
+    latest_manager_review: CampaignManagerReview | None
     generated_at: datetime
     basis: str
 
@@ -62,6 +72,61 @@ class CampaignReadinessPortfolioResponse(BaseModel):
     needs_attention_count: int
     attention_by_check: dict[str, int]
     items: list[CampaignReadinessResponse]
+
+class CampaignReadinessFollowUp(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    assigned_membership_id: UUID | None = None
+    due_at: datetime | None = None
+    priority: Literal["low", "normal", "high", "urgent"] = "high"
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("follow-up title must contain a non-whitespace character")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("due_at")
+    @classmethod
+    def require_due_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("follow-up due_at must include a timezone")
+        return value
+
+
+class CampaignReadinessReviewDecision(BaseModel):
+    decision: Literal["proceed_to_schedule", "request_changes", "hold"]
+    note: str | None = Field(default=None, max_length=1000)
+    follow_up: CampaignReadinessFollowUp | None = None
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("note must contain a non-whitespace character")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_follow_up_for_actionable_decisions(self):
+        needs_follow_up = self.decision in {"request_changes", "hold"}
+        if needs_follow_up and self.follow_up is None:
+            raise ValueError("request_changes and hold decisions require a follow_up task")
+        if not needs_follow_up and self.follow_up is not None:
+            raise ValueError("follow_up is only valid for request_changes and hold decisions")
+        return self
 
 
 @router.get(
@@ -328,6 +393,27 @@ async def get_campaign_readiness(
                 CRMWorkItem.status.in_(("open", "in_progress")),
             )
         ) or 0)
+    latest_review_event = await context.session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.tenant_id == context.access.tenant_id,
+            AuditEvent.target_type == "crm_marketing_campaign_readiness_review",
+            AuditEvent.target_key == str(campaign.id),
+            AuditEvent.action_key == "crm_marketing_campaign.readiness_reviewed",
+        ).order_by(AuditEvent.occurred_at.desc(), AuditEvent.event_id.desc()).limit(1)
+    )
+    latest_manager_review = None
+    if latest_review_event is not None and latest_review_event.after_state is not None:
+        latest_manager_review = CampaignManagerReview(
+            decision=latest_review_event.after_state["decision"],
+            note=latest_review_event.after_state.get("note"),
+            reviewed_by_identity_id=latest_review_event.actor_identity_id,
+            reviewed_at=latest_review_event.occurred_at,
+            follow_up_work_item_id=(
+                UUID(latest_review_event.after_state["follow_up_work_item_id"])
+                if latest_review_event.after_state.get("follow_up_work_item_id")
+                else None
+            ),
+        )
     return CampaignReadinessResponse(
         campaign_id=campaign.id,
         campaign_name=campaign.name,
@@ -345,6 +431,7 @@ async def get_campaign_readiness(
         asset_counts=asset_counts,
         open_work_item_count=open_work_item_count,
         work_item_data_visible=work_item_data_visible,
+        latest_manager_review=latest_manager_review,
         generated_at=datetime.now(timezone.utc),
         basis=(
             "Readiness is a checklist for manager review, not an automatic launch approval. "
@@ -354,3 +441,105 @@ async def get_campaign_readiness(
             "Open work items are shown only when the caller has work-item view permission."
         ),
     )
+
+
+@router.post(
+    "/{campaign_id}/readiness-review",
+    response_model=CampaignReadinessResponse,
+    operation_id="recordCRMCampaignReadinessReview",
+)
+async def record_campaign_readiness_review(
+    campaign_id: UUID,
+    payload: CampaignReadinessReviewDecision,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignReadinessResponse:
+    campaign = await context.session.scalar(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaign.id == campaign_id,
+        )
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if not await has_crm_permission(
+        context,
+        permission_key="crm.campaign:manage",
+        organization_unit_id=campaign.organization_unit_id,
+    ):
+        raise HTTPException(status_code=403, detail="Campaign review is not authorized for this organization scope")
+    if payload.follow_up is not None:
+        if not await has_crm_permission(
+            context,
+            permission_key="crm.work_item:create",
+            organization_unit_id=campaign.organization_unit_id,
+        ):
+            raise HTTPException(status_code=403, detail="Follow-up creation is not authorized for this organization scope")
+        if payload.follow_up.assigned_membership_id is not None:
+            active_assignee = await context.session.scalar(
+                select(WorkspaceMembership.id).where(
+                    WorkspaceMembership.tenant_id == context.access.tenant_id,
+                    WorkspaceMembership.id == payload.follow_up.assigned_membership_id,
+                    WorkspaceMembership.status == "active",
+                )
+            )
+            if active_assignee is None:
+                raise HTTPException(status_code=422, detail="Follow-up assignee must be an active workspace member")
+    readiness = await get_campaign_readiness(campaign_id=campaign_id, context=context)
+    follow_up_item = None
+    if payload.follow_up is not None:
+        follow_up_item = CRMWorkItem(
+            id=uuid4(),
+            tenant_id=context.access.tenant_id,
+            organization_unit_id=campaign.organization_unit_id,
+            campaign_id=campaign.id,
+            assigned_membership_id=payload.follow_up.assigned_membership_id,
+            created_by_membership_id=context.access.membership_id,
+            title=payload.follow_up.title,
+            description=payload.follow_up.description or payload.note,
+            due_at=payload.follow_up.due_at,
+            priority=payload.follow_up.priority,
+            status="open",
+            completed_at=None,
+        )
+        context.session.add(follow_up_item)
+        await context.session.flush()
+        context.session.add(AuditEvent(
+            tenant_id=context.access.tenant_id,
+            actor_kind="user",
+            actor_identity_id=context.access.identity_id,
+            actor_membership_id=context.access.membership_id,
+            action_key="crm_work_item.created",
+            target_type="crm_work_item",
+            target_key=str(follow_up_item.id),
+            organization_unit_id=campaign.organization_unit_id,
+            before_state=None,
+            after_state={
+                "campaign_id": str(campaign.id),
+                "title": follow_up_item.title,
+                "priority": follow_up_item.priority,
+                "status": follow_up_item.status,
+                "source": "campaign_readiness_review",
+            },
+            correlation_id=None,
+        ))
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign.readiness_reviewed",
+        target_type="crm_marketing_campaign_readiness_review",
+        target_key=str(campaign.id),
+        organization_unit_id=campaign.organization_unit_id,
+        before_state=None,
+        after_state={
+            "decision": payload.decision,
+            "note": payload.note,
+            "readiness": readiness.launch_readiness,
+            "check_statuses": {check.key: check.status for check in readiness.checks},
+            "follow_up_work_item_id": str(follow_up_item.id) if follow_up_item else None,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return await get_campaign_readiness(campaign_id=campaign_id, context=context)
