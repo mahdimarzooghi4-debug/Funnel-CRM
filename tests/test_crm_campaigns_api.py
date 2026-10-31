@@ -265,6 +265,38 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert refreshed_review["follow_up_status"] == "completed"
         assert refreshed_readiness.json()["open_work_item_count"] == 0
 
+        second_review = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
+            headers=headers,
+            json={
+                "decision": "request_changes",
+                "note": "Replace the campaign audience",
+                "follow_up": {"title": "Revise audience segment"},
+            },
+        )
+        assert second_review.status_code == 200, second_review.text
+        history_page = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-reviews",
+            headers=headers,
+            params={"limit": 1, "offset": 0},
+        )
+        assert history_page.status_code == 200, history_page.text
+        history_result = history_page.json()
+        assert history_result["total"] == 2
+        assert history_result["has_more"] is True
+        assert history_result["items"][0]["decision"] == "request_changes"
+        assert history_result["items"][0]["follow_up_status"] == "open"
+        earlier_history = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-reviews",
+            headers=headers,
+            params={"limit": 1, "offset": 1},
+        )
+        assert earlier_history.status_code == 200, earlier_history.text
+        earlier_result = earlier_history.json()
+        assert earlier_result["has_more"] is False
+        assert earlier_result["items"][0]["decision"] == "hold"
+        assert earlier_result["items"][0]["follow_up_status"] == "completed"
+
         marketing_consent = await client.post(
             f"/api/v1/crm/profiles/{profile_id}/communication-consents",
             headers=headers,
