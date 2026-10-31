@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -79,19 +80,11 @@ async def run_worker(
     try:
         while True:
             for tenant_id in tenant_ids:
-                try:
-                    customer = await customer_consumer.process_batch(tenant_id)
-                    commerce = await commerce_consumer.process_batch(tenant_id)
-                    if customer.claimed or commerce.claimed:
-                        logger.info(
-                            "Processed product events tenant=%s customer=%s commerce=%s",
-                            tenant_id,
-                            customer.processed,
-                            commerce.processed,
-                        )
-                except Exception:
-                    # One tenant or batch must not stop processing other configured tenants.
-                    logger.exception("Product event batch failed tenant=%s", tenant_id)
+                await process_tenant_batch(
+                    tenant_id,
+                    customer_consumer=customer_consumer,
+                    commerce_consumer=commerce_consumer,
+                )
             if once:
                 return
             await asyncio.sleep(poll_seconds)
