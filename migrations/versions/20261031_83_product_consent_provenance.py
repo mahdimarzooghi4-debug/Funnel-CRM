@@ -72,7 +72,7 @@ def upgrade() -> None:
                       AND id = integration_connection_value
                       AND source_product = NEW.source_product
                       AND allowed_event_types @> '["customer.communication_consent.changed"]'::jsonb
-                      AND contract_grants @> '[{"contract_name":"crm.customer.communication_consent","contract_version":1}]'::jsonb
+                      AND contract_grants @> jsonb_build_array(jsonb_build_object('contract_name', 'crm.customer.communication_consent', 'contract_version', 1))
                 ) THEN
                     RAISE EXCEPTION 'verified product connection context is required for consent events'
                         USING ERRCODE = '42501';
