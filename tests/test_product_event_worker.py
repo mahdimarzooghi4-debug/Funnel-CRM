@@ -7,20 +7,26 @@ import pytest
 
 from funnel_crm.platform.product_event_worker import (
     configured_poll_seconds,
-    configured_tenant_ids,
+    load_worker_tenant_ids,
     process_tenant_batch,
+    tenant_ids_from_registry,
 )
 
 
-def test_worker_requires_explicit_unique_workspace_scopes() -> None:
+def test_registry_tenant_ids_are_unique() -> None:
     tenant_id = UUID("11e54bf1-ecba-4bf6-9d02-6686d84a5d79")
-    assert configured_tenant_ids(f" {tenant_id} ") == (tenant_id,)
-    with pytest.raises(ValueError, match="must contain"):
-        configured_tenant_ids("")
-    with pytest.raises(ValueError, match="invalid UUID"):
-        configured_tenant_ids("not-a-uuid")
+    assert tenant_ids_from_registry([tenant_id]) == (tenant_id,)
     with pytest.raises(ValueError, match="duplicate"):
-        configured_tenant_ids(f"{tenant_id},{tenant_id}")
+        tenant_ids_from_registry([tenant_id, tenant_id])
+
+
+@pytest.mark.asyncio
+async def test_worker_registry_tracks_new_workspaces(
+    runtime_session_factory, tenant_case
+) -> None:
+    tenant_id = tenant_case["workspace_a"]
+    tenant_ids = await load_worker_tenant_ids(runtime_session_factory)
+    assert tenant_id in tenant_ids
 
 
 def test_worker_poll_interval_is_bounded() -> None:
