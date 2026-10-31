@@ -343,6 +343,7 @@ class CampaignPerformanceItem(BaseModel):
     actual_spend_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
     budget_consumption: CampaignBudgetConsumption
+    rate_bases: dict[str, dict[str, int]]
 
 
 class CampaignPerformancePortfolioRead(BaseModel):
@@ -433,6 +434,20 @@ async def get_campaign_performance_portfolio(
             denominator = sum(pair[1] for pair in paired)
             return round(100 * sum(pair[0] for pair in paired) / denominator, 4) if paired and denominator else None
 
+        def paired_totals(numerator_key: str, denominator_key: str) -> dict[str, int]:
+            paired = [
+                (getattr(row, numerator_key), getattr(row, denominator_key))
+                for row in rows
+                if getattr(row, numerator_key) is not None
+                and getattr(row, denominator_key) is not None
+            ]
+            if not paired:
+                return {}
+            return {
+                "numerator": sum(pair[0] for pair in paired),
+                "denominator": sum(pair[1] for pair in paired),
+            }
+
         spend_by_currency = currency_totals(rows, "actual_spend_amount", "actual_spend_currency")
         matching_spend = (
             spend_by_currency.get(campaign.planned_budget_currency)
@@ -478,6 +493,11 @@ async def get_campaign_performance_portfolio(
             actual_spend_by_currency=spend_by_currency,
             attributed_revenue_by_currency=currency_totals(rows, "attributed_revenue_amount", "attributed_revenue_currency"),
             budget_consumption=budget_consumption,
+            rate_bases={
+                "click_through_rate_percent": paired_totals("clicks", "impressions"),
+                "lead_rate_per_click_percent": paired_totals("leads", "clicks"),
+                "conversion_rate_per_click_percent": paired_totals("conversions", "clicks"),
+            },
         ))
 
     context.session.add(AuditEvent(
