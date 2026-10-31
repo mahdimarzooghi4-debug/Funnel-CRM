@@ -207,6 +207,31 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         assert report["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
         assert report["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
 
+        portfolio = await client.get(
+            "/api/v1/crm/campaigns/performance",
+            headers=headers,
+            params={"period_start": first_day.isoformat(), "period_end": second_day.isoformat()},
+        )
+        assert portfolio.status_code == 200, portfolio.text
+        portfolio_report = portfolio.json()
+        assert portfolio_report["campaign_count"] == 1
+        assert portfolio_report["measured_campaign_count"] == 1
+        item = portfolio_report["items"][0]
+        assert item["campaign_id"] == str(campaign_id)
+        assert item["planned_budget_amount"] == "500.000000"
+        assert item["record_count"] == 2
+        assert item["totals"]["conversions"] == 3
+        assert item["conversion_rate_per_click_percent"] == 4.0
+        assert item["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
+        assert item["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
+
+        too_long = await client.get(
+            "/api/v1/crm/campaigns/performance",
+            headers=headers,
+            params={"period_start": date(2025, 10, 16).isoformat(), "period_end": date(2026, 10, 17).isoformat()},
+        )
+        assert too_long.status_code == 422
+
         invalid = await client.put(
             f"/api/v1/crm/campaigns/{campaign_id}/measurements/{date(2026, 10, 18).isoformat()}",
             headers=headers,
