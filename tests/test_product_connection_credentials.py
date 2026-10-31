@@ -129,7 +129,7 @@ async def test_connection_credentials_are_tenant_scoped_restricted_and_revocable
         assert sync_health.json()["pending_total"] == 0
         assert sync_health.json()["behind_product_count"] == 0
         sync_item = sync_health.json()["items"][0]
-        assert sync_item["connection_id"] == connection_id
+        assert sync_item["connection_ids"] == [connection_id]
         assert sync_item["source_product"] == "funnel.store"
         assert sync_item["status"] == "in_sync"
         assert sync_item["produced_sequence"] == 0
