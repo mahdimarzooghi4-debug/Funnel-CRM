@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -212,6 +212,40 @@ async def ingest_product_event(
 
 
 
+def _record_product_consent_eligibility_access(
+    session, connection: VerifiedProductConnection, statuses: list[str]
+) -> None:
+    """Record aggregate product access without customer identifiers."""
+    from funnel_crm.platform.models import AuditEvent
+
+    session.add(
+        AuditEvent(
+            tenant_id=connection.tenant_id,
+            actor_kind="system",
+            actor_identity_id=None,
+            actor_membership_id=None,
+            action_key="integration.communication_eligibility.checked",
+            target_type="product_connection",
+            target_key=str(connection.connection_id),
+            before_state=None,
+            after_state={
+                "source_product": connection.source_product,
+                "check_count": len(statuses),
+                "granted_count": statuses.count("granted"),
+                "withdrawn_count": statuses.count("withdrawn"),
+                "unknown_count": statuses.count("unknown"),
+            },
+            correlation_id=uuid4(),
+        )
+    )
+
+
+def _audited_product_consent_result(session, connection, **values):
+    result = ProductConsentEligibilityResult(**values)
+    _record_product_consent_eligibility_access(session, connection, [result.status])
+    return result
+
+
 @router.post(
     "/communication-eligibility/check",
     operation_id="checkProductCommunicationEligibility",
@@ -277,7 +311,7 @@ async def check_product_communication_eligibility(
                 )
             )
             if identity is None:
-                return ProductConsentEligibilityResult(
+                return _audited_product_consent_result(session, connection,
                     status="unknown", allowed=False, decision=None,
                     consent_event_id=None, policy_version=None,
                     source_product=None, recorded_at=None
@@ -292,7 +326,7 @@ async def check_product_communication_eligibility(
                 )
             )
             if profile is None:
-                return ProductConsentEligibilityResult(
+                return _audited_product_consent_result(session, connection,
                     status="unknown", allowed=False, decision=None,
                     consent_event_id=None, policy_version=None,
                     source_product=None, recorded_at=None
@@ -313,12 +347,12 @@ async def check_product_communication_eligibility(
                 .limit(1)
             )
             if latest is None:
-                return ProductConsentEligibilityResult(
+                return _audited_product_consent_result(session, connection,
                     status="unknown", allowed=False, decision=None,
                     consent_event_id=None, policy_version=None,
                     source_product=None, recorded_at=None
                 )
-            return ProductConsentEligibilityResult(
+            return _audited_product_consent_result(session, connection,
                 status=latest.decision,
                 allowed=latest.decision == "granted",
                 decision=latest.decision,
@@ -519,4 +553,7 @@ async def check_product_communication_eligibility_batch(
                         **result.model_dump(),
                     )
                 )
+            _record_product_consent_eligibility_access(
+                session, connection, [result.status for result in results]
+            )
             return ProductConsentEligibilityBatchResult(checks=results)
