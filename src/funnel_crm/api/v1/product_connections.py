@@ -7,12 +7,17 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import has_crm_permission
 from funnel_crm.platform.integration_auth import issue_product_credential
-from funnel_crm.platform.models import AuditEvent, ProductConnection, Workspace
+from funnel_crm.platform.models import (
+    AuditEvent,
+    ProductConnection,
+    ProductConnectionCredential,
+    Workspace,
+)
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
 router = APIRouter(prefix="/integrations/connections", tags=["product connections"])
@@ -59,7 +64,14 @@ class ProductConnectionRead(BaseModel):
 
 
 class ProductConnectionCreated(ProductConnectionRead):
+    credential_id: UUID
     credential: str
+
+
+class ProductConnectionCredentialRead(BaseModel):
+    credential_id: UUID
+    created_at: datetime
+    revoked_at: datetime | None
 
 
 async def _require_manage(context: TenantSessionContext) -> UUID:
@@ -146,6 +158,14 @@ async def create_product_connection(
         contract_grants=[grant.model_dump() for grant in payload.contract_grants],
     )
     context.session.add(connection)
+    context.session.add(
+        ProductConnectionCredential(
+            tenant_id=context.access.tenant_id,
+            credential_id=credential_id,
+            connection_id=connection.id,
+            credential_digest=digest,
+        )
+    )
     await context.session.flush()
     _audit(
         context,
@@ -156,6 +176,7 @@ async def create_product_connection(
     await context.session.flush()
     return ProductConnectionCreated(
         **_read(connection).model_dump(),
+        credential_id=credential_id,
         credential=raw_credential,
     )
 
@@ -205,10 +226,15 @@ async def rotate_product_connection_credential(
     if connection.revoked_at is not None:
         raise HTTPException(status_code=409, detail="A revoked product connection cannot be rotated")
 
-    previous_credential_id = connection.credential_id
     credential_id, digest, raw_credential = issue_product_credential()
-    connection.credential_id = credential_id
-    connection.credential_digest = digest
+    context.session.add(
+        ProductConnectionCredential(
+            tenant_id=context.access.tenant_id,
+            credential_id=credential_id,
+            connection_id=connection.id,
+            credential_digest=digest,
+        )
+    )
     await context.session.flush()
     context.session.add(
         AuditEvent(
@@ -220,7 +246,7 @@ async def rotate_product_connection_credential(
             target_type="product_connection",
             target_key=str(connection.id),
             organization_unit_id=root_id,
-            before_state={"credential_id": str(previous_credential_id)},
+            before_state=None,
             after_state={"credential_id": str(credential_id)},
             correlation_id=None,
         )
@@ -228,8 +254,124 @@ async def rotate_product_connection_credential(
     await context.session.flush()
     return ProductConnectionCreated(
         **_read(connection).model_dump(),
+        credential_id=credential_id,
         credential=raw_credential,
     )
+
+
+
+@router.get(
+    "/{connection_id}/credentials",
+    response_model=list[ProductConnectionCredentialRead],
+    operation_id="listProductConnectionCredentials",
+    summary="List credential IDs and revocation state without exposing secrets",
+)
+async def list_product_connection_credentials(
+    connection_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> list[ProductConnectionCredentialRead]:
+    await _require_manage(context)
+    connection = await context.session.scalar(
+        select(ProductConnection.id).where(
+            ProductConnection.tenant_id == context.access.tenant_id,
+            ProductConnection.id == connection_id,
+        )
+    )
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Product connection not found")
+    rows = (
+        await context.session.scalars(
+            select(ProductConnectionCredential)
+            .where(
+                ProductConnectionCredential.tenant_id == context.access.tenant_id,
+                ProductConnectionCredential.connection_id == connection_id,
+            )
+            .order_by(
+                ProductConnectionCredential.created_at,
+                ProductConnectionCredential.credential_id,
+            )
+        )
+    ).all()
+    return [
+        ProductConnectionCredentialRead(
+            credential_id=row.credential_id,
+            created_at=row.created_at,
+            revoked_at=row.revoked_at,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/{connection_id}/credentials/{credential_id}/revoke",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="revokeProductConnectionCredential",
+    summary="Revoke one credential while preserving another active credential",
+)
+async def revoke_product_connection_credential(
+    connection_id: UUID,
+    credential_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> None:
+    root_id = await _require_manage(context)
+    connection = await context.session.scalar(
+        select(ProductConnection)
+        .where(
+            ProductConnection.tenant_id == context.access.tenant_id,
+            ProductConnection.id == connection_id,
+        )
+        .with_for_update()
+    )
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Product connection not found")
+    if connection.revoked_at is not None:
+        raise HTTPException(status_code=409, detail="Product connection is already revoked")
+
+    credential = await context.session.scalar(
+        select(ProductConnectionCredential)
+        .where(
+            ProductConnectionCredential.tenant_id == context.access.tenant_id,
+            ProductConnectionCredential.connection_id == connection_id,
+            ProductConnectionCredential.credential_id == credential_id,
+        )
+        .with_for_update()
+    )
+    if credential is None:
+        raise HTTPException(status_code=404, detail="Product credential not found")
+    if credential.revoked_at is not None:
+        return
+
+    active_count = await context.session.scalar(
+        select(func.count(ProductConnectionCredential.credential_id)).where(
+            ProductConnectionCredential.tenant_id == context.access.tenant_id,
+            ProductConnectionCredential.connection_id == connection_id,
+            ProductConnectionCredential.revoked_at.is_(None),
+        )
+    )
+    if active_count is not None and active_count <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail="At least one active product credential must remain",
+        )
+
+    credential.revoked_at = datetime.now(timezone.utc)
+    await context.session.flush()
+    context.session.add(
+        AuditEvent(
+            tenant_id=context.access.tenant_id,
+            actor_kind="user",
+            actor_identity_id=context.access.identity_id,
+            actor_membership_id=context.access.membership_id,
+            action_key="product_connection.credential_revoked",
+            target_type="product_connection_credential",
+            target_key=str(credential.credential_id),
+            organization_unit_id=root_id,
+            before_state={"revoked": False},
+            after_state={"revoked": True, "connection_id": str(connection_id)},
+            correlation_id=None,
+        )
+    )
+    await context.session.flush()
 
 
 @router.post(
