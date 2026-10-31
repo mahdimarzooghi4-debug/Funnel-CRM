@@ -223,6 +223,14 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         assert item["totals"]["conversions"] == 3
         assert item["conversion_rate_per_click_percent"] == 4.0
         assert item["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
+        assert item["budget_consumption"] == {
+            "planned_amount": "500.000000",
+            "currency": "USD",
+            "measured_spend_in_budget_currency": "20.000000",
+            "remaining_amount": "480.000000",
+            "consumed_percent": 4.0,
+            "spend_in_other_currencies": {"EUR": "10.000000"},
+        }
         assert item["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
 
         comparison = await client.get(

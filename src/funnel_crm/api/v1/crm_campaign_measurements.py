@@ -316,6 +316,15 @@ async def get_campaign_measurement_summary(
     )
 
 
+class CampaignBudgetConsumption(BaseModel):
+    planned_amount: Decimal | None
+    currency: str | None
+    measured_spend_in_budget_currency: Decimal | None
+    remaining_amount: Decimal | None
+    consumed_percent: float | None
+    spend_in_other_currencies: dict[str, Decimal]
+
+
 class CampaignPerformanceItem(BaseModel):
     campaign_id: UUID
     name: str
@@ -333,6 +342,7 @@ class CampaignPerformanceItem(BaseModel):
     conversion_rate_per_click_percent: float | None
     actual_spend_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
+    budget_consumption: CampaignBudgetConsumption
 
 
 class CampaignPerformancePortfolioRead(BaseModel):
@@ -423,6 +433,33 @@ async def get_campaign_performance_portfolio(
             denominator = sum(pair[1] for pair in paired)
             return round(100 * sum(pair[0] for pair in paired) / denominator, 4) if paired and denominator else None
 
+        spend_by_currency = currency_totals(rows, "actual_spend_amount", "actual_spend_currency")
+        matching_spend = (
+            spend_by_currency.get(campaign.planned_budget_currency)
+            if campaign.planned_budget_currency is not None
+            else None
+        )
+        remaining_budget = (
+            campaign.planned_budget_amount - matching_spend
+            if campaign.planned_budget_amount is not None and matching_spend is not None
+            else None
+        )
+        budget_consumption = CampaignBudgetConsumption(
+            planned_amount=campaign.planned_budget_amount,
+            currency=campaign.planned_budget_currency,
+            measured_spend_in_budget_currency=matching_spend,
+            remaining_amount=remaining_budget,
+            consumed_percent=(
+                round(float(100 * matching_spend / campaign.planned_budget_amount), 4)
+                if matching_spend is not None and campaign.planned_budget_amount not in (None, Decimal("0"))
+                else None
+            ),
+            spend_in_other_currencies={
+                currency: amount
+                for currency, amount in spend_by_currency.items()
+                if currency != campaign.planned_budget_currency
+            },
+        )
         items.append(CampaignPerformanceItem(
             campaign_id=campaign.id,
             name=campaign.name,
@@ -438,8 +475,9 @@ async def get_campaign_performance_portfolio(
             click_through_rate_percent=paired_rate("clicks", "impressions"),
             lead_rate_per_click_percent=paired_rate("leads", "clicks"),
             conversion_rate_per_click_percent=paired_rate("conversions", "clicks"),
-            actual_spend_by_currency=currency_totals(rows, "actual_spend_amount", "actual_spend_currency"),
+            actual_spend_by_currency=spend_by_currency,
             attributed_revenue_by_currency=currency_totals(rows, "attributed_revenue_amount", "attributed_revenue_currency"),
+            budget_consumption=budget_consumption,
         ))
 
     context.session.add(AuditEvent(
