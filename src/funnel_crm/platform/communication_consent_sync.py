@@ -215,6 +215,21 @@ class PostgresProductConsentEventConsumer:
                 )
                 consent_event_id = await session.scalar(statement)
                 if consent_event_id is None:
+                    existing = await session.scalar(
+                        select(CRMCommunicationConsentEvent).where(
+                            CRMCommunicationConsentEvent.tenant_id == event.tenant_id,
+                            CRMCommunicationConsentEvent.source_product == event.source_product,
+                            CRMCommunicationConsentEvent.source_event_id == event.event_id,
+                        )
+                    )
+                    if existing is None or (
+                        existing.profile_id != identity.profile_id
+                        or existing.purpose_key != payload.purpose_key
+                        or existing.channel != payload.channel
+                        or existing.decision != payload.decision
+                        or existing.policy_version != payload.policy_version
+                    ):
+                        raise ConsentSyncError("crm.consent.source_event_conflict")
                     return False
 
                 return True
