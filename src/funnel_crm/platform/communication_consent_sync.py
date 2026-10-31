@@ -17,7 +17,6 @@ from funnel_crm.platform.integration_processing import (
     PostgresProductEventProcessor,
 )
 from funnel_crm.platform.models import (
-    AuditEvent,
     CRMCommunicationConsentEvent,
     CRMProfile,
     ProductCustomerIdentity,
@@ -218,26 +217,4 @@ class PostgresProductConsentEventConsumer:
                 if consent_event_id is None:
                     return False
 
-                session.add(
-                    AuditEvent(
-                        tenant_id=event.tenant_id,
-                        actor_kind="system",
-                        actor_identity_id=None,
-                        actor_membership_id=None,
-                        action_key="integration.communication_consent.recorded",
-                        target_type="crm_communication_consent",
-                        target_key=str(consent_event_id),
-                        organization_unit_id=profile.organization_unit_id,
-                        before_state=None,
-                        after_state={
-                            "source_product": event.source_product,
-                            "source_event_id": str(event.event_id),
-                            "purpose_key": payload.purpose_key,
-                            "channel": payload.channel,
-                            "decision": payload.decision,
-                            "policy_version": payload.policy_version,
-                        },
-                        correlation_id=event.correlation_id,
-                    )
-                )
                 return True
