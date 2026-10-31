@@ -63,6 +63,21 @@ def configured_poll_seconds(raw: str | None = None) -> float:
     return seconds
 
 
+
+def configured_tenant_concurrency(raw: str | None = None) -> int:
+    """Return the bounded number of Workspaces processed concurrently."""
+    value = raw if raw is not None else os.environ.get(
+        "FUNNEL_CRM_EVENT_WORKER_TENANT_CONCURRENCY", "4"
+    )
+    try:
+        concurrency = int(value)
+    except ValueError as exc:
+        raise ValueError("worker tenant concurrency must be an integer") from exc
+    if not 1 <= concurrency <= 32:
+        raise ValueError("worker tenant concurrency must be between 1 and 32")
+    return concurrency
+
+
 async def process_tenant_batch(
     tenant_id: UUID,
     *,
@@ -100,11 +115,38 @@ async def process_tenant_batch(
         )
 
 
+
+async def process_tenant_batches(
+    tenant_ids: Iterable[UUID],
+    *,
+    concurrency: int,
+    customer_consumer: Any,
+    commerce_consumer: Any,
+    legacy_commerce_consumer: Any,
+) -> None:
+    """Process tenant batches concurrently with a hard in-process bound."""
+    if not 1 <= concurrency <= 32:
+        raise ValueError("worker tenant concurrency must be between 1 and 32")
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def process_one(tenant_id: UUID) -> None:
+        async with semaphore:
+            await process_tenant_batch(
+                tenant_id,
+                customer_consumer=customer_consumer,
+                commerce_consumer=commerce_consumer,
+                legacy_commerce_consumer=legacy_commerce_consumer,
+            )
+
+    await asyncio.gather(*(process_one(tenant_id) for tenant_id in tenant_ids))
+
+
 async def run_worker(
     *,
     poll_seconds: float,
     database_url: str,
     once: bool = False,
+    tenant_concurrency: int = 4,
 ) -> None:
     """Process CRM customer and commerce events for all registered workspaces."""
     payload_keyring = IntegrationPayloadKeyring.from_environment()
@@ -134,13 +176,13 @@ async def run_worker(
                     type(exc).__name__,
                 )
                 tenant_ids = ()
-            for tenant_id in tenant_ids:
-                await process_tenant_batch(
-                    tenant_id,
-                    customer_consumer=customer_consumer,
-                    commerce_consumer=commerce_consumer,
-                    legacy_commerce_consumer=legacy_commerce_consumer,
-                )
+            await process_tenant_batches(
+                tenant_ids,
+                concurrency=tenant_concurrency,
+                customer_consumer=customer_consumer,
+                commerce_consumer=commerce_consumer,
+                legacy_commerce_consumer=legacy_commerce_consumer,
+            )
             if once:
                 return
             await asyncio.sleep(poll_seconds)
@@ -156,6 +198,7 @@ async def main() -> None:
     await run_worker(
         poll_seconds=configured_poll_seconds(),
         database_url=database_url,
+        tenant_concurrency=configured_tenant_concurrency(),
         once=os.environ.get("FUNNEL_CRM_EVENT_WORKER_ONCE", "").lower()
         in {"1", "true", "yes"},
     )
