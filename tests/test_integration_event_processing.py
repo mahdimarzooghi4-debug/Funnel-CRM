@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -110,6 +111,55 @@ async def test_processor_claims_with_tenant_scope_and_completes_once(
         assert row.lease_token is None
 
 
+
+
+@pytest.mark.asyncio
+async def test_processor_renews_live_claims_while_batch_is_running(
+    runtime_session_factory, tenant_case
+) -> None:
+    tenant_id = tenant_case["workspace_a"]
+    identity = tenant_case["identity"]
+    assert isinstance(tenant_id, UUID)
+    assert isinstance(identity, AuthenticatedIdentity)
+    connection = VerifiedProductConnection(
+        connection_id=uuid4(),
+        tenant_id=tenant_id,
+        source_product="funnel.store",
+        allowed_event_types=frozenset({"order.created"}),
+        supported_contract_versions=frozenset({("commerce.order", 1)}),
+    )
+    app = create_event_app(connection, runtime_session_factory)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        event_id = await send_event(client, tenant_id)
+
+    processor = PostgresProductEventProcessor(
+        runtime_session_factory,
+        lease_seconds=3,
+        keyring=app.state.integration_payload_keyring,
+    )
+    claim = (await processor.claim(tenant_id))[0]
+    async with processor.maintain_claims(tenant_id, [claim]):
+        await asyncio.sleep(1.2)
+        async with tenant_session(
+            runtime_session_factory,
+            requested_tenant_id=tenant_id,
+            identity=identity,
+        ) as context:
+            row = await context.session.scalar(
+                select(IntegrationEventInbox).where(
+                    IntegrationEventInbox.tenant_id == tenant_id,
+                    IntegrationEventInbox.event_id == event_id,
+                )
+            )
+            assert row is not None
+            assert row.lease_until is not None
+            assert row.lease_until > claim.lease_until
+        assert await processor.claim(tenant_id) == []
+
+    await processor.complete(tenant_id, claim.id, lease_token=claim.lease_token)
+
 @pytest.mark.asyncio
 async def test_processor_recovers_expired_lease_and_bounds_retries(
     runtime_session_factory, tenant_case
@@ -150,6 +200,13 @@ async def test_processor_recovers_expired_lease_and_bounds_retries(
             update(IntegrationEventInbox)
             .where(IntegrationEventInbox.id == first.id)
             .values(lease_until=datetime.now(timezone.utc) - timedelta(seconds=1))
+        )
+
+    with pytest.raises(LeaseLostError):
+        await processor.renew_lease(
+            tenant_id,
+            first.id,
+            lease_token=first.lease_token,
         )
 
     second = (await processor.claim(tenant_id))[0]

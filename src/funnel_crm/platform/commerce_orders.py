@@ -92,27 +92,36 @@ class PostgresCommerceOrderEventConsumer:
             contract_version=1,
         )
         processed = duplicate = failed = retry_scheduled = 0
-        for claim in claims:
-            try:
-                inserted = await self.consume(claim)
-            except (CommerceOrderEventError, LeaseLostError):
-                failed += 1
-            except Exception:
+        async with self._processor.maintain_claims(tenant_id, claims):
+            for claim in claims:
                 try:
-                    result = await self._processor.fail(
+                    await self._processor.renew_lease(
                         tenant_id,
                         claim.id,
                         lease_token=claim.lease_token,
-                        error_code="commerce_order.processing_error",
-                        retryable=True,
                     )
                 except LeaseLostError:
-                    result = None
-                failed += 1
-                retry_scheduled += result is not None and result.status == "received"
-            else:
-                processed += 1
-                duplicate += not inserted
+                    continue
+                try:
+                    inserted = await self.consume(claim)
+                except (CommerceOrderEventError, LeaseLostError):
+                    failed += 1
+                except Exception:
+                    try:
+                        result = await self._processor.fail(
+                            tenant_id,
+                            claim.id,
+                            lease_token=claim.lease_token,
+                            error_code="commerce_order.processing_error",
+                            retryable=True,
+                        )
+                    except LeaseLostError:
+                        result = None
+                    failed += 1
+                    retry_scheduled += result is not None and result.status == "received"
+                else:
+                    processed += 1
+                    duplicate += not inserted
         return CommerceOrderBatchResult(
             claimed=len(claims),
             processed=processed,

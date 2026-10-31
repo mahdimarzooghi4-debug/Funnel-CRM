@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.integration_processing import (
+    LeaseLostError,
     ClaimedIntegrationEvent,
     PostgresProductEventProcessor,
 )
@@ -97,28 +98,37 @@ class PostgresProductCommerceEventConsumer:
                 contract_name="crm.commerce.order", contract_version=1,
             ))
         processed = failed = retry_scheduled = 0
-        for event in events:
-            try:
-                await self._process_one(event)
-            except CommerceSyncError as exc:
-                result = await self._processor.fail(
-                    tenant_id, event.id, lease_token=event.lease_token,
-                    error_code=exc.code, retryable=exc.retryable,
-                )
-                failed += 1
-                retry_scheduled += result.status == "received"
-            except Exception:
-                result = await self._processor.fail(
-                    tenant_id, event.id, lease_token=event.lease_token,
-                    error_code="crm.commerce.processing_error", retryable=True,
-                )
-                failed += 1
-                retry_scheduled += result.status == "received"
-            else:
-                await self._processor.complete(
-                    tenant_id, event.id, lease_token=event.lease_token
-                )
-                processed += 1
+        async with self._processor.maintain_claims(tenant_id, events):
+            for event in events:
+                try:
+                    await self._processor.renew_lease(
+                        tenant_id,
+                        event.id,
+                        lease_token=event.lease_token,
+                    )
+                except LeaseLostError:
+                    continue
+                try:
+                    await self._process_one(event)
+                except CommerceSyncError as exc:
+                    result = await self._processor.fail(
+                        tenant_id, event.id, lease_token=event.lease_token,
+                        error_code=exc.code, retryable=exc.retryable,
+                    )
+                    failed += 1
+                    retry_scheduled += result.status == "received"
+                except Exception:
+                    result = await self._processor.fail(
+                        tenant_id, event.id, lease_token=event.lease_token,
+                        error_code="crm.commerce.processing_error", retryable=True,
+                    )
+                    failed += 1
+                    retry_scheduled += result.status == "received"
+                else:
+                    await self._processor.complete(
+                        tenant_id, event.id, lease_token=event.lease_token
+                    )
+                    processed += 1
         return CommerceSyncBatchResult(
             claimed=len(events), processed=processed, failed=failed,
             retry_scheduled=retry_scheduled,
