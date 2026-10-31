@@ -249,6 +249,13 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert review_result["open_work_item_count"] == 1
         assert review_result["latest_manager_review"]["follow_up_status"] == "open"
         assert review_result["launch_readiness"] == "needs_attention"
+        held_schedule = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/lifecycle",
+            headers=headers,
+            json={"action": "schedule"},
+        )
+        assert held_schedule.status_code == 409
+        assert "manager decision" in held_schedule.json()["detail"]
         completed_task = await client.patch(
             f"/api/v1/crm/work-items/{follow_up_id}",
             headers=headers,
