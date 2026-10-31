@@ -34,6 +34,13 @@ class CampaignReadinessCheck(BaseModel):
     explanation: str
 
 
+class CampaignManagerReview(BaseModel):
+    decision: Literal["proceed_to_schedule", "request_changes", "hold"]
+    note: str | None
+    reviewed_by_identity_id: UUID | None
+    reviewed_at: datetime
+
+
 class CampaignReadinessResponse(BaseModel):
     campaign_id: UUID
     campaign_name: str
@@ -63,13 +70,6 @@ class CampaignReadinessPortfolioResponse(BaseModel):
     needs_attention_count: int
     attention_by_check: dict[str, int]
     items: list[CampaignReadinessResponse]
-
-class CampaignManagerReview(BaseModel):
-    decision: Literal["proceed_to_schedule", "request_changes", "hold"]
-    note: str | None
-    reviewed_by_identity_id: UUID | None
-    reviewed_at: datetime
-
 
 class CampaignReadinessReviewDecision(BaseModel):
     decision: Literal["proceed_to_schedule", "request_changes", "hold"]
