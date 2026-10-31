@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -10,7 +11,11 @@ from fastapi import FastAPI
 from sqlalchemy import func, select
 
 from funnel_crm.api.v1.integrations import VerifiedProductConnection, router
-from funnel_crm.platform.commerce_event_sync import PostgresProductCommerceEventConsumer
+from funnel_crm.platform.commerce_event_sync import (
+    CommerceSyncError,
+    PostgresProductCommerceEventConsumer,
+)
+from funnel_crm.platform.integration_processing import ClaimedIntegrationEvent
 from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.models import (
     AuditEvent,
@@ -174,6 +179,61 @@ async def test_paid_and_refunded_product_events_become_real_crm_commerce_facts(
         assert all("order_reference" not in audit.after_state for audit in audits)
         assert all("amount" not in audit.after_state for audit in audits)
 
+        paid_occurred_at = next(
+            fact.occurred_at for fact in facts if fact.event_kind == "paid"
+        )
+
+    replay = ClaimedIntegrationEvent(
+        id=uuid4(),
+        tenant_id=tenant_id,
+        connection_id=connection.connection_id,
+        event_id=paid_id,
+        source_product="funnel.store",
+        event_type="commerce.order.paid",
+        contract_name="crm.commerce.order",
+        contract_version=1,
+        correlation_id=uuid4(),
+        occurred_at=paid_occurred_at,
+        payload={
+            "external_customer_id": "store-customer-71",
+            "order_reference": "order-71",
+            "amount": "129.500000",
+            "currency": "USD",
+        },
+        attempt_count=2,
+        lease_token=uuid4(),
+        lease_until=datetime.now(timezone.utc),
+    )
+    await consumer._process_one(replay)
+    with pytest.raises(CommerceSyncError, match="source_event_conflict"):
+        await consumer._process_one(
+            replace(replay, payload={**replay.payload, "amount": "130.000000"})
+        )
+
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        unchanged_facts = await context.session.scalar(
+            select(func.count()).select_from(CRMProductCommerceEvent).where(
+                CRMProductCommerceEvent.tenant_id == tenant_id
+            )
+        )
+        unchanged_audits = await context.session.scalar(
+            select(func.count()).select_from(AuditEvent).where(
+                AuditEvent.tenant_id == tenant_id,
+                AuditEvent.action_key == "integration.commerce.order_recorded",
+            )
+        )
+        assert unchanged_facts == 2
+        assert unchanged_audits == 2
+
         # Keep the shared tenant fixture clean: commerce facts reference profiles.
-        for fact in facts:
+        persisted_facts = (
+            await context.session.scalars(
+                select(CRMProductCommerceEvent).where(
+                    CRMProductCommerceEvent.tenant_id == tenant_id
+                )
+            )
+        ).all()
+        for fact in persisted_facts:
             await context.session.delete(fact)
