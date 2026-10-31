@@ -1398,7 +1398,7 @@ class CRMCommunicationConsentEvent(Base):
     __tablename__ = "crm_communication_consent_events"
     __table_args__ = (
         CheckConstraint(
-            "purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}"+chr(36)+"'",
+            "purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}$'",
             name="ck_crm_consent_purpose_key",
         ),
         CheckConstraint(
@@ -1418,7 +1418,11 @@ class CRMCommunicationConsentEvent(Base):
             name="ck_crm_consent_source_pair",
         ),
         CheckConstraint(
-            "source_product IS NULL OR source_product ~ '^[a-z0-9][a-z0-9._-]{1,79}
+            "source_product IS NULL OR source_product ~ '^[a-z0-9][a-z0-9._-]{1,79}$'",
+            name="ck_crm_consent_source_product",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "profile_id"],
             ["crm_profiles.tenant_id", "crm_profiles.id"],
             name="fk_crm_consent_profile_same_tenant",
             ondelete="CASCADE",
@@ -1454,39 +1458,6 @@ class CRMCommunicationConsentEvent(Base):
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
     )
-
-
-",
-            name="ck_crm_consent_source_product",
-        ),
-        ForeignKeyConstraint(
-            ["tenant_id", "profile_id"],
-            ["crm_profiles.tenant_id", "crm_profiles.id"],
-            name="fk_crm_consent_profile_same_tenant",
-            ondelete="CASCADE",
-        ),
-        Index(
-            "ix_crm_consent_latest_by_scope",
-            "tenant_id",
-            "profile_id",
-            "purpose_key",
-            "channel",
-            "recorded_at",
-            "id",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    profile_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    purpose_key: Mapped[str] = mapped_column(String(80), nullable=False)
-    channel: Mapped[str] = mapped_column(String(32), nullable=False)
-    decision: Mapped[str] = mapped_column(String(16), nullable=False)
-    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    recorded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
-    )
-
 
 
 class ProductCustomerIdentity(Base):
