@@ -36,7 +36,7 @@ class CampaignReadinessCheck(BaseModel):
 
 
 class CampaignManagerReview(BaseModel):
-    decision: Literal["proceed_to_schedule", "request_changes", "hold"]
+    decision: Literal["proceed_to_schedule", "proceed_to_launch", "request_changes", "hold"]
     note: str | None
     reviewed_by_identity_id: UUID | None
     reviewed_at: datetime
@@ -65,7 +65,7 @@ class CampaignReadinessResponse(BaseModel):
 
 
 class CampaignReadinessReviewHistoryItem(BaseModel):
-    decision: Literal["proceed_to_schedule", "request_changes", "hold"]
+    decision: Literal["proceed_to_schedule", "proceed_to_launch", "request_changes", "hold"]
     note: str | None
     reviewed_by_identity_id: UUID | None
     reviewed_at: datetime
@@ -130,7 +130,7 @@ class CampaignReadinessFollowUp(BaseModel):
 
 
 class CampaignReadinessReviewDecision(BaseModel):
-    decision: Literal["proceed_to_schedule", "request_changes", "hold"]
+    decision: Literal["proceed_to_schedule", "proceed_to_launch", "request_changes", "hold"]
     note: str | None = Field(default=None, max_length=1000)
     follow_up: CampaignReadinessFollowUp | None = None
 
@@ -152,6 +152,26 @@ class CampaignReadinessReviewDecision(BaseModel):
         if not needs_follow_up and self.follow_up is not None:
             raise ValueError("follow_up is only valid for request_changes and hold decisions")
         return self
+
+
+def _campaign_readiness_basis(
+    campaign: CRMMarketingCampaign,
+    readiness: CampaignReadinessResponse,
+) -> dict[str, object]:
+    return {
+        "campaign_status": campaign.status,
+        "campaign_updated_at": campaign.updated_at.isoformat(),
+        "segment_id": str(campaign.segment_id),
+        "channel": campaign.channel,
+        "communication_purpose_key": campaign.communication_purpose_key,
+        "starts_at": campaign.starts_at.isoformat() if campaign.starts_at else None,
+        "ends_at": campaign.ends_at.isoformat() if campaign.ends_at else None,
+        "asset_counts": readiness.asset_counts,
+        "checks": {
+            check.key: {"status": check.status, "count": check.count}
+            for check in readiness.checks
+        },
+    }
 
 
 @router.get(
@@ -265,8 +285,8 @@ async def get_campaign_readiness(
         organization_unit_id=campaign.organization_unit_id,
     ):
         raise HTTPException(status_code=403, detail="Campaign readiness is not authorized for this organization scope")
-    if campaign.status != "draft":
-        raise HTTPException(status_code=409, detail="Readiness review is available for draft campaigns")
+    if campaign.status not in {"draft", "scheduled"}:
+        raise HTTPException(status_code=409, detail="Readiness review is available for draft or scheduled campaigns")
     purpose_key = campaign.communication_purpose_key
 
     active_segment = await context.session.scalar(
@@ -504,6 +524,12 @@ async def record_campaign_readiness_review(
         organization_unit_id=campaign.organization_unit_id,
     ):
         raise HTTPException(status_code=403, detail="Campaign review is not authorized for this organization scope")
+    if campaign.status not in {"draft", "scheduled"}:
+        raise HTTPException(status_code=409, detail="Readiness decisions are available for draft or scheduled campaigns")
+    if payload.decision == "proceed_to_schedule" and campaign.status != "draft":
+        raise HTTPException(status_code=409, detail="A campaign must be draft to approve scheduling")
+    if payload.decision == "proceed_to_launch" and campaign.status != "scheduled":
+        raise HTTPException(status_code=409, detail="A campaign must be scheduled to approve activation")
     if payload.follow_up is not None:
         if not await has_crm_permission(
             context,
@@ -522,19 +548,7 @@ async def record_campaign_readiness_review(
             if active_assignee is None:
                 raise HTTPException(status_code=422, detail="Follow-up assignee must be an active workspace member")
     readiness = await get_campaign_readiness(campaign_id=campaign_id, context=context)
-    readiness_basis = {
-        "campaign_updated_at": campaign.updated_at.isoformat(),
-        "segment_id": str(campaign.segment_id),
-        "channel": campaign.channel,
-        "communication_purpose_key": campaign.communication_purpose_key,
-        "starts_at": campaign.starts_at.isoformat() if campaign.starts_at else None,
-        "ends_at": campaign.ends_at.isoformat() if campaign.ends_at else None,
-        "asset_counts": readiness.asset_counts,
-        "checks": {
-            check.key: {"status": check.status, "count": check.count}
-            for check in readiness.checks
-        },
-    }
+    readiness_basis = _campaign_readiness_basis(campaign, readiness)
     follow_up_item = None
     if payload.follow_up is not None:
         follow_up_item = CRMWorkItem(
