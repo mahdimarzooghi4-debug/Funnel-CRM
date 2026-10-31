@@ -470,3 +470,143 @@ async def get_campaign_performance_portfolio(
         items=items,
         truncated=truncated,
     )
+
+
+class CampaignMetricComparison(BaseModel):
+    current_value: float | None
+    previous_value: float | None
+    delta: float | None
+    change_percent: float | None
+
+
+class CampaignPerformanceComparisonItem(BaseModel):
+    campaign_id: UUID
+    name: str
+    current: CampaignPerformanceItem
+    previous: CampaignPerformanceItem
+    count_metrics: dict[str, CampaignMetricComparison]
+    rate_metrics: dict[str, CampaignMetricComparison]
+    spend_by_currency: dict[str, CampaignMetricComparison]
+    revenue_by_currency: dict[str, CampaignMetricComparison]
+
+
+class CampaignPerformanceComparisonRead(BaseModel):
+    current_period_start: date
+    current_period_end: date
+    previous_period_start: date
+    previous_period_end: date
+    period_days: int
+    campaign_count: int
+    items: list[CampaignPerformanceComparisonItem]
+    truncated: bool
+
+
+def _metric_comparison(current: float | None, previous: float | None) -> CampaignMetricComparison:
+    if current is None or previous is None:
+        return CampaignMetricComparison(
+            current_value=current, previous_value=previous, delta=None, change_percent=None
+        )
+    delta = current - previous
+    return CampaignMetricComparison(
+        current_value=current,
+        previous_value=previous,
+        delta=delta,
+        change_percent=round(100 * delta / previous, 4) if previous != 0 else None,
+    )
+
+
+@router.get(
+    "/performance/compare",
+    response_model=CampaignPerformanceComparisonRead,
+    operation_id="compareCRMMarketingCampaignPerformancePeriods",
+    summary="Compare equal-length campaign performance periods",
+)
+async def compare_campaign_performance_periods(
+    current_start: date = Query(...),
+    current_end: date = Query(...),
+    previous_start: date = Query(...),
+    previous_end: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignPerformanceComparisonRead:
+    if current_start > current_end or previous_start > previous_end:
+        raise HTTPException(status_code=422, detail="Each period start must not be after its end")
+    current_days = (current_end - current_start).days
+    previous_days = (previous_end - previous_start).days
+    if current_days > 365 or previous_days > 365:
+        raise HTTPException(status_code=422, detail="Each comparison period is limited to 366 calendar days")
+    if current_days != previous_days:
+        raise HTTPException(status_code=422, detail="Comparison periods must have equal lengths")
+
+    current = await get_campaign_performance_portfolio(
+        period_start=current_start, period_end=current_end, context=context
+    )
+    previous = await get_campaign_performance_portfolio(
+        period_start=previous_start, period_end=previous_end, context=context
+    )
+    current_by_id = {item.campaign_id: item for item in current.items}
+    previous_by_id = {item.campaign_id: item for item in previous.items}
+    count_keys = (
+        "impressions", "reach", "clicks", "responses", "leads", "conversions",
+        "assigned_count", "exposure_count", "return_count",
+    )
+    rate_keys = (
+        "click_through_rate_percent", "lead_rate_per_click_percent",
+        "conversion_rate_per_click_percent",
+    )
+    items: list[CampaignPerformanceComparisonItem] = []
+    for campaign_id in current_by_id.keys() | previous_by_id.keys():
+        current_item = current_by_id.get(campaign_id)
+        previous_item = previous_by_id.get(campaign_id)
+        item = current_item or previous_item
+        assert item is not None
+        current_counts = current_item.totals if current_item else {}
+        previous_counts = previous_item.totals if previous_item else {}
+        current_rates = current_item.model_dump() if current_item else {}
+        previous_rates = previous_item.model_dump() if previous_item else {}
+
+        def compare_currency(metric_key: str) -> dict[str, CampaignMetricComparison]:
+            current_amounts = getattr(current_item, metric_key) if current_item else {}
+            previous_amounts = getattr(previous_item, metric_key) if previous_item else {}
+            return {
+                currency: _metric_comparison(
+                    float(current_amounts[currency]) if currency in current_amounts else None,
+                    float(previous_amounts[currency]) if currency in previous_amounts else None,
+                )
+                for currency in sorted(current_amounts.keys() | previous_amounts.keys())
+            }
+
+        count_comparisons = {
+            key: _metric_comparison(
+                float(current_counts[key]) if current_counts.get(key) is not None else None,
+                float(previous_counts[key]) if previous_counts.get(key) is not None else None,
+            )
+            for key in count_keys
+        }
+        rate_comparisons = {
+            key: _metric_comparison(
+                float(current_rates[key]) if current_rates.get(key) is not None else None,
+                float(previous_rates[key]) if previous_rates.get(key) is not None else None,
+            )
+            for key in rate_keys
+        }
+        items.append(CampaignPerformanceComparisonItem(
+            campaign_id=campaign_id,
+            name=item.name,
+            current=current_item or item,
+            previous=previous_item or item,
+            count_metrics=count_comparisons,
+            rate_metrics=rate_comparisons,
+            spend_by_currency=compare_currency("actual_spend_by_currency"),
+            revenue_by_currency=compare_currency("attributed_revenue_by_currency"),
+        ))
+
+    return CampaignPerformanceComparisonRead(
+        current_period_start=current_start,
+        current_period_end=current_end,
+        previous_period_start=previous_start,
+        previous_period_end=previous_end,
+        period_days=current_days + 1,
+        campaign_count=len(items),
+        items=items,
+        truncated=current.truncated or previous.truncated,
+    )
