@@ -207,6 +207,17 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert empty_portfolio.json()["total_draft_campaigns"] == 0
         assert empty_portfolio.json()["items"] == []
 
+        manager_review = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
+            headers=headers,
+            json={"decision": "hold", "note": "Wait for audience consent"},
+        )
+        assert manager_review.status_code == 200, manager_review.text
+        review_result = manager_review.json()
+        assert review_result["latest_manager_review"]["decision"] == "hold"
+        assert review_result["latest_manager_review"]["note"] == "Wait for audience consent"
+        assert review_result["launch_readiness"] == "needs_attention"
+
         marketing_consent = await client.post(
             f"/api/v1/crm/profiles/{profile_id}/communication-consents",
             headers=headers,
