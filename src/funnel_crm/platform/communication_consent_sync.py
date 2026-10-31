@@ -12,6 +12,7 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from funnel_crm.platform.consent_product_sync import enqueue_consent_change_for_products
 from funnel_crm.platform.integration_processing import (
     ClaimedIntegrationEvent,
     LeaseLostError,
@@ -237,4 +238,17 @@ class PostgresProductConsentEventConsumer:
                         raise ConsentSyncError("crm.consent.source_event_conflict")
                     return False
 
+                await enqueue_consent_change_for_products(
+                    session,
+                    tenant_id=event.tenant_id,
+                    profile_id=identity.profile_id,
+                    consent_event_id=consent_event_id,
+                    purpose_key=payload.purpose_key,
+                    channel=payload.channel,
+                    decision=payload.decision,
+                    policy_version=payload.policy_version,
+                    decision_at=event.occurred_at,
+                    origin_product=event.source_product,
+                    source_event_id=event.event_id,
+                )
                 return True
