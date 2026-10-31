@@ -113,6 +113,75 @@ async def test_processor_claims_with_tenant_scope_and_completes_once(
 
 
 
+
+@pytest.mark.asyncio
+async def test_claim_marks_undecipherable_payload_failed_and_continues_batch(
+    runtime_session_factory, tenant_case
+) -> None:
+    tenant_id = tenant_case["workspace_a"]
+    identity = tenant_case["identity"]
+    assert isinstance(tenant_id, UUID)
+    assert isinstance(identity, AuthenticatedIdentity)
+    connection = VerifiedProductConnection(
+        connection_id=uuid4(),
+        tenant_id=tenant_id,
+        source_product="funnel.store",
+        allowed_event_types=frozenset({"order.created"}),
+        supported_contract_versions=frozenset({("commerce.order", 1)}),
+    )
+    app = create_event_app(connection, runtime_session_factory)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        unreadable_event_id = await send_event(client, tenant_id)
+        valid_event_id = await send_event(client, tenant_id)
+
+    async with tenant_session(
+        runtime_session_factory,
+        requested_tenant_id=tenant_id,
+        identity=identity,
+    ) as context:
+        unreadable_row = await context.session.scalar(
+            select(IntegrationEventInbox).where(
+                IntegrationEventInbox.tenant_id == tenant_id,
+                IntegrationEventInbox.event_id == unreadable_event_id,
+            )
+        )
+        assert unreadable_row is not None
+        unreadable_row.encrypted_payload = b"invalid-ciphertext"
+
+    processor = PostgresProductEventProcessor(
+        runtime_session_factory,
+        keyring=app.state.integration_payload_keyring,
+    )
+    claims = await processor.claim(tenant_id, limit=10)
+    assert [claim.event_id for claim in claims] == [valid_event_id]
+
+    async with tenant_session(
+        runtime_session_factory,
+        requested_tenant_id=tenant_id,
+        identity=identity,
+    ) as context:
+        unreadable_row = await context.session.scalar(
+            select(IntegrationEventInbox).where(
+                IntegrationEventInbox.tenant_id == tenant_id,
+                IntegrationEventInbox.event_id == unreadable_event_id,
+            )
+        )
+        assert unreadable_row is not None
+        assert unreadable_row.processing_status == "failed"
+        assert unreadable_row.attempt_count == 1
+        assert unreadable_row.last_error_code == "integration.payload.decryption_failed"
+        assert unreadable_row.lease_token is None
+        assert unreadable_row.lease_until is None
+
+    await processor.complete(
+        tenant_id,
+        claims[0].id,
+        lease_token=claims[0].lease_token,
+    )
+
+
 @pytest.mark.asyncio
 async def test_processor_renews_live_claims_while_batch_is_running(
     runtime_session_factory, tenant_case
