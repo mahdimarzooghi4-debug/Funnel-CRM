@@ -180,6 +180,20 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
             "recorded_at": None,
         }
 
+        missing_consent = await client.post(
+            "/api/v1/integrations/communication-eligibility/check",
+            json={
+                "tenant_id": str(tenant_id),
+                "external_customer_id": "store-customer-71",
+                "purpose_key": "product_reviews",
+                "channel": "email",
+            },
+        )
+        assert missing_consent.status_code == 200
+        assert missing_consent.json()["status"] == "unknown"
+        assert missing_consent.json()["allowed"] is False
+        assert missing_consent.json()["consent_event_id"] is None
+
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
     ) as context:
