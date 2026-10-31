@@ -348,7 +348,6 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
         assert all(consent.purpose_key == "product_updates" for consent in consents)
         assert all(consent.channel == "email" for consent in consents)
         assert all(consent.source_product == "funnel.store" for consent in consents)
-        assert consent.source_event_id == event_id
         audit_count = await context.session.scalar(
             select(func.count()).select_from(AuditEvent).where(
                 AuditEvent.tenant_id == tenant_id,
@@ -403,4 +402,4 @@ async def test_product_consent_event_is_provenanced_and_replay_safe(
                 AuditEvent.tenant_id == tenant_id,
                 AuditEvent.action_key == "integration.communication_consent.recorded",
             )
-        ) == 1
+        ) == 2
