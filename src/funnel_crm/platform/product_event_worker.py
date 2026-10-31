@@ -10,9 +10,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any
+from typing import Any, Iterable
 from uuid import UUID
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from funnel_crm.platform.commerce_event_sync import (
@@ -25,22 +26,26 @@ from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKey
 logger = logging.getLogger("funnel_crm.product_event_worker")
 
 
-def configured_tenant_ids(raw: str | None = None) -> tuple[UUID, ...]:
-    """Parse explicit tenant scopes; never discover tenants through an RLS bypass."""
-    value = raw if raw is not None else os.environ.get(
-        "FUNNEL_CRM_EVENT_WORKER_TENANT_IDS", ""
-    )
-    parts = [part.strip() for part in value.split(",") if part.strip()]
-    if not parts:
-        raise ValueError("FUNNEL_CRM_EVENT_WORKER_TENANT_IDS must contain a workspace UUID")
-    try:
-        tenant_ids = tuple(UUID(part) for part in parts)
-    except ValueError as exc:
-        raise ValueError("worker tenant list contains an invalid UUID") from exc
+def tenant_ids_from_registry(rows: Iterable[UUID]) -> tuple[UUID, ...]:
+    """Normalize tenant IDs returned by the read-only worker registry."""
+    tenant_ids = tuple(rows)
     if len(set(tenant_ids)) != len(tenant_ids):
-        raise ValueError("worker tenant list contains duplicate UUIDs")
+        raise ValueError("worker tenant registry contains duplicate UUIDs")
     return tenant_ids
 
+
+async def load_worker_tenant_ids(
+    session_factory: async_sessionmaker[Any],
+) -> tuple[UUID, ...]:
+    """Read tenant IDs only; event rows remain under tenant RLS."""
+    async with session_factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT tenant_id FROM product_event_worker_tenants "
+                "ORDER BY tenant_id"
+            )
+        )
+        return tenant_ids_from_registry(result.scalars().all())
 
 def configured_poll_seconds(raw: str | None = None) -> float:
     """Return a bounded delay between polling cycles."""
@@ -93,7 +98,6 @@ async def process_tenant_batch(
 
 async def run_worker(
     *,
-    tenant_ids: tuple[UUID, ...],
     poll_seconds: float,
     database_url: str,
     once: bool = False,
@@ -114,6 +118,14 @@ async def run_worker(
     )
     try:
         while True:
+            try:
+                tenant_ids = await load_worker_tenant_ids(session_factory)
+            except Exception as exc:
+                logger.error(
+                    "Product event tenant registry unavailable error_type=%s",
+                    type(exc).__name__,
+                )
+                tenant_ids = ()
             for tenant_id in tenant_ids:
                 await process_tenant_batch(
                     tenant_id,
@@ -133,7 +145,6 @@ async def main() -> None:
     if not database_url:
         raise ValueError("DATABASE_URL is required")
     await run_worker(
-        tenant_ids=configured_tenant_ids(),
         poll_seconds=configured_poll_seconds(),
         database_url=database_url,
         once=os.environ.get("FUNNEL_CRM_EVENT_WORKER_ONCE", "").lower()
