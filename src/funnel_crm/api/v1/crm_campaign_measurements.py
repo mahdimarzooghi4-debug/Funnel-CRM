@@ -482,8 +482,8 @@ class CampaignMetricComparison(BaseModel):
 class CampaignPerformanceComparisonItem(BaseModel):
     campaign_id: UUID
     name: str
-    current: CampaignPerformanceItem
-    previous: CampaignPerformanceItem
+    current: CampaignPerformanceItem | None
+    previous: CampaignPerformanceItem | None
     count_metrics: dict[str, CampaignMetricComparison]
     rate_metrics: dict[str, CampaignMetricComparison]
     spend_by_currency: dict[str, CampaignMetricComparison]
@@ -592,8 +592,8 @@ async def compare_campaign_performance_periods(
         items.append(CampaignPerformanceComparisonItem(
             campaign_id=campaign_id,
             name=item.name,
-            current=current_item or item,
-            previous=previous_item or item,
+            current=current_item,
+            previous=previous_item,
             count_metrics=count_comparisons,
             rate_metrics=rate_comparisons,
             spend_by_currency=compare_currency("actual_spend_by_currency"),
