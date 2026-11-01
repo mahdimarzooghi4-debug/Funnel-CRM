@@ -110,7 +110,14 @@ async def get_partner(partner_id: UUID, context: TenantSessionContext = Depends(
 
 @router.patch("/{partner_id}")
 async def update_partner(partner_id: UUID, payload: PartnerUpdate, context: TenantSessionContext = Depends(require_tenant_session)) -> dict:
-    row = await context.session.scalar(select(CRMChannelPartner).where(CRMChannelPartner.tenant_id == context.access.tenant_id, CRMChannelPartner.id == partner_id))
+    # Serialize writers before checking the expected version. Without this lock,
+    # two transactions can both accept version N and overwrite one another.
+    row = await context.session.scalar(
+        select(CRMChannelPartner).where(
+            CRMChannelPartner.tenant_id == context.access.tenant_id,
+            CRMChannelPartner.id == partner_id,
+        ).with_for_update()
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="Channel partner not found")
     await _authorize(context, "crm.partner:manage", row.organization_unit_id)
