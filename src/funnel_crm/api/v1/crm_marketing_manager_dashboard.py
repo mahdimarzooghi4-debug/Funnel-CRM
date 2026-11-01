@@ -1164,3 +1164,91 @@ async def list_marketing_manager_dashboard_action_worklist(
     ))
     await context.session.flush()
     return {"items": items, "status": status_filter, "limit": limit, "offset": offset}
+
+
+
+@router.get(
+    "/campaigns/snapshot-actions/analytics",
+    operation_id="getMarketingManagerDashboardActionAnalytics",
+    summary="Review completion, overdue, and closure-time metrics for dashboard actions",
+)
+async def get_marketing_manager_dashboard_action_analytics(
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    result = await context.session.execute(
+        text("""
+            SELECT
+                CURRENT_DATE AS as_of,
+                COUNT(*) AS total_count,
+                COUNT(*) FILTER (WHERE status = 'open') AS open_count,
+                COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
+                COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_count,
+                COUNT(*) FILTER (
+                    WHERE status = 'open' AND due_on < CURRENT_DATE
+                ) AS overdue_open_count,
+                COUNT(*) FILTER (
+                    WHERE status = 'open'
+                      AND due_on >= CURRENT_DATE
+                      AND due_on <= CURRENT_DATE + 7
+                ) AS due_next_7_days_open_count,
+                ROUND(
+                    COUNT(*) FILTER (WHERE status = 'completed')::numeric * 100
+                    / NULLIF(COUNT(*) FILTER (
+                        WHERE status IN ('completed', 'cancelled')
+                    ), 0),
+                    2
+                ) AS completion_rate_percent,
+                ROUND(
+                    AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 86400)
+                    FILTER (WHERE status IN ('completed', 'cancelled'))::numeric,
+                    2
+                ) AS average_days_to_close
+            FROM crm_marketing_dashboard_actions
+            WHERE tenant_id = :tenant_id
+              AND (creator_identity_id = :identity_id
+                   OR assigned_membership_id = :membership_id)
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+            "membership_id": context.access.membership_id,
+        },
+    )
+    row = result.mappings().one()
+    metrics = {
+        "as_of": row["as_of"].isoformat(),
+        "total_count": row["total_count"],
+        "open_count": row["open_count"],
+        "completed_count": row["completed_count"],
+        "cancelled_count": row["cancelled_count"],
+        "overdue_open_count": row["overdue_open_count"],
+        "due_next_7_days_open_count": row["due_next_7_days_open_count"],
+        "completion_rate_percent": (
+            format(row["completion_rate_percent"], "f")
+            if row["completion_rate_percent"] is not None else None
+        ),
+        "average_days_to_close": (
+            format(row["average_days_to_close"], "f")
+            if row["average_days_to_close"] is not None else None
+        ),
+    }
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.analytics_read",
+        target_type="crm_marketing_dashboard_action_analytics",
+        target_key=metrics["as_of"],
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "total_count": metrics["total_count"],
+            "open_count": metrics["open_count"],
+            "completed_count": metrics["completed_count"],
+            "overdue_open_count": metrics["overdue_open_count"],
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return metrics
