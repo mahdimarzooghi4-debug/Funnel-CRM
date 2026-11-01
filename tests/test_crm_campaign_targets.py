@@ -421,6 +421,34 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert "metric_coverage" in export_text
         assert "target_outcome" in export_text
         assert "manager_signal" in export_text
+
+        snapshot_response = await client.post(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshots",
+            headers=headers,
+            params={"period_start": "2026-10-16", "period_end": "2026-10-17"},
+        )
+        assert snapshot_response.status_code == 201, snapshot_response.text
+        snapshot = snapshot_response.json()
+        assert len(snapshot["snapshot_hash"]) == 64
+        snapshot_id = snapshot["id"]
+
+        listed_snapshots = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshots",
+            headers=headers,
+        )
+        assert listed_snapshots.status_code == 200, listed_snapshots.text
+        assert [item["id"] for item in listed_snapshots.json()["items"]][0] == snapshot_id
+
+        fetched_snapshot = await client.get(
+            f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshots/{snapshot_id}",
+            headers=headers,
+        )
+        assert fetched_snapshot.status_code == 200, fetched_snapshot.text
+        snapshot_body = fetched_snapshot.json()
+        assert snapshot_body["integrity_verified"] is True
+        assert snapshot_body["snapshot_hash"] == snapshot["snapshot_hash"]
+        assert snapshot_body["dashboard"]["period_start"] == "2026-10-16"
+
         assert report["metric_definitions"]["roas"]["key"] == "reported_roas"
         assert report["metric_outcomes"]["period_net_paid_to_spend"]["met"] == 1
         pooled_usd = next(
