@@ -1992,3 +1992,81 @@ async def get_marketing_manager_dashboard_action_deadline_alerts(
         "limit": limit,
         "truncated": total_alerts > len(items),
     }
+
+
+@router.get(
+    "/campaigns/budget-pacing/export.csv",
+    response_class=Response,
+    operation_id="exportMarketingManagerCampaignBudgetPacingCsv",
+    summary="Export campaign budget pacing data as a currency-separated CSV",
+)
+async def export_marketing_manager_campaign_budget_pacing_csv(
+    period_start: date = Query(...),
+    as_of: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> Response:
+    report = await get_marketing_manager_campaign_budget_pacing(
+        period_start=period_start,
+        as_of=as_of,
+        context=context,
+    )
+    columns = (
+        "record_type", "campaign_id", "campaign_name", "currency", "pacing_status",
+        "planned_budget", "actual_spend", "expected_spend", "variance",
+        "variance_percent", "scheduled_days_elapsed", "scheduled_days_total",
+        "other_currency_spend",
+    )
+    buffer = StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=columns)
+    writer.writeheader()
+    writer.writerow({
+        "record_type": "metadata",
+        "pacing_status": "report_period",
+        "planned_budget": report.period_start.isoformat(),
+        "actual_spend": report.as_of.isoformat(),
+        "expected_spend": report.pacing_basis,
+    })
+    for item in report.items:
+        writer.writerow({
+            "record_type": "campaign",
+            "campaign_id": str(item.campaign_id),
+            "campaign_name": _csv_safe_text(item.campaign_name),
+            "currency": item.budget_currency,
+            "pacing_status": _csv_safe_text(item.pacing_status),
+            "planned_budget": item.planned_budget_amount,
+            "actual_spend": item.actual_spend_in_budget_currency,
+            "expected_spend": item.expected_spend_to_date,
+            "variance": item.variance_from_expected,
+            "variance_percent": item.variance_percent,
+            "scheduled_days_elapsed": item.scheduled_days_elapsed,
+            "scheduled_days_total": item.scheduled_days_total,
+            "other_currency_spend": json.dumps(
+                {currency: str(amount) for currency, amount in item.spend_in_other_currencies.items()},
+                sort_keys=True,
+            ),
+        })
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.campaign_budget_pacing.exported",
+        target_type="crm_marketing_campaign_budget_pacing",
+        target_key=f"{period_start.isoformat()}:{as_of.isoformat()}",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "format": "csv",
+            "row_count": len(report.items) + 1,
+            "column_count": len(columns),
+            "campaign_count": report.campaign_count,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    filename = f"funnel-crm-campaign-budget-pacing-{as_of.isoformat()}.csv"
+    return Response(
+        content="\\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
