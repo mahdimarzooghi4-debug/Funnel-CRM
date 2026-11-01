@@ -9,3 +9,9 @@ The selected period is limited to 366 days. Campaign reports inherit the 500-cam
 ## CSV export
 
 `GET /api/v1/crm/analytics/marketing-manager/campaigns/export.csv` returns a UTF-8 CSV with a byte-order mark for spreadsheet compatibility. The file uses a `record_type` column to distinguish metadata, summary, channel, segment, coverage, target, manager-signal, and commerce rows. It includes a report-definition version and generation timestamp. The export request is audited with its period, format, version, timestamp, and row/column counts; the generated report data is not stored as a durable snapshot. Untrusted text cells are prefixed when they begin with spreadsheet formula characters.
+
+## Immutable snapshots
+
+`POST /api/v1/crm/analytics/marketing-manager/campaigns/snapshots?period_start=YYYY-MM-DD&period_end=YYYY-MM-DD` stores a complete dashboard result with its report version, period, creation time, and SHA-256 content hash. This captures the report as observed at creation time, so later campaign edits do not rewrite past reviews.
+
+`GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshots` lists metadata for snapshots created by the current identity in the active workspace. Use `limit` (1–100) and `offset` for pagination. `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshots/{snapshot_id}` returns the saved dashboard only to its creator and verifies the stored hash before returning it. The database enforces tenant row security and rejects snapshot updates or deletion; snapshot creation and reads are audited without copying report contents into the audit log.
