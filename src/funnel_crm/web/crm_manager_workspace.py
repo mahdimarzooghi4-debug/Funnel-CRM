@@ -54,6 +54,8 @@ _PAGE = """<!doctype html>
     .lower-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}.link-row{display:flex;flex-wrap:wrap;gap:8px}.module-link{border:1px solid #dfe7ee;background:#fff;color:#27536d;text-decoration:none;border-radius:8px;padding:9px 12px;font-size:11px}
     .module-link:hover{background:#f2f8fa}.coverage{height:9px;background:#edf1f4;border-radius:9px;overflow:hidden;margin:10px 0}.coverage span{display:block;height:100%;width:0;background:#1aa38f;border-radius:9px;transition:width .3s}
     .footnote{color:#8a96a3;font-size:10px;line-height:1.8;margin-top:12px}
+    .module-features{color:#526477;font-size:12px;line-height:2;padding-right:22px}
+
     @media(max-width:1050px){.app{grid-template-columns:210px minmax(0,1fr)}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.header-row{display:block}.filters{justify-content:flex-start;margin-top:14px}}
     @media(max-width:760px){.app{display:block}aside{position:relative;height:auto;border-left:0;border-bottom:1px solid #e5eaf1;padding:12px}.brand{padding-bottom:8px}.nav-label,.side-foot{display:none}nav{display:flex;overflow:auto;padding-bottom:3px}.nav-item{white-space:nowrap;width:auto;flex:0 0 auto;padding:9px}.topbar{margin-bottom:18px}.grid-main,.lower-grid{grid-template-columns:1fr}.profile span:not(.avatar){display:none}}
     @media(max-width:480px){main{padding:15px 12px 32px}.kpis{gap:8px}.card{padding:12px}.kpi-value{font-size:18px}.filters{display:grid;grid-template-columns:1fr 1fr}.filters label{min-width:0}select,input[type=date]{min-width:0;width:100%}.primary{width:100%}.chart-row{grid-template-columns:85px minmax(0,1fr) 66px}.funnel-row{grid-template-columns:75px minmax(0,1fr) 58px}}
@@ -68,21 +70,21 @@ _PAGE = """<!doctype html>
     <nav aria-label="ماژول‌های CRM">
       <a class="nav-item" href="/workspace/marketing-manager" aria-current="page"><span class="nav-icon">▦</span>میزکار و داشبورد نقش‌محور</a>
       <div class="nav-label">ماژول‌ها</div>
-      <a class="nav-item" href="/workspace/crm-market-research"><span class="nav-icon">⌕</span>تحقیق و شناخت بازار</a>
-      <a class="nav-item" href="/workspace/crm-marketing-planning"><span class="nav-icon">◎</span>استراتژی و برنامه‌ریزی بازاریابی</a>
+      <a class="nav-item" href="#research" data-module="research"><span class="nav-icon">⌕</span>تحقیق و شناخت بازار</a>
+      <a class="nav-item" href="#planning" data-module="planning"><span class="nav-icon">◎</span>استراتژی و برنامه‌ریزی بازاریابی</a>
       <a class="nav-item" href="/workspace/crm-catalog"><span class="nav-icon">◇</span>محصول، قیمت و پیشنهاد فروش</a>
-      <a class="nav-item" href="/workspace/crm-campaigns"><span class="nav-icon">◉</span>کمپین و محتوا</a>
-      <a class="nav-item" href="/workspace/crm-channels"><span class="nav-icon">⌘</span>کانال‌ها و شرکای فروش</a>
-      <a class="nav-item" href="/workspace/crm-sales"><span class="nav-icon">↗</span>مدیریت فروش و درآمد</a>
+      <a class="nav-item" href="#campaigns" data-module="campaigns"><span class="nav-icon">◉</span>کمپین و محتوا</a>
+      <a class="nav-item" href="#channels" data-module="channels"><span class="nav-icon">⌘</span>کانال‌ها و شرکای فروش</a>
+      <a class="nav-item" href="#sales" data-module="sales"><span class="nav-icon">↗</span>مدیریت فروش و درآمد</a>
       <a class="nav-item" href="/workspace/crm-marketing-operations"><span class="nav-icon">☷</span>عملیات و منابع بازاریابی</a>
-      <a class="nav-item" href="/workspace/crm-analytics"><span class="nav-icon">◷</span>تحلیل و هوش تجاری</a>
-      <a class="nav-item" href="/workspace/crm-ai-assistant"><span class="nav-icon">✦</span>دستیار هوشمند مدیر بازاریابی</a>
-      <a class="nav-item" href="/workspace/crm-automation"><span class="nav-icon">⤳</span>اتوماسیون و گردش‌کار</a>
-      <a class="nav-item" href="/workspace/crm-customer-lifecycle"><span class="nav-icon">♡</span>چرخه عمر و تجربه مشتری</a>
-      <a class="nav-item" href="/workspace/crm-learning"><span class="nav-icon">⌁</span>یادگیری و بهبود مستمر</a>
-      <a class="nav-item" href="/workspace/crm-local-marketing"><span class="nav-icon">⌖</span>شعب و بازاریابی محلی</a>
-      <a class="nav-item" href="/workspace/crm-brand"><span class="nav-icon">◈</span>برند و اعتبار بازار</a>
-      <a class="nav-item" href="/workspace/crm-admin"><span class="nav-icon">⚙</span>مدیریت، امنیت و اتصال</a>
+      <a class="nav-item" href="#analytics" data-module="analytics"><span class="nav-icon">◷</span>تحلیل و هوش تجاری</a>
+      <a class="nav-item" href="#assistant" data-module="assistant"><span class="nav-icon">✦</span>دستیار هوشمند مدیر بازاریابی</a>
+      <a class="nav-item" href="#automation" data-module="automation"><span class="nav-icon">⤳</span>اتوماسیون و گردش‌کار</a>
+      <a class="nav-item" href="#lifecycle" data-module="lifecycle"><span class="nav-icon">♡</span>چرخه عمر و تجربه مشتری</a>
+      <a class="nav-item" href="#learning" data-module="learning"><span class="nav-icon">⌁</span>یادگیری و بهبود مستمر</a>
+      <a class="nav-item" href="#local" data-module="local"><span class="nav-icon">⌖</span>شعب و بازاریابی محلی</a>
+      <a class="nav-item" href="#brand" data-module="brand"><span class="nav-icon">◈</span>برند و اعتبار بازار</a>
+      <a class="nav-item" href="#admin" data-module="admin"><span class="nav-icon">⚙</span>مدیریت، امنیت و اتصال</a>
     </nav>
     <div class="side-foot">CRM مستقل و قابل استفاده است.<br>اتصال محصولات اجرایی فانل اختیاری است.</div>
   </aside>
@@ -100,6 +102,13 @@ _PAGE = """<!doctype html>
         <button class="primary" id="refresh" type="button">به‌روزرسانی</button>
       </div>
     </section>
+    <section id="module-view" class="card" hidden aria-live="polite">
+      <div class="card-heading"><h2 id="module-title"></h2><small id="module-state"></small></div>
+      <p id="module-description" class="kpi-meta"></p>
+      <ul id="module-features" class="module-features"></ul>
+      <div id="module-links" class="link-row"></div>
+    </section>
+    <div id="dashboard-content">
     <p id="status" role="status" aria-live="polite">در حال آماده‌سازی میزکار…</p>
     <div id="data-warning" class="notice" hidden></div>
     <section class="kpis" aria-label="شاخص‌های اصلی">
@@ -140,6 +149,7 @@ _PAGE = """<!doctype html>
       </div>
       <p class="footnote">شاخص‌ها فقط بر اساس دادهٔ موجود نمایش داده می‌شوند. دادهٔ ناقص یا قدیمی به‌عنوان نتیجهٔ قطعی تفسیر نمی‌شود. محصولات اجرایی فانل مستقل و انتخابی هستند.</p>
     </section>
+    </div>
   </main>
 </div>
 </body>
@@ -151,6 +161,38 @@ _SCRIPT = r"""(() => {
   const status = $("status");
   const warn = $("data-warning");
   const params = new URLSearchParams(window.location.search);
+  const moduleInfo = {
+    research: { title: "تحقیق و شناخت بازار", description: "شناخت بازار، مشتری، رقبا و روندها با ثبت منبع و کیفیت شواهد.", features: ["برنامه‌ریزی تحقیق و ثبت فرضیه", "مصاحبه، بازخورد و صدای مشتری", "تحلیل بازار، رقبا، روندها و فرصت‌ها", "بخش‌بندی و تعریف گروه هدف"] },
+    planning: { title: "استراتژی و برنامه‌ریزی بازاریابی", description: "تبدیل هدف کسب‌وکار به برنامه، بودجه، تقویم، مسئول و معیار سنجش.", features: ["هدف‌ها و شاخص‌های هم‌راستا", "برنامه و تقویم بازاریابی", "بودجهٔ مصوب، تعهدشده، هزینه‌شده و مانده", "مقایسهٔ سناریوهای بودجه"], links: [["مقایسهٔ سناریوهای بودجه", "/workspace/budget-scenario-comparison"]] },
+    campaigns: { title: "کمپین و محتوا", description: "مدیریت چرخهٔ کمپین از هدف و مخاطب تا اجرا و سنجش نتیجه.", features: ["سبد کمپین و تقویم اجرا", "محتوا، پیام و دارایی برند", "لانچ محصول و ورود به بازار", "اتصال نتیجه به هدف و بودجه"] },
+    channels: { title: "کانال‌ها و شرکای فروش", description: "مقایسه و مدیریت کانال‌های حضوری، دیجیتال، تلفنی و شرکای اجرا.", features: ["سبد کانال‌های بازاریابی و فروش", "هزینه، نتیجه و پوشش دادهٔ هر کانال", "مدیریت شریک، نماینده و فروشنده", "منبع و تازگی دادهٔ کانال"] },
+    sales: { title: "مدیریت فروش و درآمد", description: "مدیریت مسیر فروش متناسب با مدل هر کسب‌وکار و دیدن فرصت تا درآمد.", features: ["فرصت و مرحلهٔ فروش قابل‌تنظیم", "پیشنهاد، سفارش و پیش‌بینی درآمد", "هدف فروش و عملکرد تیم", "پیگیری و دلیل برد، باخت یا توقف"] , links: [["پیشنهادهای فروش", "/workspace/crm-offers"], ["کمیسیون فروش", "/workspace/crm-commissions"]] },
+    analytics: { title: "تحلیل و هوش تجاری", description: "گزارش‌ها باید تعریف شاخص، منبع، بازه و کیفیت داده را همراه داشته باشند.", features: ["قیف، کانال، منطقه و گروه مشتری", "تحقق هدف و کیفیت پوشش داده", "بازده، هزینهٔ جذب و ارزش مشتری", "مقایسه و خروجی قابل‌ردیابی"] },
+    assistant: { title: "دستیار هوشمند مدیر بازاریابی", description: "دستیار داخلی فانل برای پرسش دربارهٔ شاخص‌ها و شواهد قابل‌دسترسی.", features: ["پاسخ متصل به شاخص و منبع داده", "تفکیک مشاهده، تفسیر، فرضیه و پیشنهاد", "پیشنهاد اقدام با تأیید انسانی", "مدل داخلی؛ بدون API استنتاج بیرونی"] },
+    automation: { title: "اتوماسیون و گردش‌کار", description: "گردش‌کارهای قابل‌تنظیم برای پیگیری‌ها، تأییدها و رویدادهای سازمانی.", features: ["شرط، اقدام، مسئول و موعد", "صف کار و اعلان پیگیری", "ثبت خطا، تلاش مجدد و نتیجه", "ممیزی تغییرات و دسترسی"] },
+    lifecycle: { title: "چرخهٔ عمر و تجربهٔ مشتری", description: "پروندهٔ مرجع مشتری و تجربهٔ چندکاناله در طول رابطه با کسب‌وکار.", features: ["پروفایل و تاریخچهٔ تعامل", "رضایت و ترجیحات ارتباطی", "بخش‌بندی و سفر مشتری", "خدمت، وفاداری، تمدید و خرید مجدد"], links: [["ثبت فعالیت مشتری", "/workspace/crm-activity-capture"]] },
+    learning: { title: "یادگیری و بهبود مستمر", description: "ثبت فرضیه، تصمیم، نتیجه و تجربه برای بهتر شدن تصمیم‌های بعدی.", features: ["آزمایش و سنجش اثر", "مرور پس از اجرا", "ثبت درس‌آموخته و شواهد", "پیگیری نتیجهٔ اقدام‌های اصلاحی"] },
+    local: { title: "شعب و بازاریابی محلی", description: "مدیریت تفاوت منطقه‌ای، شعبه‌ها و اجرای محلی در چارچوب هدف مشترک.", features: ["هدف و بودجهٔ منطقه‌ای", "تقویم و کمپین محلی", "مقایسهٔ عملکرد شعب", "رعایت ساختار سازمانی و دسترسی"] },
+    brand: { title: "برند و اعتبار بازار", description: "مدیریت جایگاه، دارایی برند و نشانه‌های اعتبار از دید بازار و مشتری.", features: ["ارزش پیشنهادی و پیام برند", "دارایی‌ها و محتوای تأییدشده", "بازخورد و صدای مشتری", "منبع و تاریخ اعتبار هر سیگنال"] },
+    admin: { title: "مدیریت، امنیت و اتصال", description: "پیکربندی مستقل هر فضای کاری، کنترل دسترسی و اتصال امن محصولات.", features: ["فضای کاری، تیم، نقش و دامنهٔ دسترسی", "اتصال اختیاری محصولات فانل", "قرارداد API و رویدادهای نسخه‌دار", "امنیت، ممیزی و تنظیمات Workspace"] }
+  };
+  function openModule(id) {
+    const item = moduleInfo[id];
+    if (!item) return;
+    $("dashboard-content").hidden = true;
+    $("module-view").hidden = false;
+    $("module-title").textContent = item.title;
+    $("module-description").textContent = item.description;
+    $("module-state").textContent = "میزکار اجرایی این تب در صف پیاده‌سازی است";
+    const features = $("module-features"); features.replaceChildren();
+    item.features.forEach((feature) => append(features, "li", feature));
+    const links = $("module-links"); links.replaceChildren();
+    (item.links || []).forEach(([label, href]) => {
+      const link = document.createElement("a"); link.className = "module-link"; link.href = href; link.textContent = label; links.appendChild(link);
+    });
+    setStatus("نمای کلی ماژول از طرح‌نامه بارگذاری شد؛ قابلیت‌های اجرایی این تب هنوز باید پیاده‌سازی شود.");
+    document.querySelectorAll(".nav-item[data-module]").forEach((link) => link.removeAttribute("aria-current"));
+  }
   const faNumber = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 1 });
   const money = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 0 });
   const dateValue = (date) => date.toISOString().slice(0, 10);
@@ -294,7 +336,9 @@ _SCRIPT = r"""(() => {
       else setStatus("فضای کاری را انتخاب کنید تا گزارش همان کسب‌وکار بارگذاری شود.");
     } catch (error) { setStatus(error.message, true); }
   }
-  $("refresh").addEventListener("click", () => loadDashboard());
+  document.querySelectorAll(".nav-item[data-module]").forEach((link) => link.addEventListener("click", (event) => { event.preventDefault(); openModule(link.dataset.module); }));
+  $("refresh").addEventListener("click", () => { $("module-view").hidden = true; $("dashboard-content").hidden = false; loadDashboard(); });
+
   workspace.addEventListener("change", () => loadDashboard());
   $("period-start").addEventListener("change", () => { if (workspace.value) loadDashboard(); });
   $("period-end").addEventListener("change", () => { if (workspace.value) loadDashboard(); });
