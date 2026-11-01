@@ -31,3 +31,7 @@ A manager can record an action against a snapshot using `POST /api/v1/crm/analyt
 ## Action tracking analytics
 
 `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/analytics` summarizes actions created by or assigned to the current member. It reports open/completed/cancelled counts, overdue open actions, open actions due within seven days, completion rate among closed actions, and average days to closure. A null completion rate means there are no closed actions yet. The overdue and due-soon counts use the database's current date; the read is audited.
+
+## Verifying follow-up outcomes
+
+`POST /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action_id}/verifications` records an observed numeric metric from the action's baseline snapshot against a later snapshot. The snapshots must share a reporting period and definition version, and both hashes are verified. The manager may record an expected direction; the response reports whether the observed movement matched it. Verification records are append-only and can be listed from `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action_id}/verifications`. The result describes an observed change and does not establish that the action caused it.
