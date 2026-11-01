@@ -74,7 +74,7 @@ _PAGE = """<!doctype html>
       <a class="nav-item" href="#research" data-module="research"><span class="nav-icon">⌕</span>تحقیق و شناخت بازار</a>
       <a class="nav-item" href="#planning" data-module="planning"><span class="nav-icon">◎</span>استراتژی و برنامه‌ریزی بازاریابی</a>
       <a class="nav-item" href="/workspace/crm-catalog"><span class="nav-icon">◇</span>محصول، قیمت و پیشنهاد فروش</a>
-      <a class="nav-item" href="#campaigns" data-module="campaigns"><span class="nav-icon">◉</span>کمپین و محتوا</a>
+      <a class="nav-item" href="/workspace/crm-campaigns"><span class="nav-icon">◉</span>کمپین و محتوا</a>
       <a class="nav-item" href="#channels" data-module="channels"><span class="nav-icon">⌘</span>کانال‌ها و شرکای فروش</a>
       <a class="nav-item" href="#sales" data-module="sales"><span class="nav-icon">↗</span>مدیریت فروش و درآمد</a>
       <a class="nav-item" href="#operations" data-module="operations"><span class="nav-icon">☷</span>عملیات و منابع بازاریابی</a>
@@ -144,6 +144,7 @@ _PAGE = """<!doctype html>
       <div class="card-heading"><h2>دسترسی سریع به میزکارهای موجود</h2><small>بر اساس کد فعلی مخزن</small></div>
       <div class="link-row">
         <a class="module-link" href="/workspace/crm-customers">مشتریان و پرونده‌ها</a>
+        <a class="module-link" href="/workspace/crm-campaigns">مدیریت کمپین و محتوا</a>
         <a class="module-link" href="/workspace/crm-catalog">کاتالوگ محصول و خدمت</a>
         <a class="module-link" href="/workspace/crm-offers">پیشنهادهای فروش</a>
         <a class="module-link" href="/workspace/crm-offer-plans">طرح پیشنهادهای بازاریابی</a>
@@ -168,7 +169,7 @@ _SCRIPT = r"""(() => {
   const moduleData = { research: "/api/v1/crm/segments?limit=8", planning: "/api/v1/crm/marketing-calendar/events?period_start={start}&period_end={end}", channels: "/api/v1/crm/analytics/marketing-manager/campaigns?period_start={start}&period_end={end}", lifecycle: "/api/v1/crm/analytics/customer-lifecycle/follow-up-candidates?inactive_for_days=30&limit=8", operations: "/api/v1/crm/work-items?organization_unit_id={organization_unit_id}&limit=8", automation: "/api/v1/crm/work-items?organization_unit_id={organization_unit_id}&limit=8", analytics: "/api/v1/crm/analytics/metrics?organization_unit_id={organization_unit_id}", brand: "/api/v1/crm/marketing-assets?organization_unit_id={organization_unit_id}&limit=8", local: "/api/v1/crm/campaigns?limit=8", campaigns: "/api/v1/crm/campaigns?limit=8", sales: "/api/v1/crm/opportunities?limit=8", learning: "/api/v1/crm/marketing-learning/reviews", admin: "/api/v1/integrations/connections" };
   const moduleInfo = {
     research: { title: "تحقیق و شناخت بازار", description: "شناخت بازار، مشتری، رقبا و روندها با ثبت منبع و کیفیت شواهد.", features: ["برنامه‌ریزی تحقیق و ثبت فرضیه", "مصاحبه، بازخورد و صدای مشتری", "تحلیل بازار، رقبا، روندها و فرصت‌ها", "بخش‌بندی و تعریف گروه هدف"] },
-    planning: { title: "استراتژی و برنامه‌ریزی بازاریابی", description: "تبدیل هدف کسب‌وکار به برنامه، بودجه، تقویم، مسئول و معیار سنجش.", features: ["هدف‌ها و شاخص‌های هم‌راستا", "برنامه و تقویم بازاریابی", "بودجهٔ مصوب، تعهدشده، هزینه‌شده و مانده", "مقایسهٔ سناریوهای بودجه"], links: [["مقایسهٔ سناریوهای بودجه", "/workspace/budget-scenario-comparison"]] },
+    planning: { title: "استراتژی و برنامه‌ریزی بازاریابی", description: "تبدیل هدف کسب‌وکار به برنامه، بودجه، تقویم، مسئول و معیار سنجش.", features: ["هدف‌ها و شاخص‌های هم‌راستا", "برنامه و تقویم بازاریابی", "بودجهٔ مصوب، تعهدشده، هزینه‌شده و مانده", "مقایسهٔ سناریوهای بودجه"], links: [["مقایسهٔ سناریوهای بودجه", "/workspace/budget-scenario-comparison"], ["تقویم کمپین و محتوا", "/workspace/crm-campaigns"]] },
     campaigns: { title: "کمپین و محتوا", description: "مدیریت چرخهٔ کمپین از هدف و مخاطب تا اجرا و سنجش نتیجه.", features: ["سبد کمپین و تقویم اجرا", "محتوا، پیام و دارایی برند", "لانچ محصول و ورود به بازار", "اتصال نتیجه به هدف و بودجه"] },
     channels: { title: "کانال‌ها و شرکای فروش", description: "مقایسه و مدیریت کانال‌های حضوری، دیجیتال، تلفنی و شرکای اجرا.", features: ["سبد کانال‌های بازاریابی و فروش", "هزینه، نتیجه و پوشش دادهٔ هر کانال", "مدیریت شریک، نماینده و فروشنده", "منبع و تازگی دادهٔ کانال"] },
     sales: { title: "مدیریت فروش و درآمد", description: "مدیریت مسیر فروش متناسب با مدل هر کسب‌وکار و دیدن فرصت تا درآمد.", features: ["فرصت و مرحلهٔ فروش قابل‌تنظیم", "پیشنهاد، سفارش و پیش‌بینی درآمد", "هدف فروش و عملکرد تیم", "پیگیری و دلیل برد، باخت یا توقف"] , links: [["پیشنهادهای فروش", "/workspace/crm-offers"], ["کمیسیون فروش", "/workspace/crm-commissions"]] },
