@@ -12,6 +12,7 @@ from funnel_crm.web.crm_offer_plan_workspace import router as crm_offer_plan_wor
 from funnel_crm.web.crm_manager_workspace import router as crm_manager_workspace_router
 from funnel_crm.web.crm_customer_workspace import router as crm_customer_workspace_router
 from funnel_crm.web.crm_campaign_workspace import router as crm_campaign_workspace_router
+from funnel_crm.web.crm_sales_workspace import router as crm_sales_workspace_router
 
 app = FastAPI(
     title="Funnel CRM API",
@@ -53,3 +54,4 @@ app.include_router(crm_offer_plan_workspace_router)
 app.include_router(crm_manager_workspace_router)
 app.include_router(crm_customer_workspace_router)
 app.include_router(crm_campaign_workspace_router)
+app.include_router(crm_sales_workspace_router)

@@ -76,7 +76,7 @@ _PAGE = """<!doctype html>
       <a class="nav-item" href="/workspace/crm-catalog"><span class="nav-icon">◇</span>محصول، قیمت و پیشنهاد فروش</a>
       <a class="nav-item" href="/workspace/crm-campaigns"><span class="nav-icon">◉</span>کمپین و محتوا</a>
       <a class="nav-item" href="#channels" data-module="channels"><span class="nav-icon">⌘</span>کانال‌ها و شرکای فروش</a>
-      <a class="nav-item" href="#sales" data-module="sales"><span class="nav-icon">↗</span>مدیریت فروش و درآمد</a>
+      <a class="nav-item" href="/workspace/crm-sales"><span class="nav-icon">↗</span>مدیریت فروش و درآمد</a>
       <a class="nav-item" href="#operations" data-module="operations"><span class="nav-icon">☷</span>عملیات و منابع بازاریابی</a>
       <a class="nav-item" href="#analytics" data-module="analytics"><span class="nav-icon">◷</span>تحلیل و هوش تجاری</a>
       <a class="nav-item" href="#assistant" data-module="assistant"><span class="nav-icon">✦</span>دستیار هوشمند مدیر بازاریابی</a>
@@ -145,6 +145,7 @@ _PAGE = """<!doctype html>
       <div class="link-row">
         <a class="module-link" href="/workspace/crm-customers">مشتریان و پرونده‌ها</a>
         <a class="module-link" href="/workspace/crm-campaigns">مدیریت کمپین و محتوا</a>
+        <a class="module-link" href="/workspace/crm-sales">مدیریت فروش و درآمد</a>
         <a class="module-link" href="/workspace/crm-catalog">کاتالوگ محصول و خدمت</a>
         <a class="module-link" href="/workspace/crm-offers">پیشنهادهای فروش</a>
         <a class="module-link" href="/workspace/crm-offer-plans">طرح پیشنهادهای بازاریابی</a>
