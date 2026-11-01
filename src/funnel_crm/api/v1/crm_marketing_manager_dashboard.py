@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import text
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_campaign_measurements import (
@@ -832,3 +832,335 @@ async def export_marketing_manager_dashboard_snapshot_comparison_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+class DashboardSnapshotActionCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    decision_note: str = Field(min_length=1, max_length=4000)
+    due_on: date | None = None
+    assigned_membership_id: UUID | None = None
+
+    @field_validator("title", "decision_note")
+    @classmethod
+    def normalize_action_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value must contain a non-whitespace character")
+        return cleaned
+
+
+class DashboardSnapshotActionClose(BaseModel):
+    status: str = Field(pattern="^(completed|cancelled)$")
+    outcome: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("outcome")
+    @classmethod
+    def normalize_outcome(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("outcome must contain a non-whitespace character")
+        return cleaned
+
+
+@router.post(
+    "/campaigns/snapshots/{snapshot_id}/actions",
+    status_code=201,
+    operation_id="createMarketingManagerDashboardSnapshotAction",
+    summary="Record a manager decision and follow-up action for a dashboard snapshot",
+)
+async def create_marketing_manager_dashboard_snapshot_action(
+    snapshot_id: UUID,
+    payload: DashboardSnapshotActionCreate,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    snapshot = await context.session.execute(
+        text("""
+            SELECT id FROM crm_marketing_dashboard_snapshots
+            WHERE id = :snapshot_id AND tenant_id = :tenant_id
+              AND creator_identity_id = :identity_id
+        """),
+        {
+            "snapshot_id": snapshot_id,
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+        },
+    )
+    if snapshot.first() is None:
+        raise HTTPException(status_code=404, detail="Dashboard snapshot not found")
+    if payload.assigned_membership_id is not None:
+        assignee = await context.session.execute(
+            text("""
+                SELECT id FROM workspace_memberships
+                WHERE tenant_id = :tenant_id AND id = :membership_id
+                  AND status = 'active'
+            """),
+            {
+                "tenant_id": context.access.tenant_id,
+                "membership_id": payload.assigned_membership_id,
+            },
+        )
+        if assignee.first() is None:
+            raise HTTPException(status_code=422, detail="Assignee is not an active workspace member")
+    result = await context.session.execute(
+        text("""
+            INSERT INTO crm_marketing_dashboard_actions
+                (tenant_id, snapshot_id, creator_identity_id, assigned_membership_id,
+                 title, decision_note, due_on)
+            VALUES
+                (:tenant_id, :snapshot_id, :identity_id, :assigned_membership_id,
+                 :title, :decision_note, :due_on)
+            RETURNING id, status, created_at, updated_at
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "snapshot_id": snapshot_id,
+            "identity_id": context.access.identity_id,
+            "assigned_membership_id": payload.assigned_membership_id,
+            "title": payload.title,
+            "decision_note": payload.decision_note,
+            "due_on": payload.due_on,
+        },
+    )
+    row = result.mappings().one()
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.created",
+        target_type="crm_marketing_dashboard_action",
+        target_key=str(row["id"]),
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "snapshot_id": str(snapshot_id),
+            "status": row["status"],
+            "due_on": payload.due_on.isoformat() if payload.due_on else None,
+            "assigned_membership_id": (
+                str(payload.assigned_membership_id)
+                if payload.assigned_membership_id else None
+            ),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {
+        "id": str(row["id"]),
+        "snapshot_id": str(snapshot_id),
+        "title": payload.title,
+        "decision_note": payload.decision_note,
+        "assigned_membership_id": (
+            str(payload.assigned_membership_id) if payload.assigned_membership_id else None
+        ),
+        "due_on": payload.due_on.isoformat() if payload.due_on else None,
+        "status": row["status"],
+        "outcome": None,
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+    }
+
+
+@router.get(
+    "/campaigns/snapshots/{snapshot_id}/actions",
+    operation_id="listMarketingManagerDashboardSnapshotActions",
+    summary="List follow-up actions for a dashboard snapshot",
+)
+async def list_marketing_manager_dashboard_snapshot_actions(
+    snapshot_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    result = await context.session.execute(
+        text("""
+            SELECT id, title, decision_note, assigned_membership_id, due_on,
+                   status, outcome, created_at, updated_at
+            FROM crm_marketing_dashboard_actions
+            WHERE snapshot_id = :snapshot_id AND tenant_id = :tenant_id
+              AND creator_identity_id = :identity_id
+            ORDER BY created_at, id
+        """),
+        {
+            "snapshot_id": snapshot_id,
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+        },
+    )
+    rows = result.mappings().all()
+    items = [
+        {
+            "id": str(row["id"]),
+            "title": row["title"],
+            "decision_note": row["decision_note"],
+            "assigned_membership_id": (
+                str(row["assigned_membership_id"])
+                if row["assigned_membership_id"] else None
+            ),
+            "due_on": row["due_on"].isoformat() if row["due_on"] else None,
+            "status": row["status"],
+            "outcome": row["outcome"],
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+        for row in rows
+    ]
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.listed",
+        target_type="crm_marketing_dashboard_snapshot",
+        target_key=str(snapshot_id),
+        organization_unit_id=None,
+        before_state=None,
+        after_state={"returned_count": len(items)},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {"items": items}
+
+
+@router.patch(
+    "/campaigns/snapshot-actions/{action_id}",
+    operation_id="closeMarketingManagerDashboardSnapshotAction",
+    summary="Complete or cancel an open dashboard follow-up action",
+)
+async def close_marketing_manager_dashboard_snapshot_action(
+    action_id: UUID,
+    payload: DashboardSnapshotActionClose,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    result = await context.session.execute(
+        text("""
+            UPDATE crm_marketing_dashboard_actions
+            SET status = :status, outcome = :outcome, updated_at = now()
+            WHERE id = :action_id AND tenant_id = :tenant_id
+              AND (creator_identity_id = :identity_id
+                   OR assigned_membership_id = :membership_id)
+              AND status = 'open'
+            RETURNING id, snapshot_id, status, outcome, updated_at
+        """),
+        {
+            "action_id": action_id,
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+            "membership_id": context.access.membership_id,
+            "status": payload.status,
+            "outcome": payload.outcome,
+        },
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        existing = await context.session.execute(
+            text("""
+                SELECT status FROM crm_marketing_dashboard_actions
+                WHERE id = :action_id AND tenant_id = :tenant_id
+                  AND (creator_identity_id = :identity_id
+                       OR assigned_membership_id = :membership_id)
+            """),
+            {
+                "action_id": action_id,
+                "tenant_id": context.access.tenant_id,
+                "identity_id": context.access.identity_id,
+                "membership_id": context.access.membership_id,
+            },
+        )
+        if existing.first() is None:
+            raise HTTPException(status_code=404, detail="Dashboard action not found")
+        raise HTTPException(status_code=409, detail="Dashboard action is already closed")
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.closed",
+        target_type="crm_marketing_dashboard_action",
+        target_key=str(action_id),
+        organization_unit_id=None,
+        before_state={"status": "open"},
+        after_state={
+            "status": row["status"],
+            "outcome": payload.outcome,
+            "snapshot_id": str(row["snapshot_id"]),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {
+        "id": str(row["id"]),
+        "snapshot_id": str(row["snapshot_id"]),
+        "status": row["status"],
+        "outcome": row["outcome"],
+        "updated_at": row["updated_at"].isoformat(),
+    }
+
+
+@router.get(
+    "/campaigns/snapshot-actions",
+    operation_id="listMarketingManagerDashboardActionWorklist",
+    summary="List open and closed actions created by or assigned to the current member",
+)
+async def list_marketing_manager_dashboard_action_worklist(
+    status_filter: str | None = Query(
+        default=None, alias="status", pattern="^(open|completed|cancelled)$"
+    ),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10000),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    result = await context.session.execute(
+        text("""
+            SELECT id, snapshot_id, title, decision_note, assigned_membership_id,
+                   due_on, status, outcome, created_at, updated_at
+            FROM crm_marketing_dashboard_actions
+            WHERE tenant_id = :tenant_id
+              AND (creator_identity_id = :identity_id
+                   OR assigned_membership_id = :membership_id)
+              AND (CAST(:status_filter AS VARCHAR) IS NULL OR status = :status_filter)
+            ORDER BY
+                CASE WHEN status = 'open' THEN 0 ELSE 1 END,
+                due_on ASC NULLS LAST, created_at DESC, id
+            LIMIT :limit OFFSET :offset
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+            "membership_id": context.access.membership_id,
+            "status_filter": status_filter,
+            "limit": limit,
+            "offset": offset,
+        },
+    )
+    rows = result.mappings().all()
+    items = [
+        {
+            "id": str(row["id"]),
+            "snapshot_id": str(row["snapshot_id"]),
+            "title": row["title"],
+            "decision_note": row["decision_note"],
+            "assigned_membership_id": (
+                str(row["assigned_membership_id"])
+                if row["assigned_membership_id"] else None
+            ),
+            "due_on": row["due_on"].isoformat() if row["due_on"] else None,
+            "status": row["status"],
+            "outcome": row["outcome"],
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+        for row in rows
+    ]
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.worklist_read",
+        target_type="crm_marketing_dashboard_action_collection",
+        target_key=f"{status_filter or 'all'}:{offset}:{limit}",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={"returned_count": len(items)},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {"items": items, "status": status_filter, "limit": limit, "offset": offset}

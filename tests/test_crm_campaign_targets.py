@@ -450,6 +450,52 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert snapshot_body["snapshot_hash"] == snapshot["snapshot_hash"]
         assert snapshot_body["dashboard"]["period_start"] == "2026-10-16"
 
+        action_response = await client.post(
+            f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshots/{snapshot_id}/actions",
+            headers=headers,
+            json={
+                "title": "Review low campaign coverage",
+                "decision_note": "Ask the channel lead to verify missing campaign days.",
+                "due_on": "2026-10-20",
+            },
+        )
+        assert action_response.status_code == 201, action_response.text
+        action = action_response.json()
+        assert action["status"] == "open"
+        assert action["due_on"] == "2026-10-20"
+
+        listed_actions = await client.get(
+            f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshots/{snapshot_id}/actions",
+            headers=headers,
+        )
+        assert listed_actions.status_code == 200, listed_actions.text
+        assert listed_actions.json()["items"][0]["id"] == action["id"]
+
+        closed_action = await client.patch(
+            f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action['id']}",
+            headers=headers,
+            json={"status": "completed", "outcome": "Channel lead confirmed the tracking gap."},
+        )
+        assert closed_action.status_code == 200, closed_action.text
+        assert closed_action.json()["status"] == "completed"
+        repeated_close = await client.patch(
+            f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action['id']}",
+            headers=headers,
+            json={"status": "cancelled", "outcome": "No longer needed."},
+        )
+        assert repeated_close.status_code == 409
+
+        action_worklist = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions",
+            headers=headers,
+            params={"status": "completed"},
+        )
+        assert action_worklist.status_code == 200, action_worklist.text
+        assert action_worklist.json()["items"][0]["id"] == action["id"]
+        assert action_worklist.json()["items"][0]["outcome"] == (
+            "Channel lead confirmed the tracking gap."
+        )
+
         second_snapshot_response = await client.post(
             "/api/v1/crm/analytics/marketing-manager/campaigns/snapshots",
             headers=headers,
