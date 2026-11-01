@@ -527,6 +527,41 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         )
         assert second_snapshot_response.status_code == 201, second_snapshot_response.text
         current_snapshot_id = second_snapshot_response.json()["id"]
+
+        verification = await client.post(
+            f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action['id']}/verifications",
+            headers=headers,
+            json={
+                "current_snapshot_id": current_snapshot_id,
+                "metric_path": "performance.totals.clicks",
+                "expected_direction": "unchanged",
+            },
+        )
+        assert verification.status_code == 201, verification.text
+        verified = verification.json()
+        assert verified["baseline_value"] == verified["current_value"]
+        assert verified["absolute_change"] == "0"
+        assert verified["direction_matched"] is True
+        assert "does not establish" in verified["interpretation"]
+
+        verification_history = await client.get(
+            f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action['id']}/verifications",
+            headers=headers,
+        )
+        assert verification_history.status_code == 200, verification_history.text
+        assert len(verification_history.json()["items"]) == 1
+
+        duplicate_verification = await client.post(
+            f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action['id']}/verifications",
+            headers=headers,
+            json={
+                "current_snapshot_id": current_snapshot_id,
+                "metric_path": "performance.totals.clicks",
+                "expected_direction": "unchanged",
+            },
+        )
+        assert duplicate_verification.status_code == 409
+
         comparison = await client.get(
             "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-comparisons",
             headers=headers,
