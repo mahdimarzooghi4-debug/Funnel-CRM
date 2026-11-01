@@ -87,7 +87,8 @@ def upgrade() -> None:
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF TG_OP = 'DELETE' THEN
-                IF NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL THEN
+                IF pg_trigger_depth() <= 1
+                   AND NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL THEN
                     RAISE EXCEPTION 'marketing dashboard actions cannot be deleted';
                 END IF;
                 RETURN OLD;
