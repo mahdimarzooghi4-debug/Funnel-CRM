@@ -75,7 +75,7 @@ _PAGE = """<!doctype html>
       <a class="nav-item" href="/workspace/crm-marketing-planning"><span class="nav-icon">◎</span>استراتژی و برنامه‌ریزی بازاریابی</a>
       <a class="nav-item" href="/workspace/crm-catalog"><span class="nav-icon">◇</span>محصول، قیمت و پیشنهاد فروش</a>
       <a class="nav-item" href="/workspace/crm-campaigns"><span class="nav-icon">◉</span>کمپین و محتوا</a>
-      <a class="nav-item" href="#channels" data-module="channels"><span class="nav-icon">⌘</span>کانال‌ها و شرکای فروش</a>
+      <a class="nav-item" href="/workspace/crm-channel-partners"><span class="nav-icon">⌘</span>کانال‌ها و شرکای فروش</a>
       <a class="nav-item" href="/workspace/crm-sales"><span class="nav-icon">↗</span>مدیریت فروش و درآمد</a>
       <a class="nav-item" href="/workspace/crm-operations"><span class="nav-icon">☷</span>عملیات و منابع بازاریابی</a>
       <a class="nav-item" href="/workspace/crm-analytics"><span class="nav-icon">◷</span>تحلیل و هوش تجاری</a>
