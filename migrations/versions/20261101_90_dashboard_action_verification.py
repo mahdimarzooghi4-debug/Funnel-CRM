@@ -15,6 +15,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.create_unique_constraint(
+        "uq_crm_dashboard_actions_tenant_id",
+        "crm_marketing_dashboard_actions",
+        ["tenant_id", "id"],
+    )
     op.create_table(
         "crm_marketing_dashboard_action_verifications",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True,
@@ -122,3 +127,8 @@ def downgrade() -> None:
         "DROP FUNCTION IF EXISTS protect_crm_marketing_dashboard_action_verification()"
     )
     op.drop_table("crm_marketing_dashboard_action_verifications")
+    op.drop_constraint(
+        "uq_crm_dashboard_actions_tenant_id",
+        "crm_marketing_dashboard_actions",
+        type_="unique",
+    )
