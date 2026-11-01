@@ -248,6 +248,9 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         assert web["lead_rate_per_click_percent"] == 12.0
         assert web["planned_budget_by_currency"] == {"USD": "500.000000"}
         assert web["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
+        assert web["efficiency"]["attributed_revenue_minus_spend_by_currency"] == {
+            "EUR": "30.000000", "USD": "80.000000"
+        }
 
         segments = await client.get(
             "/api/v1/crm/campaigns/performance/segments",
@@ -264,7 +267,12 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         assert segment["campaign_count"] == 1
         assert segment["totals"]["conversions"] == 3
         assert segment["conversion_rate_per_click_percent"] == 4.0
+        assert segment["efficiency"]["return_on_ad_spend_by_currency"] == {"EUR": 4.0, "USD": 5.0}
         assert item["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
+        assert item["efficiency"]["attributed_revenue_minus_spend_by_currency"] == {
+            "EUR": "30.000000", "USD": "80.000000"
+        }
+        assert item["efficiency"]["return_on_ad_spend_by_currency"] == {"EUR": 4.0, "USD": 5.0}
 
         comparison = await client.get(
             "/api/v1/crm/campaigns/performance/compare",
@@ -278,6 +286,8 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         )
         assert comparison.status_code == 200, comparison.text
         compared = comparison.json()["items"][0]
+        assert compared["current"]["efficiency"]["return_on_ad_spend_by_currency"] == {"EUR": 4.0}
+        assert compared["previous"]["efficiency"]["return_on_ad_spend_by_currency"] == {"USD": 5.0}
         assert compared["count_metrics"]["impressions"] == {
             "current_value": 500.0,
             "previous_value": 1000.0,
