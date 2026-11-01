@@ -668,7 +668,7 @@ def _dashboard_snapshot_changes(
 
 
 @router.get(
-    "/campaigns/snapshots/compare",
+    "/campaigns/snapshot-comparisons",
     operation_id="compareMarketingManagerCampaignDashboardSnapshots",
     summary="Compare two verified dashboard snapshots for the same period and report version",
 )
