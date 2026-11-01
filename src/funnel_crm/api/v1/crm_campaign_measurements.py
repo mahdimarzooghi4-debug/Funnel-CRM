@@ -326,6 +326,29 @@ class CampaignBudgetConsumption(BaseModel):
     spend_in_other_currencies: dict[str, Decimal]
 
 
+class CampaignEfficiencyMetrics(BaseModel):
+    attributed_revenue_minus_spend_by_currency: dict[str, Decimal]
+    return_on_ad_spend_by_currency: dict[str, float]
+
+
+def _campaign_efficiency(
+    spend_by_currency: dict[str, Decimal],
+    revenue_by_currency: dict[str, Decimal],
+) -> CampaignEfficiencyMetrics:
+    common_currencies = spend_by_currency.keys() & revenue_by_currency.keys()
+    return CampaignEfficiencyMetrics(
+        attributed_revenue_minus_spend_by_currency={
+            currency: revenue_by_currency[currency] - spend_by_currency[currency]
+            for currency in sorted(common_currencies)
+        },
+        return_on_ad_spend_by_currency={
+            currency: round(float(revenue_by_currency[currency] / spend_by_currency[currency]), 4)
+            for currency in sorted(common_currencies)
+            if spend_by_currency[currency] > 0
+        },
+    )
+
+
 class CampaignPerformanceItem(BaseModel):
     campaign_id: UUID
     segment_id: UUID
@@ -345,6 +368,7 @@ class CampaignPerformanceItem(BaseModel):
     actual_spend_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
     budget_consumption: CampaignBudgetConsumption
+    efficiency: CampaignEfficiencyMetrics
     rate_bases: dict[str, dict[str, int]]
 
 
@@ -461,6 +485,9 @@ async def get_campaign_performance_portfolio(
             if campaign.planned_budget_amount is not None and matching_spend is not None
             else None
         )
+        revenue_by_currency = currency_totals(
+            rows, "attributed_revenue_amount", "attributed_revenue_currency"
+        )
         budget_consumption = CampaignBudgetConsumption(
             planned_amount=campaign.planned_budget_amount,
             currency=campaign.planned_budget_currency,
@@ -494,7 +521,7 @@ async def get_campaign_performance_portfolio(
             lead_rate_per_click_percent=paired_rate("leads", "clicks"),
             conversion_rate_per_click_percent=paired_rate("conversions", "clicks"),
             actual_spend_by_currency=spend_by_currency,
-            attributed_revenue_by_currency=currency_totals(rows, "attributed_revenue_amount", "attributed_revenue_currency"),
+            attributed_revenue_by_currency=revenue_by_currency,\n            efficiency=_campaign_efficiency(spend_by_currency, revenue_by_currency),
             budget_consumption=budget_consumption,
             rate_bases={
                 "click_through_rate_percent": paired_totals("clicks", "impressions"),
@@ -707,6 +734,7 @@ class CampaignChannelPerformanceItem(BaseModel):
     planned_budget_by_currency: dict[str, Decimal]
     actual_spend_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
+    efficiency: CampaignEfficiencyMetrics
 
 
 class CampaignChannelPerformanceRead(BaseModel):
@@ -786,6 +814,8 @@ async def get_campaign_channel_performance(
                     + campaign.planned_budget_amount
                 )
 
+        actual_spend_by_currency = sum_currency_map("actual_spend_by_currency")
+        attributed_revenue_by_currency = sum_currency_map("attributed_revenue_by_currency")
         result_items.append(CampaignChannelPerformanceItem(
             channel=channel,
             campaign_count=len(campaigns),
@@ -827,6 +857,7 @@ class CampaignSegmentPerformanceItem(BaseModel):
     planned_budget_by_currency: dict[str, Decimal]
     actual_spend_by_currency: dict[str, Decimal]
     attributed_revenue_by_currency: dict[str, Decimal]
+    efficiency: CampaignEfficiencyMetrics
 
 
 class CampaignSegmentPerformanceRead(BaseModel):
@@ -912,6 +943,8 @@ async def get_campaign_segment_performance(
                     result[currency] = result.get(currency, Decimal("0")) + amount
             return result
 
+        actual_spend_by_currency = sum_currency_map("actual_spend_by_currency")
+        attributed_revenue_by_currency = sum_currency_map("attributed_revenue_by_currency")
         result_items.append(CampaignSegmentPerformanceItem(
             segment_id=segment_id,
             segment_name=segment_names.get(segment_id),
