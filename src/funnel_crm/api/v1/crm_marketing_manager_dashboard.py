@@ -9,7 +9,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import text
+from sqlalchemy import select, text
 from pydantic import BaseModel, Field, field_validator
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
@@ -33,13 +33,186 @@ from funnel_crm.api.v1.crm_campaign_target_analytics import (
     TargetOutcomeCounts,
     review_campaign_target_portfolio,
 )
-from funnel_crm.platform.models import AuditEvent
+from funnel_crm.platform.models import AuditEvent, CRMMarketingCampaign
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
 router = APIRouter(
     prefix="/crm/analytics/marketing-manager",
     tags=["CRM marketing analytics"],
 )
+
+
+
+
+class CampaignBudgetPacingItem(BaseModel):
+    campaign_id: UUID
+    campaign_name: str
+    campaign_status: str
+    period_start: date
+    as_of: date
+    planned_budget_amount: Decimal | None
+    budget_currency: str | None
+    actual_spend_in_budget_currency: Decimal | None
+    expected_spend_to_date: Decimal | None
+    variance_from_expected: Decimal | None
+    variance_percent: float | None
+    spend_in_other_currencies: dict[str, Decimal]
+    scheduled_days_elapsed: int | None
+    scheduled_days_total: int | None
+    pacing_status: str
+
+
+class CampaignBudgetPacingRead(BaseModel):
+    period_start: date
+    as_of: date
+    campaign_count: int
+    items: list[CampaignBudgetPacingItem]
+    truncated: bool
+    pacing_basis: str
+
+
+@router.get(
+    "/campaigns/budget-pacing",
+    response_model=CampaignBudgetPacingRead,
+    operation_id="getMarketingManagerCampaignBudgetPacing",
+    summary="Compare observed campaign spend with linear scheduled budget pacing",
+)
+async def get_marketing_manager_campaign_budget_pacing(
+    period_start: date = Query(...),
+    as_of: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignBudgetPacingRead:
+    if period_start > as_of:
+        raise HTTPException(status_code=422, detail="period_start must not be after as_of")
+    if (as_of - period_start).days > 365:
+        raise HTTPException(
+            status_code=422,
+            detail="Budget pacing windows are limited to 366 calendar days",
+        )
+    portfolio = await get_campaign_performance_portfolio(
+        period_start=period_start, period_end=as_of, context=context
+    )
+    campaign_ids = [item.campaign_id for item in portfolio.items]
+    campaigns: dict[UUID, CRMMarketingCampaign] = {}
+    if campaign_ids:
+        rows = await context.session.scalars(
+            select(CRMMarketingCampaign).where(
+                CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+                CRMMarketingCampaign.id.in_(campaign_ids),
+            )
+        )
+        campaigns = {campaign.id: campaign for campaign in rows}
+
+    items: list[CampaignBudgetPacingItem] = []
+    pacing_counts = {
+        "ahead_of_pace": 0,
+        "behind_pace": 0,
+        "on_pace": 0,
+        "not_started": 0,
+        "no_budget": 0,
+        "schedule_incomplete": 0,
+        "no_spend_data": 0,
+    }
+    for performance in portfolio.items:
+        campaign = campaigns.get(performance.campaign_id)
+        if campaign is None:
+            continue
+        start_day = campaign.starts_at.date() if campaign.starts_at else None
+        end_day = campaign.ends_at.date() if campaign.ends_at else None
+        budget = performance.planned_budget_amount
+        currency = performance.planned_budget_currency
+        actual = performance.budget_consumption.measured_spend_in_budget_currency
+        other_currency_spend = dict(performance.budget_consumption.spend_in_other_currencies)
+        scheduled_days_elapsed: int | None = None
+        scheduled_days_total: int | None = None
+        expected: Decimal | None = None
+        variance: Decimal | None = None
+        variance_percent: float | None = None
+
+        if budget is None or currency is None or budget <= 0:
+            pacing_status = "no_budget"
+        elif start_day is None or end_day is None:
+            pacing_status = "schedule_incomplete"
+        else:
+            scheduled_days_total = (end_day - start_day).days + 1
+            if as_of < start_day:
+                scheduled_days_elapsed = 0
+                expected = Decimal("0")
+                pacing_status = "not_started"
+            else:
+                active_window_start = max(period_start, start_day)
+                active_window_end = min(as_of, end_day)
+                scheduled_days_elapsed = max(
+                    0, (active_window_end - active_window_start).days + 1
+                )
+                expected = (
+                    budget * Decimal(scheduled_days_elapsed)
+                    / Decimal(scheduled_days_total)
+                )
+                if actual is None:
+                    pacing_status = "no_spend_data"
+                else:
+                    variance = actual - expected
+                    variance_percent = (
+                        round(float(variance / expected * Decimal("100")), 4)
+                        if expected > 0 else None
+                    )
+                    if actual > expected:
+                        pacing_status = "ahead_of_pace"
+                    elif actual < expected:
+                        pacing_status = "behind_pace"
+                    else:
+                        pacing_status = "on_pace"
+        pacing_counts[pacing_status] += 1
+        items.append(CampaignBudgetPacingItem(
+            campaign_id=performance.campaign_id,
+            campaign_name=performance.name,
+            campaign_status=performance.status,
+            period_start=period_start,
+            as_of=as_of,
+            planned_budget_amount=budget,
+            budget_currency=currency,
+            actual_spend_in_budget_currency=actual,
+            expected_spend_to_date=expected,
+            variance_from_expected=variance,
+            variance_percent=variance_percent,
+            spend_in_other_currencies=other_currency_spend,
+            scheduled_days_elapsed=scheduled_days_elapsed,
+            scheduled_days_total=scheduled_days_total,
+            pacing_status=pacing_status,
+        ))
+
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.campaign_budget_pacing.read",
+        target_type="crm_marketing_campaign_budget_pacing",
+        target_key=f"{period_start.isoformat()}:{as_of.isoformat()}",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "campaign_count": len(items),
+            "truncated": portfolio.truncated,
+            "pacing_status_counts": pacing_counts,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignBudgetPacingRead(
+        period_start=period_start,
+        as_of=as_of,
+        campaign_count=len(items),
+        items=items,
+        truncated=portfolio.truncated,
+        pacing_basis=(
+            "Expected spend assumes planned budget is distributed linearly across the "
+            "campaign's inclusive scheduled dates. Actual spend is measured only in the "
+            "requested period and remains separated by currency; missing observations "
+            "are not treated as zero."
+        ),
+    )
 
 
 class DashboardMetricCoverage(BaseModel):
