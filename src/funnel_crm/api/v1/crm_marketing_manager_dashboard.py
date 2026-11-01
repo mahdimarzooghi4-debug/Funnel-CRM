@@ -1497,3 +1497,215 @@ async def list_marketing_manager_dashboard_action_verifications(
     ))
     await context.session.flush()
     return {"items": items}
+
+
+
+async def _read_marketing_manager_action_learning(
+    context: TenantSessionContext,
+) -> dict[str, object]:
+    summary_result = await context.session.execute(
+        text("""
+            SELECT
+                CURRENT_DATE AS as_of,
+                COUNT(*) AS verification_count,
+                COUNT(DISTINCT v.action_id) AS action_count,
+                COUNT(*) FILTER (WHERE v.expected_direction IS NOT NULL) AS expected_count,
+                COUNT(*) FILTER (WHERE v.direction_matched IS TRUE) AS matched_count,
+                COUNT(*) FILTER (WHERE v.expected_direction = 'increase') AS expected_increase_count,
+                COUNT(*) FILTER (WHERE v.expected_direction = 'decrease') AS expected_decrease_count,
+                COUNT(*) FILTER (WHERE v.expected_direction = 'unchanged') AS expected_unchanged_count,
+                COUNT(*) FILTER (
+                    WHERE v.expected_direction IS NOT NULL AND v.direction_matched IS FALSE
+                ) AS not_matched_count
+            FROM crm_marketing_dashboard_action_verifications AS v
+            JOIN crm_marketing_dashboard_actions AS a
+              ON a.tenant_id = v.tenant_id AND a.id = v.action_id
+            WHERE v.tenant_id = :tenant_id
+              AND a.creator_identity_id = :identity_id
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+        },
+    )
+    summary_row = summary_result.mappings().one()
+    grouped_result = await context.session.execute(
+        text("""
+            SELECT
+                v.metric_path,
+                COUNT(*) AS verification_count,
+                COUNT(*) FILTER (WHERE v.expected_direction IS NOT NULL) AS expected_count,
+                COUNT(*) FILTER (WHERE v.direction_matched IS TRUE) AS matched_count,
+                COUNT(*) FILTER (
+                    WHERE v.expected_direction IS NOT NULL AND v.direction_matched IS FALSE
+                ) AS not_matched_count,
+                COUNT(*) FILTER (WHERE v.absolute_change > 0) AS increase_count,
+                COUNT(*) FILTER (WHERE v.absolute_change < 0) AS decrease_count,
+                COUNT(*) FILTER (WHERE v.absolute_change = 0) AS unchanged_count,
+                AVG(v.absolute_change) AS average_observed_change,
+                ROUND(
+                    COUNT(*) FILTER (WHERE v.direction_matched IS TRUE)::numeric * 100
+                    / NULLIF(COUNT(*) FILTER (
+                        WHERE v.expected_direction IS NOT NULL
+                    ), 0),
+                    2
+                ) AS direction_match_rate_percent
+            FROM crm_marketing_dashboard_action_verifications AS v
+            JOIN crm_marketing_dashboard_actions AS a
+              ON a.tenant_id = v.tenant_id AND a.id = v.action_id
+            WHERE v.tenant_id = :tenant_id
+              AND a.creator_identity_id = :identity_id
+            GROUP BY v.metric_path
+            ORDER BY v.metric_path
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+        },
+    )
+    groups = [
+        {
+            "metric_path": row["metric_path"],
+            "verification_count": row["verification_count"],
+            "expected_count": row["expected_count"],
+            "matched_count": row["matched_count"],
+            "not_matched_count": row["not_matched_count"],
+            "increase_count": row["increase_count"],
+            "decrease_count": row["decrease_count"],
+            "unchanged_count": row["unchanged_count"],
+            "average_observed_change": (
+                format(row["average_observed_change"], "f")
+                if row["average_observed_change"] is not None else None
+            ),
+            "direction_match_rate_percent": (
+                format(row["direction_match_rate_percent"], "f")
+                if row["direction_match_rate_percent"] is not None else None
+            ),
+        }
+        for row in grouped_result.mappings()
+    ]
+    expected_count = summary_row["expected_count"]
+    summary = {
+        "as_of": summary_row["as_of"].isoformat(),
+        "verification_count": summary_row["verification_count"],
+        "action_count": summary_row["action_count"],
+        "expected_count": expected_count,
+        "matched_count": summary_row["matched_count"],
+        "not_matched_count": summary_row["not_matched_count"],
+        "expected_increase_count": summary_row["expected_increase_count"],
+        "expected_decrease_count": summary_row["expected_decrease_count"],
+        "expected_unchanged_count": summary_row["expected_unchanged_count"],
+        "direction_match_rate_percent": (
+            format(
+                (summary_row["matched_count"] * Decimal("100")) / expected_count,
+                ".2f",
+            )
+            if expected_count else None
+        ),
+    }
+    return {"summary": summary, "metrics": groups}
+
+
+@router.get(
+    "/campaigns/snapshot-actions/verification-analytics",
+    operation_id="getMarketingManagerActionLearningAnalytics",
+    summary="Aggregate observed action follow-up results by metric",
+)
+async def get_marketing_manager_action_learning_analytics(
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    report = await _read_marketing_manager_action_learning(context)
+    summary = report["summary"]
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.learning_analytics_read",
+        target_type="crm_marketing_dashboard_action_learning_analytics",
+        target_key=summary["as_of"],
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "verification_count": summary["verification_count"],
+            "action_count": summary["action_count"],
+            "metric_count": len(report["metrics"]),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return report
+
+
+@router.get(
+    "/campaigns/snapshot-actions/verification-analytics/export.csv",
+    response_class=Response,
+    operation_id="exportMarketingManagerActionLearningAnalyticsCsv",
+    summary="Export action follow-up analytics as CSV",
+)
+async def export_marketing_manager_action_learning_analytics_csv(
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> Response:
+    report = await _read_marketing_manager_action_learning(context)
+    summary = report["summary"]
+    columns = (
+        "record_type", "metric_path", "verification_count", "expected_count",
+        "matched_count", "not_matched_count", "direction_match_rate_percent",
+        "increase_count", "decrease_count", "unchanged_count",
+        "average_observed_change",
+    )
+    buffer = StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=columns)
+    writer.writeheader()
+    for key in (
+        "as_of", "verification_count", "action_count", "expected_count",
+        "matched_count", "not_matched_count", "direction_match_rate_percent",
+    ):
+        writer.writerow({
+            "record_type": "summary",
+            "metric_path": key,
+            "verification_count": summary[key],
+        })
+    for metric in report["metrics"]:
+        writer.writerow({
+            "record_type": "metric",
+            "metric_path": _csv_safe_text(str(metric["metric_path"])),
+            "verification_count": metric["verification_count"],
+            "expected_count": metric["expected_count"],
+            "matched_count": metric["matched_count"],
+            "not_matched_count": metric["not_matched_count"],
+            "direction_match_rate_percent": metric["direction_match_rate_percent"],
+            "increase_count": metric["increase_count"],
+            "decrease_count": metric["decrease_count"],
+            "unchanged_count": metric["unchanged_count"],
+            "average_observed_change": metric["average_observed_change"],
+        })
+
+    export_time = datetime.now(timezone.utc)
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.learning_analytics_exported",
+        target_type="crm_marketing_dashboard_action_learning_analytics",
+        target_key=summary["as_of"],
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "format": "csv",
+            "generated_at": export_time.isoformat(),
+            "row_count": len(report["metrics"]) + 7,
+            "column_count": len(columns),
+            "verification_count": summary["verification_count"],
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return Response(
+        content="\\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="funnel-crm-action-learning-analytics.csv"'
+        },
+    )
