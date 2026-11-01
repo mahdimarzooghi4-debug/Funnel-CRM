@@ -1034,13 +1034,16 @@ async def close_marketing_manager_dashboard_snapshot_action(
             UPDATE crm_marketing_dashboard_actions
             SET status = :status, outcome = :outcome, updated_at = now()
             WHERE id = :action_id AND tenant_id = :tenant_id
-              AND creator_identity_id = :identity_id AND status = 'open'
+              AND (creator_identity_id = :identity_id
+                   OR assigned_membership_id = :membership_id)
+              AND status = 'open'
             RETURNING id, snapshot_id, status, outcome, updated_at
         """),
         {
             "action_id": action_id,
             "tenant_id": context.access.tenant_id,
             "identity_id": context.access.identity_id,
+            "membership_id": context.access.membership_id,
             "status": payload.status,
             "outcome": payload.outcome,
         },
@@ -1051,12 +1054,14 @@ async def close_marketing_manager_dashboard_snapshot_action(
             text("""
                 SELECT status FROM crm_marketing_dashboard_actions
                 WHERE id = :action_id AND tenant_id = :tenant_id
-                  AND creator_identity_id = :identity_id
+                  AND (creator_identity_id = :identity_id
+                       OR assigned_membership_id = :membership_id)
             """),
             {
                 "action_id": action_id,
                 "tenant_id": context.access.tenant_id,
                 "identity_id": context.access.identity_id,
+                "membership_id": context.access.membership_id,
             },
         )
         if existing.first() is None:
@@ -1087,3 +1092,75 @@ async def close_marketing_manager_dashboard_snapshot_action(
         "outcome": row["outcome"],
         "updated_at": row["updated_at"].isoformat(),
     }
+
+
+@router.get(
+    "/campaigns/snapshot-actions",
+    operation_id="listMarketingManagerDashboardActionWorklist",
+    summary="List open and closed actions created by or assigned to the current member",
+)
+async def list_marketing_manager_dashboard_action_worklist(
+    status_filter: str | None = Query(
+        default=None, alias="status", pattern="^(open|completed|cancelled)$"
+    ),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10000),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    result = await context.session.execute(
+        text("""
+            SELECT id, snapshot_id, title, decision_note, assigned_membership_id,
+                   due_on, status, outcome, created_at, updated_at
+            FROM crm_marketing_dashboard_actions
+            WHERE tenant_id = :tenant_id
+              AND (creator_identity_id = :identity_id
+                   OR assigned_membership_id = :membership_id)
+              AND (:status_filter IS NULL OR status = :status_filter)
+            ORDER BY
+                CASE WHEN status = 'open' THEN 0 ELSE 1 END,
+                due_on ASC NULLS LAST, created_at DESC, id
+            LIMIT :limit OFFSET :offset
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+            "membership_id": context.access.membership_id,
+            "status_filter": status_filter,
+            "limit": limit,
+            "offset": offset,
+        },
+    )
+    rows = result.mappings().all()
+    items = [
+        {
+            "id": str(row["id"]),
+            "snapshot_id": str(row["snapshot_id"]),
+            "title": row["title"],
+            "decision_note": row["decision_note"],
+            "assigned_membership_id": (
+                str(row["assigned_membership_id"])
+                if row["assigned_membership_id"] else None
+            ),
+            "due_on": row["due_on"].isoformat() if row["due_on"] else None,
+            "status": row["status"],
+            "outcome": row["outcome"],
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+        for row in rows
+    ]
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.worklist_read",
+        target_type="crm_marketing_dashboard_action_collection",
+        target_key=f"{status_filter or 'all'}:{offset}:{limit}",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={"returned_count": len(items)},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {"items": items, "status": status_filter, "limit": limit, "offset": offset}
