@@ -54,7 +54,7 @@ _PAGE = """<!doctype html>
     .lower-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}.link-row{display:flex;flex-wrap:wrap;gap:8px}.module-link{border:1px solid #dfe7ee;background:#fff;color:#27536d;text-decoration:none;border-radius:8px;padding:9px 12px;font-size:11px}
     .module-link:hover{background:#f2f8fa}.coverage{height:9px;background:#edf1f4;border-radius:9px;overflow:hidden;margin:10px 0}.coverage span{display:block;height:100%;width:0;background:#1aa38f;border-radius:9px;transition:width .3s}
     .footnote{color:#8a96a3;font-size:10px;line-height:1.8;margin-top:12px}
-    .module-features{color:#526477;font-size:12px;line-height:2;padding-right:22px}
+    .module-features{color:#526477;font-size:12px;line-height:2;padding-right:22px}#module-view[hidden],#dashboard-content[hidden]{display:none}
 
     @media(max-width:1050px){.app{grid-template-columns:210px minmax(0,1fr)}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.header-row{display:block}.filters{justify-content:flex-start;margin-top:14px}}
     @media(max-width:760px){.app{display:block}aside{position:relative;height:auto;border-left:0;border-bottom:1px solid #e5eaf1;padding:12px}.brand{padding-bottom:8px}.nav-label,.side-foot{display:none}nav{display:flex;overflow:auto;padding-bottom:3px}.nav-item{white-space:nowrap;width:auto;flex:0 0 auto;padding:9px}.topbar{margin-bottom:18px}.grid-main,.lower-grid{grid-template-columns:1fr}.profile span:not(.avatar){display:none}}
@@ -76,7 +76,7 @@ _PAGE = """<!doctype html>
       <a class="nav-item" href="#campaigns" data-module="campaigns"><span class="nav-icon">◉</span>کمپین و محتوا</a>
       <a class="nav-item" href="#channels" data-module="channels"><span class="nav-icon">⌘</span>کانال‌ها و شرکای فروش</a>
       <a class="nav-item" href="#sales" data-module="sales"><span class="nav-icon">↗</span>مدیریت فروش و درآمد</a>
-      <a class="nav-item" href="/workspace/crm-marketing-operations"><span class="nav-icon">☷</span>عملیات و منابع بازاریابی</a>
+      <a class="nav-item" href="#operations" data-module="operations"><span class="nav-icon">☷</span>عملیات و منابع بازاریابی</a>
       <a class="nav-item" href="#analytics" data-module="analytics"><span class="nav-icon">◷</span>تحلیل و هوش تجاری</a>
       <a class="nav-item" href="#assistant" data-module="assistant"><span class="nav-icon">✦</span>دستیار هوشمند مدیر بازاریابی</a>
       <a class="nav-item" href="#automation" data-module="automation"><span class="nav-icon">⤳</span>اتوماسیون و گردش‌کار</a>
@@ -167,6 +167,7 @@ _SCRIPT = r"""(() => {
     campaigns: { title: "کمپین و محتوا", description: "مدیریت چرخهٔ کمپین از هدف و مخاطب تا اجرا و سنجش نتیجه.", features: ["سبد کمپین و تقویم اجرا", "محتوا، پیام و دارایی برند", "لانچ محصول و ورود به بازار", "اتصال نتیجه به هدف و بودجه"] },
     channels: { title: "کانال‌ها و شرکای فروش", description: "مقایسه و مدیریت کانال‌های حضوری، دیجیتال، تلفنی و شرکای اجرا.", features: ["سبد کانال‌های بازاریابی و فروش", "هزینه، نتیجه و پوشش دادهٔ هر کانال", "مدیریت شریک، نماینده و فروشنده", "منبع و تازگی دادهٔ کانال"] },
     sales: { title: "مدیریت فروش و درآمد", description: "مدیریت مسیر فروش متناسب با مدل هر کسب‌وکار و دیدن فرصت تا درآمد.", features: ["فرصت و مرحلهٔ فروش قابل‌تنظیم", "پیشنهاد، سفارش و پیش‌بینی درآمد", "هدف فروش و عملکرد تیم", "پیگیری و دلیل برد، باخت یا توقف"] , links: [["پیشنهادهای فروش", "/workspace/crm-offers"], ["کمیسیون فروش", "/workspace/crm-commissions"]] },
+    operations: { title: "عملیات و منابع بازاریابی", description: "برنامه‌ریزی کارهای بازاریابی و منابع، با مسئول، موعد و نتیجهٔ روشن.", features: ["فعالیت و تقویم تیم", "پیگیری مسئول و موعد", "مدیریت ظرفیت و کمیسیون", "اتصال اختیاری به ابزارهای اجرایی"], links: [["ثبت فعالیت میدانی", "/workspace/crm-activity-capture"], ["کمیسیون فروش", "/workspace/crm-commissions"]] },
     analytics: { title: "تحلیل و هوش تجاری", description: "گزارش‌ها باید تعریف شاخص، منبع، بازه و کیفیت داده را همراه داشته باشند.", features: ["قیف، کانال، منطقه و گروه مشتری", "تحقق هدف و کیفیت پوشش داده", "بازده، هزینهٔ جذب و ارزش مشتری", "مقایسه و خروجی قابل‌ردیابی"] },
     assistant: { title: "دستیار هوشمند مدیر بازاریابی", description: "دستیار داخلی فانل برای پرسش دربارهٔ شاخص‌ها و شواهد قابل‌دسترسی.", features: ["پاسخ متصل به شاخص و منبع داده", "تفکیک مشاهده، تفسیر، فرضیه و پیشنهاد", "پیشنهاد اقدام با تأیید انسانی", "مدل داخلی؛ بدون API استنتاج بیرونی"] },
     automation: { title: "اتوماسیون و گردش‌کار", description: "گردش‌کارهای قابل‌تنظیم برای پیگیری‌ها، تأییدها و رویدادهای سازمانی.", features: ["شرط، اقدام، مسئول و موعد", "صف کار و اعلان پیگیری", "ثبت خطا، تلاش مجدد و نتیجه", "ممیزی تغییرات و دسترسی"] },
