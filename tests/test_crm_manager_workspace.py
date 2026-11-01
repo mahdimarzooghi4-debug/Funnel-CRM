@@ -52,6 +52,10 @@ def test_marketing_manager_client_connects_supported_tabs_to_workspace_scoped_ap
     assert "/api/v1/system/workspaces" in response.text
     assert "/api/v1/crm/analytics/marketing-manager/campaigns" in response.text
     assert "/api/v1/crm/campaigns?limit=8" in response.text
+    assert "/api/v1/crm/segments?limit=8" in response.text
+    assert "/api/v1/crm/marketing-calendar/events?period_start={start}&period_end={end}" in response.text
+    assert "/api/v1/crm/analytics/campaign-performance?period_start={start}&period_end={end}" in response.text
+    assert "/api/v1/crm/analytics/customer-lifecycle/follow-up-candidates?inactive_for_days=30" in response.text
     assert "/api/v1/crm/opportunities?limit=8" in response.text
     assert "/api/v1/crm/marketing-learning/reviews" in response.text
     assert "/api/v1/integrations/connections" in response.text
