@@ -53,6 +53,22 @@ async def test_partner_registry_scope_and_concurrent_updates(tenant_case):
             response = await client.post('/api/v1/crm/channel-partners', headers=headers, json=payload)
             assert response.status_code == 201, response.text
             partner = response.json()
+            for name, kind, state in [('Alpha 100%', 'agency', 'active'), ('Alpha other', 'referral', 'paused'), ('Zulu', 'agency', 'active')]:
+                created = await client.post('/api/v1/crm/channel-partners', headers=headers, json={**payload, 'name': name, 'partner_type': kind, 'status': state})
+                assert created.status_code == 201
+            listing = '/api/v1/crm/channel-partners'
+            filtered = (await client.get(listing, headers=headers, params={'search': 'Alpha', 'partner_type': 'agency', 'status': 'active', 'limit': 1})).json()
+            assert filtered['total'] == 1
+            assert filtered['items'][0]['name'] == 'Alpha 100%'
+            literal = (await client.get(listing, headers=headers, params={'search': '%'})).json()
+            assert literal['total'] == 1
+            assert literal['items'][0]['name'] == 'Alpha 100%'
+            first = (await client.get(listing, headers=headers, params={'limit': 2})).json()
+            second = (await client.get(listing, headers=headers, params={'limit': 2, 'offset': 2})).json()
+            assert first['total'] == second['total'] == 4
+            assert len({row['id'] for row in first['items'] + second['items']}) == 4
+            for params in ({'status': 'invalid'}, {'partner_type': 'invalid'}, {'offset': -1}, {'limit': 501}):
+                assert (await client.get(listing, headers=headers, params=params)).status_code == 422
             path = '/api/v1/crm/channel-partners/' + partner['id']
             assert (await client.get(path, headers=headers)).status_code == 200
             denied = {**payload, 'organization_unit_id': str(tenant_case['root_b'])}
