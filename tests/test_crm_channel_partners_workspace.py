@@ -27,6 +27,16 @@ def test_channel_partners_script_uses_scoped_apis_and_safe_dom() -> None:
     assert '"X-Workspace-ID"' in response.text
     assert "/api/v1/crm/analytics/campaign-performance/portfolio?" in response.text
     assert "/api/v1/crm/analytics/customer-activities/summary?" in response.text
-    assert "/api/v1/crm/commission-plans" in response.text\n    assert "/api/v1/crm/channel-partners?organization_unit_id=" in response.text
+    assert "/api/v1/crm/commission-plans" in response.text
+    assert "/api/v1/crm/channel-partners?organization_unit_id=" in response.text
     assert "innerHTML" not in response.text
-\n\ndef test_partner_registry_api_is_registered_and_scoped_by_unit() -> None:\n    from funnel_crm.main import app\n\n    schema = app.openapi()\n    assert "/api/v1/crm/channel-partners" in schema["paths"]\n    assert "/api/v1/crm/channel-partners/{partner_id}" in schema["paths"]\n    get_parameters = schema["paths"]["/api/v1/crm/channel-partners"]["get"]["parameters"]\n    assert any(parameter["name"] == "organization_unit_id" for parameter in get_parameters)\n
+
+
+def test_partner_registry_api_is_registered_and_scoped_by_unit() -> None:
+    from funnel_crm.main import app
+
+    schema = app.openapi()
+    assert "/api/v1/crm/channel-partners" in schema["paths"]
+    assert "/api/v1/crm/channel-partners/{partner_id}" in schema["paths"]
+    get_parameters = schema["paths"]["/api/v1/crm/channel-partners"]["get"]["parameters"]
+    assert any(parameter["name"] == "organization_unit_id" for parameter in get_parameters)
