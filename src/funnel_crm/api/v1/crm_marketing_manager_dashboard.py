@@ -215,6 +215,79 @@ async def get_marketing_manager_campaign_budget_pacing(
     )
 
 
+
+
+class CampaignBudgetPacingAlertsRead(BaseModel):
+    period_start: date
+    as_of: date
+    variance_threshold_percent: float
+    alert_count: int
+    items: list[CampaignBudgetPacingItem]
+    truncated: bool
+    alert_basis: str
+
+
+@router.get(
+    "/campaigns/budget-pacing/alerts",
+    response_model=CampaignBudgetPacingAlertsRead,
+    operation_id="getMarketingManagerCampaignBudgetPacingAlerts",
+    summary="List campaigns whose budget pace exceeds a manager-set variance threshold",
+)
+async def get_marketing_manager_campaign_budget_pacing_alerts(
+    period_start: date = Query(...),
+    as_of: date = Query(...),
+    variance_threshold_percent: float = Query(10, ge=0, le=100),
+    limit: int = Query(100, ge=1, le=500),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignBudgetPacingAlertsRead:
+    report = await get_marketing_manager_campaign_budget_pacing(
+        period_start=period_start,
+        as_of=as_of,
+        context=context,
+    )
+    matching = [
+        item
+        for item in report.items
+        if item.pacing_status in {"ahead_of_pace", "behind_pace"}
+        and item.variance_percent is not None
+        and abs(item.variance_percent) >= variance_threshold_percent
+    ]
+    items = matching[:limit]
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.campaign_budget_pacing.alerts.read",
+        target_type="crm_marketing_campaign_budget_pacing_alerts",
+        target_key=f"{period_start.isoformat()}:{as_of.isoformat()}",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "variance_threshold_percent": variance_threshold_percent,
+            "alert_count": len(items),
+            "matching_count": len(matching),
+            "truncated": len(matching) > len(items),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignBudgetPacingAlertsRead(
+        period_start=period_start,
+        as_of=as_of,
+        variance_threshold_percent=variance_threshold_percent,
+        alert_count=len(items),
+        items=items,
+        truncated=len(matching) > len(items),
+        alert_basis=(
+            "Includes only campaigns with observed same-currency spend and a pacing "
+            "variance whose absolute percentage meets the requested threshold. "
+            "Thresholds are relative to expected spend; missing or zero expected "
+            "spend does not produce a percentage alert."
+        ),
+    )
+
+
 class DashboardMetricCoverage(BaseModel):
     observed_days: int
     expected_days: int

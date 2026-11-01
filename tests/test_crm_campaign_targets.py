@@ -743,6 +743,34 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert pacing_item["pacing_status"] == "behind_pace"
         assert pacing_item["budget_currency"] == "USD"
 
+        pacing_alerts = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/alerts",
+            headers=headers,
+            params={
+                "period_start": "2026-10-16",
+                "as_of": "2026-10-16",
+                "variance_threshold_percent": 50,
+            },
+        )
+        assert pacing_alerts.status_code == 200, pacing_alerts.text
+        alert_report = pacing_alerts.json()
+        assert alert_report["alert_count"] == 1
+        assert alert_report["items"][0]["campaign_id"] == str(pacing_campaign_id)
+        assert alert_report["items"][0]["pacing_status"] == "behind_pace"
+        assert alert_report["truncated"] is False
+
+        below_threshold_alerts = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/alerts",
+            headers=headers,
+            params={
+                "period_start": "2026-10-16",
+                "as_of": "2026-10-16",
+                "variance_threshold_percent": 61,
+            },
+        )
+        assert below_threshold_alerts.status_code == 200, below_threshold_alerts.text
+        assert below_threshold_alerts.json()["alert_count"] == 0
+
         pacing_export = await client.get(
             "/api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/export.csv",
             headers=headers,
