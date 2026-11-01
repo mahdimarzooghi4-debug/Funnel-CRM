@@ -367,7 +367,7 @@ async def export_marketing_manager_campaign_budget_pacing_alerts_csv(
     await context.session.flush()
     filename = f"funnel-crm-campaign-budget-alerts-{as_of.isoformat()}.csv"
     return Response(
-        content="\\ufeff" + buffer.getvalue(),
+        content="\ufeff" + buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
