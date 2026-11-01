@@ -605,3 +605,149 @@ async def get_marketing_manager_dashboard_snapshot(
         "integrity_verified": True,
         "dashboard": payload,
     }
+
+
+def _dashboard_numeric_values(value: object, path: str = "") -> dict[str, Decimal]:
+    values: dict[str, Decimal] = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"generated_at", "period_start", "period_end", "report_definition_version"}:
+                continue
+            values.update(_dashboard_numeric_values(item, f"{path}.{key}" if path else str(key)))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            identity = None
+            if isinstance(item, dict):
+                for key in ("channel", "segment_id", "campaign_id", "currency", "metric_key"):
+                    if item.get(key) is not None:
+                        identity = f"{key}={item[key]}"
+                        break
+            item_path = f"{path}[{identity or index}]"
+            values.update(_dashboard_numeric_values(item, item_path))
+    elif isinstance(value, bool) or value is None:
+        return values
+    elif isinstance(value, (int, float, Decimal)):
+        values[path] = Decimal(str(value))
+    elif isinstance(value, str) and "." in value:
+        try:
+            values[path] = Decimal(value)
+        except Exception:
+            pass
+    return values
+
+
+def _dashboard_snapshot_changes(
+    baseline: dict[str, object], current: dict[str, object]
+) -> list[dict[str, object]]:
+    before = _dashboard_numeric_values(baseline)
+    after = _dashboard_numeric_values(current)
+    changes: list[dict[str, object]] = []
+    for path in sorted(before.keys() | after.keys()):
+        old = before.get(path)
+        new = after.get(path)
+        if old == new:
+            continue
+        if old is None:
+            changes.append({"path": path, "status": "added", "previous": None,
+                            "current": format(new, "f"), "absolute_change": None,
+                            "percent_change": None})
+        elif new is None:
+            changes.append({"path": path, "status": "removed", "previous": format(old, "f"),
+                            "current": None, "absolute_change": None, "percent_change": None})
+        else:
+            delta = new - old
+            changes.append({
+                "path": path,
+                "status": "changed",
+                "previous": format(old, "f"),
+                "current": format(new, "f"),
+                "absolute_change": format(delta, "f"),
+                "percent_change": format((delta / old * Decimal("100")), "f") if old else None,
+            })
+    return changes
+
+
+@router.get(
+    "/campaigns/snapshot-comparisons",
+    operation_id="compareMarketingManagerCampaignDashboardSnapshots",
+    summary="Compare two verified dashboard snapshots for the same period and report version",
+)
+async def compare_marketing_manager_dashboard_snapshots(
+    baseline_id: UUID = Query(...),
+    current_id: UUID = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    if baseline_id == current_id:
+        raise HTTPException(status_code=422, detail="Choose two different dashboard snapshots")
+    result = await context.session.execute(
+        text("""
+            SELECT id, period_start, period_end, report_definition_version,
+                   snapshot_hash, payload, created_at
+            FROM crm_marketing_dashboard_snapshots
+            WHERE id IN (:baseline_id, :current_id)
+              AND tenant_id = :tenant_id
+              AND creator_identity_id = :creator_identity_id
+        """),
+        {
+            "baseline_id": baseline_id,
+            "current_id": current_id,
+            "tenant_id": context.access.tenant_id,
+            "creator_identity_id": context.access.identity_id,
+        },
+    )
+    rows = {row["id"]: row for row in result.mappings()}
+    baseline = rows.get(baseline_id)
+    current = rows.get(current_id)
+    if baseline is None or current is None:
+        raise HTTPException(status_code=404, detail="Dashboard snapshot not found")
+    for row in (baseline, current):
+        actual_hash = hashlib.sha256(
+            _canonical_dashboard_json(row["payload"]).encode("utf-8")
+        ).hexdigest()
+        if actual_hash != row["snapshot_hash"]:
+            raise HTTPException(status_code=500, detail="Dashboard snapshot integrity check failed")
+    if (
+        baseline["period_start"] != current["period_start"]
+        or baseline["period_end"] != current["period_end"]
+        or baseline["report_definition_version"] != current["report_definition_version"]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Snapshots must use the same reporting period and report definition version",
+        )
+    changes = _dashboard_snapshot_changes(baseline["payload"], current["payload"])
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_snapshot.compared",
+        target_type="crm_marketing_dashboard_snapshot",
+        target_key=f"{baseline_id}:{current_id}",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "baseline_hash": baseline["snapshot_hash"],
+            "current_hash": current["snapshot_hash"],
+            "change_count": len(changes),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {
+        "baseline": {
+            "id": str(baseline_id),
+            "created_at": baseline["created_at"].isoformat(),
+            "snapshot_hash": baseline["snapshot_hash"],
+        },
+        "current": {
+            "id": str(current_id),
+            "created_at": current["created_at"].isoformat(),
+            "snapshot_hash": current["snapshot_hash"],
+        },
+        "period_start": baseline["period_start"].isoformat(),
+        "period_end": baseline["period_end"].isoformat(),
+        "report_definition_version": baseline["report_definition_version"],
+        "change_count": len(changes),
+        "changes": changes,
+    }
