@@ -84,7 +84,7 @@ _PAGE = """<!doctype html>
       <a class="nav-item" href="/workspace/crm-lifecycle"><span class="nav-icon">♡</span>چرخه عمر و تجربه مشتری</a>
       <a class="nav-item" href="/workspace/crm-learning"><span class="nav-icon">⌁</span>یادگیری و بهبود مستمر</a>
       <a class="nav-item" href="/workspace/crm-local-marketing"><span class="nav-icon">⌖</span>شعب و بازاریابی محلی</a>
-      <a class="nav-item" href="#brand" data-module="brand"><span class="nav-icon">◈</span>برند و اعتبار بازار</a>
+      <a class="nav-item" href="/workspace/crm-brand-reputation"><span class="nav-icon">◈</span>برند و اعتبار بازار</a>
       <a class="nav-item" href="#admin" data-module="admin"><span class="nav-icon">⚙</span>مدیریت، امنیت و اتصال</a>
     </nav>
     <div class="side-foot">CRM مستقل و قابل استفاده است.<br>اتصال محصولات اجرایی فانل اختیاری است.</div>
