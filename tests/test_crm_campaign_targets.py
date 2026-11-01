@@ -737,7 +737,7 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             item for item in pacing_report["items"]
             if item["campaign_id"] == str(pacing_campaign_id)
         )
-        assert pacing_item["expected_spend_to_date"] == "50"
+        assert pacing_item["expected_spend_to_date"] == "50.000000"
         assert pacing_item["actual_spend_in_budget_currency"] == "20.000000"
         assert pacing_item["variance_from_expected"] == "-30.000000"
         assert pacing_item["pacing_status"] == "behind_pace"
