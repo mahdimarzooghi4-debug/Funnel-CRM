@@ -45,3 +45,9 @@ A manager can record an action against a snapshot using `POST /api/v1/crm/analyt
 ## Action deadline alerts
 
 `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/alerts` returns current overdue, due-today, and next-seven-day counts plus the matching open actions. It is computed when requested from the database's current date, so no external notification provider or scheduled delivery is required. The result is scoped to actions created by or assigned to the active member and is audited.
+
+## Campaign budget pacing
+
+`GET /api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing?period_start=YYYY-MM-DD&as_of=YYYY-MM-DD` compares campaign spend recorded from the selected period start through the as-of date with expected spend under a linear distribution of the planned budget across the campaign's inclusive scheduled dates. It reports ahead/behind/on-pace states, variance, schedule completeness, and spend in other currencies separately. A missing same-currency spend observation stays null and is reported as `no_spend_data`; it is not treated as zero. The report is descriptive and audits its period and pacing counts.
+
+`GET /api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/export.csv` provides a spreadsheet-ready export with the same period, currency separation, and pacing basis.

@@ -694,6 +694,70 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         })
         assert invalid.status_code == 422
 
+        pacing_campaign_id = uuid4()
+        async with tenant_session(
+            runtime_session_factory,
+            requested_tenant_id=tenant_id,
+            identity=identity,
+        ) as context:
+            context.session.add(CRMMarketingCampaign(
+                id=pacing_campaign_id,
+                tenant_id=tenant_id,
+                organization_unit_id=root_id,
+                segment_id=segment_id,
+                name="Scheduled budget pacing",
+                objective_key="acquisition",
+                channel="web",
+                planned_budget_amount=Decimal("100"),
+                planned_budget_currency="USD",
+                starts_at=datetime(2026, 10, 16, 0, tzinfo=timezone.utc),
+                ends_at=datetime(2026, 10, 17, 23, 59, tzinfo=timezone.utc),
+                status="active",
+            ))
+            context.session.add(CRMMarketingCampaignMeasurement(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                organization_unit_id=root_id,
+                campaign_id=pacing_campaign_id,
+                measured_on=date(2026, 10, 16),
+                source_label="pacing-test",
+                actual_spend_amount=Decimal("20"),
+                actual_spend_currency="USD",
+            ))
+            await context.session.flush()
+
+        pacing_response = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing",
+            headers=headers,
+            params={"period_start": "2026-10-16", "as_of": "2026-10-16"},
+        )
+        assert pacing_response.status_code == 200, pacing_response.text
+        pacing_report = pacing_response.json()
+        pacing_item = next(
+            item for item in pacing_report["items"]
+            if item["campaign_id"] == str(pacing_campaign_id)
+        )
+        assert pacing_item["expected_spend_to_date"] == "50.000000"
+        assert pacing_item["actual_spend_in_budget_currency"] == "20.000000"
+        assert pacing_item["variance_from_expected"] == "-30.000000"
+        assert pacing_item["pacing_status"] == "behind_pace"
+        assert pacing_item["budget_currency"] == "USD"
+
+        pacing_export = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/export.csv",
+            headers=headers,
+            params={"period_start": "2026-10-16", "as_of": "2026-10-16"},
+        )
+        assert pacing_export.status_code == 200, pacing_export.text
+        assert pacing_export.headers["content-type"].startswith("text/csv")
+        assert "attachment;" in pacing_export.headers["content-disposition"]
+        pacing_csv = pacing_export.content.decode("utf-8-sig")
+        assert pacing_csv.startswith(
+            "record_type,campaign_id,campaign_name,currency,pacing_status"
+        )
+        assert "behind_pace" in pacing_csv
+        assert "Scheduled budget pacing" in pacing_csv
+
 
 def test_dashboard_csv_text_neutralizes_spreadsheet_formulas() -> None:
     assert _csv_safe_text("=HYPERLINK(\"https://example.invalid\")").startswith("'=")
