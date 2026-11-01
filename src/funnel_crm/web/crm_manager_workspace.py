@@ -54,7 +54,8 @@ _PAGE = """<!doctype html>
     .lower-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}.link-row{display:flex;flex-wrap:wrap;gap:8px}.module-link{border:1px solid #dfe7ee;background:#fff;color:#27536d;text-decoration:none;border-radius:8px;padding:9px 12px;font-size:11px}
     .module-link:hover{background:#f2f8fa}.coverage{height:9px;background:#edf1f4;border-radius:9px;overflow:hidden;margin:10px 0}.coverage span{display:block;height:100%;width:0;background:#1aa38f;border-radius:9px;transition:width .3s}
     .footnote{color:#8a96a3;font-size:10px;line-height:1.8;margin-top:12px}
-    .module-features{color:#526477;font-size:12px;line-height:2;padding-right:22px}#module-view[hidden],#dashboard-content[hidden]{display:none}
+    .module-features{color:#526477;font-size:12px;line-height:2;padding-right:22px}
+    .module-data{margin-top:16px;display:grid;gap:9px}.module-record{border:1px solid #e7edf2;background:#fbfcfd;border-radius:9px;padding:11px}.module-record strong{display:block;color:#25445d;font-size:12px;margin-bottom:6px}.module-record p{margin:3px 0;color:#68798a;font-size:11px;line-height:1.7}.module-empty{color:#758494;font-size:12px;padding:10px 0}#module-view[hidden],#dashboard-content[hidden]{display:none}
 
     @media(max-width:1050px){.app{grid-template-columns:210px minmax(0,1fr)}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.header-row{display:block}.filters{justify-content:flex-start;margin-top:14px}}
     @media(max-width:760px){.app{display:block}aside{position:relative;height:auto;border-left:0;border-bottom:1px solid #e5eaf1;padding:12px}.brand{padding-bottom:8px}.nav-label,.side-foot{display:none}nav{display:flex;overflow:auto;padding-bottom:3px}.nav-item{white-space:nowrap;width:auto;flex:0 0 auto;padding:9px}.topbar{margin-bottom:18px}.grid-main,.lower-grid{grid-template-columns:1fr}.profile span:not(.avatar){display:none}}
@@ -107,6 +108,7 @@ _PAGE = """<!doctype html>
       <p id="module-description" class="kpi-meta"></p>
       <ul id="module-features" class="module-features"></ul>
       <div id="module-links" class="link-row"></div>
+      <div id="module-data" class="module-data" aria-live="polite"></div>
     </section>
     <div id="dashboard-content">
     <p id="status" role="status" aria-live="polite">در حال آماده‌سازی میزکار…</p>
@@ -161,6 +163,7 @@ _SCRIPT = r"""(() => {
   const status = $("status");
   const warn = $("data-warning");
   const params = new URLSearchParams(window.location.search);
+  const moduleData = { campaigns: "/api/v1/crm/campaigns?limit=8", sales: "/api/v1/crm/opportunities?limit=8", learning: "/api/v1/crm/marketing-learning/reviews", admin: "/api/v1/product-connections" };
   const moduleInfo = {
     research: { title: "تحقیق و شناخت بازار", description: "شناخت بازار، مشتری، رقبا و روندها با ثبت منبع و کیفیت شواهد.", features: ["برنامه‌ریزی تحقیق و ثبت فرضیه", "مصاحبه، بازخورد و صدای مشتری", "تحلیل بازار، رقبا، روندها و فرصت‌ها", "بخش‌بندی و تعریف گروه هدف"] },
     planning: { title: "استراتژی و برنامه‌ریزی بازاریابی", description: "تبدیل هدف کسب‌وکار به برنامه، بودجه، تقویم، مسئول و معیار سنجش.", features: ["هدف‌ها و شاخص‌های هم‌راستا", "برنامه و تقویم بازاریابی", "بودجهٔ مصوب، تعهدشده، هزینه‌شده و مانده", "مقایسهٔ سناریوهای بودجه"], links: [["مقایسهٔ سناریوهای بودجه", "/workspace/budget-scenario-comparison"]] },
@@ -191,7 +194,10 @@ _SCRIPT = r"""(() => {
     (item.links || []).forEach(([label, href]) => {
       const link = document.createElement("a"); link.className = "module-link"; link.href = href; link.textContent = label; links.appendChild(link);
     });
-    setStatus("نمای کلی ماژول از طرح‌نامه بارگذاری شد؛ قابلیت‌های اجرایی این تب هنوز باید پیاده‌سازی شود.");
+    const dataHost = $("module-data"); dataHost.replaceChildren();
+    if (moduleData[id]) loadModuleRecords(moduleData[id], dataHost, item.title);
+    else append(dataHost, "p", "برای این ماژول هنوز فهرست اجرایی متصل نشده است.", "module-empty");
+    setStatus(moduleData[id] ? "در حال دریافت دادهٔ مجاز این ماژول…" : "نمای ماژول آماده است؛ اتصال داده در صف پیاده‌سازی است.");
     document.querySelectorAll(".nav-item[data-module]").forEach((link) => link.removeAttribute("aria-current"));
   }
   const faNumber = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 1 });
@@ -218,6 +224,27 @@ _SCRIPT = r"""(() => {
     try { data = await response.json(); } catch (_) {}
     if (!response.ok) throw new Error(data.detail || "دریافت داده ناموفق بود (" + response.status + ").");
     return data;
+  }
+  async function loadModuleRecords(path, host, title) {
+    try {
+      const result = await api(path);
+      const records = Array.isArray(result) ? result : (result.items || result.results || result.records || result.data || []);
+      host.replaceChildren();
+      if (!records.length) { append(host, "p", "برای این فضای کاری موردی برای نمایش وجود ندارد.", "module-empty"); setStatus("فهرست " + title + " بارگذاری شد."); return; }
+      records.slice(0, 8).forEach((record, index) => {
+        const card = document.createElement("article"); card.className = "module-record";
+        const titleValue = record.name || record.title || record.subject || record.campaign_name || record.id || (title + " " + (index + 1));
+        append(card, "strong", String(titleValue));
+        Object.entries(record).filter(([, value]) => value === null || ["string", "number", "boolean"].includes(typeof value)).slice(0, 5).forEach(([key, value]) => {
+          if (key === "id" || key === "name" || key === "title" || key === "subject" || key === "campaign_name") return;
+          append(card, "p", key.replaceAll("_", " ") + ": " + (value === null ? "ثبت نشده" : String(value)));
+        });
+        host.appendChild(card);
+      });
+      setStatus("فهرست " + title + " بارگذاری شد · " + faNumber.format(records.length) + " مورد در پاسخ");
+    } catch (error) {
+      host.replaceChildren(); append(host, "p", error.message, "module-empty"); setStatus("دریافت " + title + " ناموفق بود.", true);
+    }
   }
   function isoToday() { return dateValue(new Date()); }
   function setDefaultDates() {
