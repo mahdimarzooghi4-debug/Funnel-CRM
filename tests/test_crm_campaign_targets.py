@@ -507,6 +507,19 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         )
         assert overdue_action.status_code == 201, overdue_action.text
 
+        deadline_alerts = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/alerts",
+            headers=headers,
+        )
+        assert deadline_alerts.status_code == 200, deadline_alerts.text
+        alerts = deadline_alerts.json()
+        assert alerts["overdue_count"] == 1
+        overdue_item = next(
+            item for item in alerts["items"] if item["id"] == overdue_action.json()["id"]
+        )
+        assert overdue_item["deadline_state"] == "overdue"
+        assert overdue_item["days_until_due"] < 0
+
         action_analytics = await client.get(
             "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/analytics",
             headers=headers,

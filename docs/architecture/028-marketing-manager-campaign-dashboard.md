@@ -41,3 +41,7 @@ A manager can record an action against a snapshot using `POST /api/v1/crm/analyt
 `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/verification-analytics` aggregates recorded metric observations by metric path. It reports observation counts, increase/decrease/no-change counts, average observed movement, expected-direction matches, and the match rate where an expected direction was supplied. The aggregation includes only verifications for actions created by the current identity.
 
 `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/verification-analytics/export.csv` exports the summary and metric groups as UTF-8 CSV. The report describes recorded observations and does not establish that actions caused the measured changes.
+
+## Action deadline alerts
+
+`GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/alerts` returns current overdue, due-today, and next-seven-day counts plus the matching open actions. It is computed when requested from the database's current date, so no external notification provider or scheduled delivery is required. The result is scoped to actions created by or assigned to the active member and is audited.
