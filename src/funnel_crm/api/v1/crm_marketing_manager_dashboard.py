@@ -6,6 +6,7 @@ import json
 from datetime import date, datetime, timezone
 from io import StringIO
 from decimal import Decimal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import text
