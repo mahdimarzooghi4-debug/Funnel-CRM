@@ -835,7 +835,7 @@ async def export_marketing_manager_dashboard_snapshot_comparison_csv(
         f"{comparison['period_start']}-{comparison['period_end']}.csv"
     )
     return Response(
-        content="\\ufeff" + buffer.getvalue(),
+        content="\ufeff" + buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
