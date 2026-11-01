@@ -1115,7 +1115,7 @@ async def list_marketing_manager_dashboard_action_worklist(
             WHERE tenant_id = :tenant_id
               AND (creator_identity_id = :identity_id
                    OR assigned_membership_id = :membership_id)
-              AND (:status_filter IS NULL OR status = :status_filter)
+              AND (CAST(:status_filter AS VARCHAR) IS NULL OR status = :status_filter)
             ORDER BY
                 CASE WHEN status = 'open' THEN 0 ELSE 1 END,
                 due_on ASC NULLS LAST, created_at DESC, id
