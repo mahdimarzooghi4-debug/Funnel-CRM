@@ -2,8 +2,8 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),vm=requir
 const source=execFileSync('python',['-c','from funnel_crm.web.crm_support_workspace import _SCRIPT; print(_SCRIPT)'],{encoding:'utf8'});
 function harness(responder){
  const nodes=new Map();function node(id){if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',children:[],disabled:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=items},addEventListener(){},reset(){this.resetCalled=true}});return nodes.get(id)}
- const calls=[];const ctx={document:{getElementById:node,createElement:()=>({textContent:'',append(){},addEventListener(){}})},Intl,URLSearchParams,Date,fetch:async(path,options)=>{calls.push({path,options});return responder?responder(path,options):{ok:true,json:async()=>({items:[],total:0,overdue_count:0})}}};
- vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
+ const calls=[];const ctx={document:{getElementById:node,createElement:()=>({textContent:'',children:[],append(...items){this.children.push(...items)},addEventListener(){}})},Intl,URLSearchParams,Date,fetch:async(path,options)=>{calls.push({path,options});return responder?responder(path,options):{ok:true,json:async()=>({items:[],total:0,overdue_count:0})}}};
+ vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope,openHistory,closeHistory,saveEntry};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
  return {node,calls,api:ctx.testAPI};
 }
 test('filters keep unit scope and use server pagination',()=>{const h=harness();h.node('state').value='open';h.node('priority').value='urgent';h.node('overdue').value='true';const q=h.api.query();assert.equal(q.get('organization_unit_id'),'unit-a');assert.equal(q.get('limit'),'50');assert.equal(q.get('status'),'open');assert.equal(q.get('overdue_only'),'true')});
@@ -11,3 +11,18 @@ test('create sends customer and unit; duplicate submit is suppressed',async()=>{
 test('failed write retains form and unlocks scope',async()=>{const h=harness(async()=>({ok:false,json:async()=>({detail:'denied'})}));await h.api.createCase({preventDefault(){}});assert.equal(h.node('case-form').resetCalled,undefined);assert.equal(h.node('subject').value,' درخواست ');assert.equal(h.node('workspace').disabled,false);assert.match(h.node('message').textContent,/ذخیره انجام نشد/)});
 test('old case action cannot write into a changed scope',async()=>{const h=harness();await h.api.changeStatus('case-a','closed','other:unit');assert.equal(h.calls.length,0)});
 test('scope reset discards an outstanding queue response',async()=>{let respond;const h=harness(()=>new Promise(r=>{respond=r}));const pending=h.api.load();h.api.clearScope();respond({ok:true,json:async()=>({items:[],total:99,overdue_count:0})});await pending;assert.equal(h.node('counts').textContent,'');assert.equal(h.node('next').disabled,true)});
+
+test('history reads scoped entries and posts only selected record kind and text',async()=>{
+ const h=harness();await h.api.openHistory({id:'case-a',subject:'Test',status:'open'},'ws-a:unit-a');h.node('entry-body').value='  یادداشت  ';h.node('entry-kind').value='internal_note';await h.api.saveEntry({preventDefault(){}});
+ const write=h.calls.find(c=>c.options.method==='POST');assert.equal(write.path,'/api/v1/crm/support-cases/case-a/entries');assert.deepEqual(JSON.parse(write.options.body),{entry_kind:'internal_note',body:'یادداشت'});assert.equal(write.options.headers['X-Workspace-ID'],'ws-a');assert.equal(h.node('entry-form').resetCalled,true);
+});
+test('closed history is read only and resolved history blocks response records',async()=>{
+ const h=harness();await h.api.openHistory({id:'case-a',subject:'Closed',status:'closed'},'ws-a:unit-a');assert.equal(h.node('entry-save').disabled,true);h.node('entry-body').value='text';h.node('entry-kind').value='internal_note';await h.api.saveEntry({preventDefault(){}});assert.equal(h.calls.filter(c=>c.options.method==='POST').length,0);
+ await h.api.openHistory({id:'case-b',subject:'Resolved',status:'resolved'},'ws-a:unit-a');h.node('entry-kind').value='response_record';await h.api.saveEntry({preventDefault(){}});assert.equal(h.calls.filter(c=>c.options.method==='POST').length,0);assert.equal(h.node('response-option').disabled,true);
+});
+test('closed history panel discards late responses',async()=>{
+ let respond;const h=harness(()=>new Promise(r=>{respond=r}));const pending=h.api.openHistory({id:'case-a',subject:'Late',status:'open'},'ws-a:unit-a');h.api.closeHistory();respond({ok:true,json:async()=>({items:[{entry_kind:'internal_note',body:'late',created_at:'2026-01-01'}],total:1})});await pending;assert.equal(h.node('history-panel').hidden,true);assert.equal(h.node('history-list').children.length,0);
+});
+test('entry write failure retains typed text',async()=>{
+ const h=harness(async(path,options)=>({ok:options.method!=='POST',json:async()=>options.method==='POST'?{detail:'denied'}:{items:[],total:0}}));await h.api.openHistory({id:'case-a',subject:'Failure',status:'open'},'ws-a:unit-a');h.node('entry-form').resetCalled=false;h.node('entry-body').value='keep me';h.node('entry-kind').value='internal_note';await h.api.saveEntry({preventDefault(){}});assert.equal(h.node('entry-form').resetCalled,false);assert.equal(h.node('entry-body').value,'keep me');assert.equal(h.node('entry-save').disabled,false);assert.match(h.node('message').textContent,/ذخیره انجام نشد/);
+});
