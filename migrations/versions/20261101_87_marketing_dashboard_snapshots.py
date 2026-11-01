@@ -56,7 +56,11 @@ def upgrade() -> None:
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF TG_OP = 'UPDATE'
-               OR NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL THEN
+               OR (
+                   TG_OP = 'DELETE'
+                   AND pg_trigger_depth() <= 1
+                   AND NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL
+               ) THEN
                 RAISE EXCEPTION 'marketing dashboard snapshots are immutable';
             END IF;
             RETURN OLD;
