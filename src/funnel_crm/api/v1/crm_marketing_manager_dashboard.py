@@ -7,7 +7,6 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_campaign_measurements import (
@@ -255,7 +254,7 @@ async def get_marketing_manager_campaign_dashboard(
 
 def _csv_safe_text(value: str) -> str:
     """Neutralize spreadsheet formulas in untrusted text cells."""
-    if value.lstrip(" \\t\\r\\n").startswith(("=", "+", "-", "@")):
+    if value.lstrip(" \t\r\n").startswith(("=", "+", "-", "@")):
         return "'" + value
     return value
 
@@ -415,7 +414,7 @@ async def export_marketing_manager_campaign_dashboard_csv(
     await context.session.flush()
     filename = f"funnel-crm-campaign-dashboard-{period_start.isoformat()}-{period_end.isoformat()}.csv"
     return Response(
-        content="\\ufeff" + buffer.getvalue(),
+        content="\ufeff" + buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
