@@ -8,7 +8,7 @@ function harness(fail=false){
  function node(id){if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',disabled:false,classList:{toggle(){}},addEventListener(){},focus(){},reset(){for(const [key,n] of nodes)if(key.startsWith('partner-'))n.value='';}});return nodes.get(id)}
  node('workspace').value='workspace-a';node('unit').value='unit-a';
  const calls=[];
- const code=source.replace('$("refresh").addEventListener("click",load);','globalThis.editor={savePartner,editPartner,resetPartner};load=async()=>{};$("refresh").addEventListener("click",load);').replace('ws.addEventListener("change",init);init();','ws.addEventListener("change",init);');
+ const code=source.replace('$("refresh").addEventListener("click",load);','globalThis.editor={savePartner,editPartner,resetPartner,partnerQuery};load=async()=>{};$("refresh").addEventListener("click",load);').replace('ws.addEventListener("change",init);init();','ws.addEventListener("change",init);');
  const context={document:{getElementById:node},Intl,URLSearchParams,fetch:async(path,options)=>{calls.push({path,options});return {ok:!fail,json:async()=>fail?{detail:'changed'}:{id:'created'}}}};
  vm.runInNewContext(code,context);
  for(const key of ['name','type','status','contact_name','email','phone','territory','notes'])node('partner-'+key).value='';
@@ -25,4 +25,9 @@ test('edit sends version; failed write retains input and restores controls',asyn
 });
 test('changing scope invalidates an earlier edit without sending a write',async()=>{
  const h=harness();h.editor.editPartner({id:'partner-a',version:7,name:'نام',partner_type:'agency',status:'active'});h.node('unit').value='unit-b';await h.editor.savePartner({preventDefault(){}});assert.equal(h.calls.length,0);
+});
+
+test('partner filters encode literal search and organization scope',()=>{
+ const h=harness();h.node('partner-search').value='  شرکت % &  ';h.node('partner-filter-type').value='agency';h.node('partner-filter-status').value='active';
+ const q=h.editor.partnerQuery();assert.equal(q.get('search'),'شرکت % &');assert.equal(q.get('organization_unit_id'),'unit-a');assert.equal(q.get('partner_type'),'agency');assert.equal(q.get('status'),'active');assert.equal(q.get('limit'),'50');assert.equal(q.get('offset'),'0');
 });

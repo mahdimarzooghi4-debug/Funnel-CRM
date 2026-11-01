@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
@@ -74,13 +74,32 @@ def _validate(payload: BaseModel) -> None:
 
 
 @router.get("")
-async def list_partners(organization_unit_id: UUID | None = Query(default=None), context: TenantSessionContext = Depends(require_tenant_session)) -> dict:
+async def list_partners(
+    organization_unit_id: UUID | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=180),
+    partner_type: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    if partner_type is not None and partner_type not in PARTNER_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported partner type")
+    if status is not None and status not in PARTNER_STATUSES:
+        raise HTTPException(status_code=422, detail="Unsupported partner status")
     scope = crm_scope_ids(context, permission_key="crm.partner:view")
     query = select(CRMChannelPartner).where(CRMChannelPartner.tenant_id == context.access.tenant_id, CRMChannelPartner.organization_unit_id.in_(scope))
     if organization_unit_id:
         query = query.where(CRMChannelPartner.organization_unit_id == organization_unit_id)
-    rows = await context.session.scalars(query.order_by(CRMChannelPartner.name, CRMChannelPartner.id).limit(500))
-    return {"items": [_json(row) for row in rows]}
+    if search and search.strip():
+        query = query.where(CRMChannelPartner.name.icontains(search.strip(), autoescape=True))
+    if partner_type is not None:
+        query = query.where(CRMChannelPartner.partner_type == partner_type)
+    if status is not None:
+        query = query.where(CRMChannelPartner.status == status)
+    total = await context.session.scalar(select(func.count()).select_from(query.subquery()))
+    rows = await context.session.scalars(query.order_by(CRMChannelPartner.name, CRMChannelPartner.id).limit(limit).offset(offset))
+    return {"items": [_json(row) for row in rows], "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("", status_code=201)

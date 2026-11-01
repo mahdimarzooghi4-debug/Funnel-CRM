@@ -28,7 +28,7 @@ def test_channel_partners_script_uses_scoped_apis_and_safe_dom() -> None:
     assert "/api/v1/crm/analytics/campaign-performance/portfolio?" in response.text
     assert "/api/v1/crm/analytics/customer-activities/summary?" in response.text
     assert "/api/v1/crm/commission-plans" in response.text
-    assert "/api/v1/crm/channel-partners?organization_unit_id=" in response.text
+    assert "/api/v1/crm/channel-partners?" in response.text
     assert "innerHTML" not in response.text
 
 
