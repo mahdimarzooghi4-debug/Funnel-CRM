@@ -20,6 +20,7 @@ def test_marketing_manager_workspace_has_all_module_tabs_and_rtl_shell() -> None
     assert 'lang="fa" dir="rtl"' in response.text
     assert 'src="/assets/crm-manager-home.js"' in response.text
     assert 'id="module-data"' in response.text
+    assert 'id="module-assistant"' in response.text
     for label in (
         "میزکار و داشبورد نقش‌محور",
         "تحقیق و شناخت بازار",
@@ -63,4 +64,6 @@ def test_marketing_manager_client_connects_supported_tabs_to_workspace_scoped_ap
     assert "/api/v1/crm/opportunities?limit=8" in response.text
     assert "/api/v1/crm/marketing-learning/reviews" in response.text
     assert "/api/v1/integrations/connections" in response.text
+    assert "async function askAssistant()" in response.text
+    assert "report_definition_version" in response.text
     assert "innerHTML" not in response.text
