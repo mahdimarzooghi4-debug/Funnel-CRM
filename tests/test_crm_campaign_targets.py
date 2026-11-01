@@ -458,7 +458,7 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert second_snapshot_response.status_code == 201, second_snapshot_response.text
         current_snapshot_id = second_snapshot_response.json()["id"]
         comparison = await client.get(
-            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshots/compare",
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-comparisons",
             headers=headers,
             params={"baseline_id": snapshot_id, "current_id": current_snapshot_id},
         )
