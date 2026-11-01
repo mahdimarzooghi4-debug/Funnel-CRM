@@ -5,3 +5,7 @@
 The dashboard presents currency-separated budgets, spend, attributed revenue, and same-currency efficiency measures; campaign count totals; channel and segment breakdowns; campaign-day and metric-day coverage; target outcomes and variance; and up to 50 manager signals. Target attainment is included only for plans whose period exactly matches the requested dates, following the underlying target-portfolio contract. Commerce outcomes remain subject to the existing commerce permission rules.
 
 The selected period is limited to 366 days. Campaign reports inherit the 500-campaign cap and provide truncation flags; manager signals are separately capped. The dashboard performs an aggregate audit entry and invokes the component reports, which each retain their own read audit. Figures describe recorded data and do not establish that a campaign caused a sales outcome or that a signal should trigger an automatic action.
+
+## CSV export
+
+`GET /api/v1/crm/analytics/marketing-manager/campaigns/export.csv` returns a UTF-8 CSV with a byte-order mark for spreadsheet compatibility. The file uses a `record_type` column to distinguish metadata, summary, channel, segment, coverage, target, manager-signal, and commerce rows. It includes a report-definition version and generation timestamp. The export request is audited with its period, format, version, timestamp, and row/column counts; the generated report data is not stored as a durable snapshot. Untrusted text cells are prefixed when they begin with spreadsheet formula characters.
