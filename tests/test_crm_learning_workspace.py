@@ -38,5 +38,5 @@ def test_learning_workspace_uses_scoped_learning_and_experiment_apis_safely() ->
     assert "/api/v1/crm/campaigns/" in response.text
     assert 'method:"PATCH"' in response.text
     assert 'method:"POST"' in response.text
-    assert "علّی" in response.text
+    assert "علیت" in response.text
     assert "innerHTML" not in response.text
