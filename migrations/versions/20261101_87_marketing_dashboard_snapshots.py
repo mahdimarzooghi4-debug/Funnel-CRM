@@ -65,8 +65,14 @@ def upgrade() -> None:
         FOR EACH ROW EXECUTE FUNCTION reject_crm_marketing_dashboard_snapshot_mutation()
     """)
     op.execute("""
-        REVOKE UPDATE, DELETE ON TABLE crm_marketing_dashboard_snapshots
-        FROM funnel_crm_runtime
+        DO $
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'funnel_crm_runtime') THEN
+                REVOKE UPDATE, DELETE ON TABLE crm_marketing_dashboard_snapshots
+                FROM funnel_crm_runtime;
+            END IF;
+        END
+        $
     """)
 
 
