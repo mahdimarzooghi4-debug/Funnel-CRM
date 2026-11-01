@@ -188,7 +188,7 @@ _SCRIPT = r"""(() => {
     $("module-view").hidden = false;
     $("module-title").textContent = item.title;
     $("module-description").textContent = item.description;
-    $("module-state").textContent = "میزکار اجرایی این تب در صف پیاده‌سازی است";
+    $("module-state").textContent = id === "assistant" ? "نسخهٔ قاعده‌محور · بدون مدل زبانی متصل" : (moduleData[id] ? "دادهٔ زنده · فقط خواندنی" : ((item.links || []).length ? "دسترسی به میزکار موجود" : "نمای اولیهٔ ماژول"));
     const features = $("module-features"); features.replaceChildren();
     item.features.forEach((feature) => append(features, "li", feature));
     const links = $("module-links"); links.replaceChildren();
@@ -198,7 +198,7 @@ _SCRIPT = r"""(() => {
     const dataHost = $("module-data"); dataHost.replaceChildren(); dataHost.hidden = id === "assistant"; $("module-assistant").hidden = id !== "assistant";
     if (moduleData[id]) loadModuleRecords(moduleData[id].replace("{start}", $("period-start").value).replace("{end}", $("period-end").value), dataHost, item.title);
     else append(dataHost, "p", "برای این ماژول هنوز فهرست اجرایی متصل نشده است.", "module-empty");
-    setStatus(moduleData[id] ? "در حال دریافت دادهٔ مجاز این ماژول…" : "نمای ماژول آماده است؛ اتصال داده در صف پیاده‌سازی است.");
+    if (moduleData[id]) $("module-state").textContent = "در حال دریافت دادهٔ مجاز…";
     document.querySelectorAll(".nav-item[data-module]").forEach((link) => link.removeAttribute("aria-current"));
   }
   const faNumber = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 1 });
@@ -258,7 +258,7 @@ _SCRIPT = r"""(() => {
       const result = await api(path);
       const records = Array.isArray(result) ? result : (result.items || result.results || result.records || result.candidates || result.campaigns || result.events || result.channel_performance || result.groups || result.metrics || result.data || []);
       host.replaceChildren();
-      if (!records.length) { append(host, "p", "برای این فضای کاری موردی برای نمایش وجود ندارد.", "module-empty"); setStatus("فهرست " + title + " بارگذاری شد."); return; }
+      if (!records.length) { append(host, "p", "برای این فضای کاری موردی برای نمایش وجود ندارد.", "module-empty"); $("module-state").textContent = "فهرست بارگذاری شد · داده‌ای برای نمایش نیست"; return; }
       records.slice(0, 8).forEach((record, index) => {
         const card = document.createElement("article"); card.className = "module-record";
         const titleValue = record.name || record.title || record.subject || record.campaign_name || record.id || (title + " " + (index + 1));
@@ -269,9 +269,9 @@ _SCRIPT = r"""(() => {
         });
         host.appendChild(card);
       });
-      setStatus("فهرست " + title + " بارگذاری شد · " + faNumber.format(records.length) + " مورد در پاسخ");
+      $("module-state").textContent = "فهرست بارگذاری شد · " + faNumber.format(records.length) + " مورد";
     } catch (error) {
-      host.replaceChildren(); append(host, "p", error.message, "module-empty"); setStatus("دریافت " + title + " ناموفق بود.", true);
+      host.replaceChildren(); append(host, "p", error.message, "module-empty"); $("module-state").textContent = "دریافت داده ناموفق بود";
     }
   }
   function isoToday() { return dateValue(new Date()); }
