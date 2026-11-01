@@ -1649,7 +1649,7 @@ async def export_marketing_manager_action_learning_analytics_csv(
     report = await _read_marketing_manager_action_learning(context)
     summary = report["summary"]
     columns = (
-        "record_type", "metric_path", "verification_count", "expected_count",
+        "record_type", "metric_path", "value", "verification_count", "expected_count",
         "matched_count", "not_matched_count", "direction_match_rate_percent",
         "increase_count", "decrease_count", "unchanged_count",
         "average_observed_change",
@@ -1664,7 +1664,7 @@ async def export_marketing_manager_action_learning_analytics_csv(
         writer.writerow({
             "record_type": "summary",
             "metric_path": key,
-            "verification_count": summary[key],
+            "value": summary[key],
         })
     for metric in report["metrics"]:
         writer.writerow({
