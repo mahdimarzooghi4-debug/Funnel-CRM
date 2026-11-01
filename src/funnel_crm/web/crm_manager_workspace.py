@@ -55,7 +55,7 @@ _PAGE = """<!doctype html>
     .module-link:hover{background:#f2f8fa}.coverage{height:9px;background:#edf1f4;border-radius:9px;overflow:hidden;margin:10px 0}.coverage span{display:block;height:100%;width:0;background:#1aa38f;border-radius:9px;transition:width .3s}
     .footnote{color:#8a96a3;font-size:10px;line-height:1.8;margin-top:12px}
     .module-features{color:#526477;font-size:12px;line-height:2;padding-right:22px}
-    .module-data{margin-top:16px;display:grid;gap:9px}.module-record{border:1px solid #e7edf2;background:#fbfcfd;border-radius:9px;padding:11px}.module-record strong{display:block;color:#25445d;font-size:12px;margin-bottom:6px}.module-record p{margin:3px 0;color:#68798a;font-size:11px;line-height:1.7}.module-empty{color:#758494;font-size:12px;padding:10px 0}#module-view[hidden],#dashboard-content[hidden]{display:none}
+    .module-data{margin-top:16px;display:grid;gap:9px}.module-record{border:1px solid #e7edf2;background:#fbfcfd;border-radius:9px;padding:11px}.module-record strong{display:block;color:#25445d;font-size:12px;margin-bottom:6px}.module-record p{margin:3px 0;color:#68798a;font-size:11px;line-height:1.7}.module-empty{color:#758494;font-size:12px;padding:10px 0}.assistant-form{display:flex;gap:8px;margin:10px 0}.assistant-form input{flex:1;min-width:0;border:1px solid #dfe6ed;border-radius:9px;padding:10px;font:inherit;font-size:12px}.assistant-form button{flex:0 0 auto}#module-view[hidden],#dashboard-content[hidden]{display:none}
 
     @media(max-width:1050px){.app{grid-template-columns:210px minmax(0,1fr)}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.header-row{display:block}.filters{justify-content:flex-start;margin-top:14px}}
     @media(max-width:760px){.app{display:block}aside{position:relative;height:auto;border-left:0;border-bottom:1px solid #e5eaf1;padding:12px}.brand{padding-bottom:8px}.nav-label,.side-foot{display:none}nav{display:flex;overflow:auto;padding-bottom:3px}.nav-item{white-space:nowrap;width:auto;flex:0 0 auto;padding:9px}.topbar{margin-bottom:18px}.grid-main,.lower-grid{grid-template-columns:1fr}.profile span:not(.avatar){display:none}}
@@ -109,6 +109,7 @@ _PAGE = """<!doctype html>
       <ul id="module-features" class="module-features"></ul>
       <div id="module-links" class="link-row"></div>
       <div id="module-data" class="module-data" aria-live="polite"></div>
+      <section id="module-assistant" class="module-data" hidden><label for="assistant-question">پرسش دربارهٔ عملکرد ثبت‌شده</label><div class="assistant-form"><input id="assistant-question" type="text" maxlength="240" placeholder="مثلاً هزینهٔ بازاریابی و پوشش داده چقدر است؟"><button id="assistant-ask" class="primary" type="button">بررسی داده</button></div><div id="assistant-answer" class="module-record" role="status" aria-live="polite">پاسخ با شواهد گزارش دوره ساخته می‌شود؛ این نسخه هنوز از مدل زبانی استفاده نمی‌کند.</div></section>
     </section>
     <div id="dashboard-content">
     <p id="status" role="status" aria-live="polite">در حال آماده‌سازی میزکار…</p>
@@ -194,7 +195,7 @@ _SCRIPT = r"""(() => {
     (item.links || []).forEach(([label, href]) => {
       const link = document.createElement("a"); link.className = "module-link"; link.href = href; link.textContent = label; links.appendChild(link);
     });
-    const dataHost = $("module-data"); dataHost.replaceChildren();
+    const dataHost = $("module-data"); dataHost.replaceChildren(); dataHost.hidden = id === "assistant"; $("module-assistant").hidden = id !== "assistant";
     if (moduleData[id]) loadModuleRecords(moduleData[id].replace("{start}", $("period-start").value).replace("{end}", $("period-end").value), dataHost, item.title);
     else append(dataHost, "p", "برای این ماژول هنوز فهرست اجرایی متصل نشده است.", "module-empty");
     setStatus(moduleData[id] ? "در حال دریافت دادهٔ مجاز این ماژول…" : "نمای ماژول آماده است؛ اتصال داده در صف پیاده‌سازی است.");
@@ -224,6 +225,28 @@ _SCRIPT = r"""(() => {
     try { data = await response.json(); } catch (_) {}
     if (!response.ok) throw new Error(data.detail || "دریافت داده ناموفق بود (" + response.status + ").");
     return data;
+  }
+  async function askAssistant() {
+    const question = $("assistant-question").value.trim();
+    const answer = $("assistant-answer");
+    if (!workspace.value) { answer.textContent = "ابتدا فضای کاری را انتخاب کنید."; return; }
+    if (!question) { answer.textContent = "پرسش را وارد کنید."; return; }
+    answer.textContent = "در حال خواندن گزارش دوره…";
+    try {
+      const start = $("period-start").value, end = $("period-end").value;
+      const query = "?period_start=" + encodeURIComponent(start) + "&period_end=" + encodeURIComponent(end);
+      const report = await api("/api/v1/crm/analytics/marketing-manager/campaigns" + query);
+      const performance = report.performance || {}, quality = report.data_quality || {};
+      const lower = question.toLowerCase();
+      const evidence = [];
+      if (/هزینه|بودجه|spend/.test(lower)) evidence.push("هزینهٔ ثبت‌شده: " + currencyText(performance.actual_spend_by_currency));
+      if (/فروش|درآمد|revenue/.test(lower)) evidence.push("فروش منتسب: " + currencyText(performance.attributed_revenue_by_currency));
+      if (/کمپین|campaign/.test(lower)) evidence.push("کمپین‌های گزارش: " + faNumber.format(performance.campaign_count || 0) + "؛ دارای سنجش: " + faNumber.format(performance.measured_campaign_count || 0));
+      if (/پوشش|کیفیت|داده|coverage/.test(lower)) evidence.push("پوشش داده: " + (quality.expected_campaign_days ? faNumber.format(quality.covered_campaign_days) + " از " + faNumber.format(quality.expected_campaign_days) + " روز کمپین" : "مبنای مقایسه موجود نیست"));
+      if (/کانال|channel/.test(lower)) evidence.push("کانال‌های گزارش‌شده: " + ((report.channel_performance || []).map((item) => item.channel).filter(Boolean).join("، ") || "داده‌ای ثبت نشده"));
+      if (!evidence.length) evidence.push("در این نسخه می‌توان دربارهٔ هزینه، بودجه، فروش منتسب، کمپین، کانال و پوشش داده پرسید.");
+      answer.textContent = evidence.join("\n") + "\nمنبع: گزارش مدیر بازاریابی · بازهٔ " + start + " تا " + end + " · نسخهٔ " + (report.report_definition_version || "نامشخص") + "\nاین پاسخ فقط دادهٔ مشاهده‌شده را خلاصه می‌کند و علت یا پیشنهاد قطعی نمی‌سازد.";
+    } catch (error) { answer.textContent = error.message; }
   }
   async function loadModuleRecords(path, host, title) {
     try {
@@ -371,6 +394,8 @@ _SCRIPT = r"""(() => {
   }
   document.querySelectorAll(".nav-item[data-module]").forEach((link) => link.addEventListener("click", (event) => { event.preventDefault(); openModule(link.dataset.module); }));
   $("refresh").addEventListener("click", () => { $("module-view").hidden = true; $("dashboard-content").hidden = false; loadDashboard(); });
+  $("assistant-ask").addEventListener("click", askAssistant);
+  $("assistant-question").addEventListener("keydown", (event) => { if (event.key === "Enter") askAssistant(); });
 
   workspace.addEventListener("change", () => loadDashboard());
   $("period-start").addEventListener("change", () => { if (workspace.value) loadDashboard(); });
