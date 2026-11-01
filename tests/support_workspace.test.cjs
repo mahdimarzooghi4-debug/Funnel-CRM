@@ -3,7 +3,7 @@ const source=execFileSync('python',['-c','from funnel_crm.web.crm_support_worksp
 function harness(responder){
  const nodes=new Map();function node(id){if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',children:[],disabled:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=items},addEventListener(){},reset(){this.resetCalled=true}});return nodes.get(id)}
  const calls=[];const ctx={document:{getElementById:node,createElement:()=>({textContent:'',children:[],append(...items){this.children.push(...items)},addEventListener(){}})},Intl,URLSearchParams,Date,fetch:async(path,options)=>{calls.push({path,options});return responder?responder(path,options):{ok:true,json:async()=>({items:[],total:0,overdue_count:0})}}};
- vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope,openHistory,closeHistory,saveEntry};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
+ vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope,openHistory,closeHistory,saveEntry,loadSLA,renderSLA};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
  return {node,calls,api:ctx.testAPI};
 }
 test('filters keep unit scope and use server pagination',()=>{const h=harness();h.node('state').value='open';h.node('priority').value='urgent';h.node('overdue').value='true';const q=h.api.query();assert.equal(q.get('organization_unit_id'),'unit-a');assert.equal(q.get('limit'),'50');assert.equal(q.get('status'),'open');assert.equal(q.get('overdue_only'),'true')});
@@ -25,4 +25,15 @@ test('closed history panel discards late responses',async()=>{
 });
 test('entry write failure retains typed text',async()=>{
  const h=harness(async(path,options)=>({ok:options.method!=='POST',json:async()=>options.method==='POST'?{detail:'denied'}:{items:[],total:0}}));await h.api.openHistory({id:'case-a',subject:'Failure',status:'open'},'ws-a:unit-a');h.node('entry-form').resetCalled=false;h.node('entry-body').value='keep me';h.node('entry-kind').value='internal_note';await h.api.saveEntry({preventDefault(){}});assert.equal(h.node('entry-form').resetCalled,false);assert.equal(h.node('entry-body').value,'keep me');assert.equal(h.node('entry-save').disabled,false);assert.match(h.node('message').textContent,/ذخیره انجام نشد/);
+});
+
+test('SLA request is scoped and renders zero separately from an undefined rate',async()=>{
+ const h=harness(async()=>({ok:true,json:async()=>({case_count:0,active_case_count:0,overdue_open_count:0,cases_with_response_deadline:0,first_response_recorded_count:0,on_time_first_response_count:0,late_first_response_count:0,awaiting_first_response_count:0,first_response_sla_rate_percent:null,period_start:'2026-01-01',period_end:'2026-01-02',as_of:'2026-01-03T00:00:00Z'})}));h.node('sla-start').value='2026-01-01';h.node('sla-end').value='2026-01-02';await h.api.loadSLA();const url=new URL(h.calls[0].path,'http://test');assert.equal(url.searchParams.get('organization_unit_id'),'unit-a');assert.equal(url.searchParams.get('period_start'),'2026-01-01');assert.equal(h.node('sla-result').children.length,9);const rate=h.node('sla-result').children[8];assert.equal(rate.children[1].textContent,'قابل محاسبه نیست');
+});
+test('SLA rejects inverted and overly long periods without requesting data',async()=>{
+ const h=harness();h.node('sla-start').value='2026-02-01';h.node('sla-end').value='2026-01-01';await h.api.loadSLA();h.node('sla-start').value='2024-01-01';h.node('sla-end').value='2026-01-01';await h.api.loadSLA();assert.equal(h.calls.length,0);assert.match(h.node('sla-message').textContent,/۳۶۶/);
+});
+test('SLA data is discarded after scope reset and failures clear prior results',async()=>{
+ let respond;const h=harness(()=>new Promise(r=>{respond=r}));h.node('sla-start').value='2026-01-01';h.node('sla-end').value='2026-01-02';const pending=h.api.loadSLA();h.api.clearScope();respond({ok:true,json:async()=>({case_count:99})});await pending;assert.equal(h.node('sla-result').children.length,0);
+ const denied=harness(async()=>({ok:false,json:async()=>({detail:'denied'})}));denied.node('sla-start').value='2026-01-01';denied.node('sla-end').value='2026-01-02';denied.node('sla-result').append({textContent:'old'});await denied.api.loadSLA();assert.equal(denied.node('sla-result').children.length,0);assert.match(denied.node('sla-message').textContent,/ناموفق/);
 });
