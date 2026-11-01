@@ -11,6 +11,7 @@ from funnel_crm.api.v1.crm_campaign_targets import evaluate_net_paid_to_spend_ta
 from funnel_crm.api.v1.crm_campaign_target_analytics import router as target_analytics_router
 from funnel_crm.api.v1.crm_marketing_manager_dashboard import (
     _csv_safe_text,
+    _dashboard_snapshot_changes,
     router as marketing_manager_dashboard_router,
 )
 from funnel_crm.api.v1.crm_work_items import router as work_items_router
@@ -449,6 +450,21 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert snapshot_body["snapshot_hash"] == snapshot["snapshot_hash"]
         assert snapshot_body["dashboard"]["period_start"] == "2026-10-16"
 
+        second_snapshot_response = await client.post(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshots",
+            headers=headers,
+            params={"period_start": "2026-10-16", "period_end": "2026-10-17"},
+        )
+        assert second_snapshot_response.status_code == 201, second_snapshot_response.text
+        current_snapshot_id = second_snapshot_response.json()["id"]
+        comparison = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshots/compare",
+            headers=headers,
+            params={"baseline_id": snapshot_id, "current_id": current_snapshot_id},
+        )
+        assert comparison.status_code == 200, comparison.text
+        assert comparison.json()["change_count"] == 0
+
         assert report["metric_definitions"]["roas"]["key"] == "reported_roas"
         assert report["metric_outcomes"]["period_net_paid_to_spend"]["met"] == 1
         pooled_usd = next(
@@ -525,3 +541,29 @@ def test_dashboard_csv_text_neutralizes_spreadsheet_formulas() -> None:
     assert _csv_safe_text("=HYPERLINK(\"https://example.invalid\")").startswith("'=")
     assert _csv_safe_text("ordinary segment").startswith("ordinary")
     assert _csv_safe_text("  @SUM(A1:A2)").startswith("'  @")
+
+
+
+def test_dashboard_snapshot_diff_keeps_missing_distinct_from_zero() -> None:
+    changes = _dashboard_snapshot_changes(
+        {
+            "performance": {
+                "totals": {"clicks": 10},
+                "actual_spend_by_currency": {"USD": "5.000000", "EUR": "2.000000"},
+            }
+        },
+        {
+            "performance": {
+                "totals": {"clicks": 15, "leads": 0},
+                "actual_spend_by_currency": {"USD": "7.500000"},
+            }
+        },
+    )
+    by_path = {item["path"]: item for item in changes}
+    assert by_path["performance.totals.clicks"]["absolute_change"] == "5"
+    assert by_path["performance.actual_spend_by_currency.USD"]["percent_change"] == "50.0"
+    assert by_path["performance.totals.leads"]["status"] == "added"
+    assert by_path[
+        "performance.actual_spend_by_currency.EUR"
+    ]["status"] == "removed"
+    assert by_path["performance.actual_spend_by_currency.EUR"]["current"] is None
