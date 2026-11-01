@@ -496,6 +496,30 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             "Channel lead confirmed the tracking gap."
         )
 
+        overdue_action = await client.post(
+            f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshots/{snapshot_id}/actions",
+            headers=headers,
+            json={
+                "title": "Resolve missing daily measurements",
+                "decision_note": "Request the missing figures from the campaign operator.",
+                "due_on": "2000-01-01",
+            },
+        )
+        assert overdue_action.status_code == 201, overdue_action.text
+
+        action_analytics = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/analytics",
+            headers=headers,
+        )
+        assert action_analytics.status_code == 200, action_analytics.text
+        analytics = action_analytics.json()
+        assert analytics["total_count"] == 2
+        assert analytics["open_count"] == 1
+        assert analytics["completed_count"] == 1
+        assert analytics["overdue_open_count"] == 1
+        assert analytics["completion_rate_percent"] == "100.00"
+        assert analytics["average_days_to_close"] is not None
+
         second_snapshot_response = await client.post(
             "/api/v1/crm/analytics/marketing-manager/campaigns/snapshots",
             headers=headers,
