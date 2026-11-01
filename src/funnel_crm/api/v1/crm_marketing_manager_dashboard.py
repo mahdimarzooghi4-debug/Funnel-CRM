@@ -1709,3 +1709,113 @@ async def export_marketing_manager_action_learning_analytics_csv(
             "Content-Disposition": 'attachment; filename="funnel-crm-action-learning-analytics.csv"'
         },
     )
+
+
+
+@router.get(
+    "/campaigns/snapshot-actions/alerts",
+    operation_id="getMarketingManagerDashboardActionDeadlineAlerts",
+    summary="Review overdue and upcoming dashboard follow-up actions",
+)
+async def get_marketing_manager_dashboard_action_deadline_alerts(
+    limit: int = Query(default=50, ge=1, le=100),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    summary_result = await context.session.execute(
+        text("""
+            SELECT
+                CURRENT_DATE AS as_of,
+                COUNT(*) FILTER (WHERE due_on < CURRENT_DATE) AS overdue_count,
+                COUNT(*) FILTER (WHERE due_on = CURRENT_DATE) AS due_today_count,
+                COUNT(*) FILTER (
+                    WHERE due_on > CURRENT_DATE AND due_on <= CURRENT_DATE + 7
+                ) AS due_next_7_days_count
+            FROM crm_marketing_dashboard_actions
+            WHERE tenant_id = :tenant_id
+              AND (creator_identity_id = :identity_id
+                   OR assigned_membership_id = :membership_id)
+              AND status = 'open'
+              AND due_on IS NOT NULL
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+            "membership_id": context.access.membership_id,
+        },
+    )
+    summary = summary_result.mappings().one()
+    result = await context.session.execute(
+        text("""
+            SELECT id, snapshot_id, title, assigned_membership_id, due_on,
+                   CURRENT_DATE AS as_of
+            FROM crm_marketing_dashboard_actions
+            WHERE tenant_id = :tenant_id
+              AND (creator_identity_id = :identity_id
+                   OR assigned_membership_id = :membership_id)
+              AND status = 'open'
+              AND due_on IS NOT NULL
+              AND due_on <= CURRENT_DATE + 7
+            ORDER BY due_on, created_at, id
+            LIMIT :limit
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+            "membership_id": context.access.membership_id,
+            "limit": limit,
+        },
+    )
+    rows = result.mappings().all()
+    items = []
+    for row in rows:
+        days_until_due = (row["due_on"] - row["as_of"]).days
+        if days_until_due < 0:
+            deadline_state = "overdue"
+        elif days_until_due == 0:
+            deadline_state = "due_today"
+        else:
+            deadline_state = "due_soon"
+        items.append({
+            "id": str(row["id"]),
+            "snapshot_id": str(row["snapshot_id"]),
+            "title": row["title"],
+            "assigned_membership_id": (
+                str(row["assigned_membership_id"])
+                if row["assigned_membership_id"] else None
+            ),
+            "due_on": row["due_on"].isoformat(),
+            "deadline_state": deadline_state,
+            "days_until_due": days_until_due,
+        })
+    total_alerts = (
+        summary["overdue_count"] + summary["due_today_count"]
+        + summary["due_next_7_days_count"]
+    )
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.deadline_alerts_read",
+        target_type="crm_marketing_dashboard_action_alerts",
+        target_key=summary["as_of"].isoformat(),
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "overdue_count": summary["overdue_count"],
+            "due_today_count": summary["due_today_count"],
+            "due_next_7_days_count": summary["due_next_7_days_count"],
+            "returned_count": len(items),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {
+        "as_of": summary["as_of"].isoformat(),
+        "overdue_count": summary["overdue_count"],
+        "due_today_count": summary["due_today_count"],
+        "due_next_7_days_count": summary["due_next_7_days_count"],
+        "items": items,
+        "limit": limit,
+        "truncated": total_alerts > len(items),
+    }
