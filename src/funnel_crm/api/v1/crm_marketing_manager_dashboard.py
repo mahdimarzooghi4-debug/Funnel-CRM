@@ -1703,7 +1703,7 @@ async def export_marketing_manager_action_learning_analytics_csv(
     ))
     await context.session.flush()
     return Response(
-        content="\\ufeff" + buffer.getvalue(),
+        content="\ufeff" + buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={
             "Content-Disposition": 'attachment; filename="funnel-crm-action-learning-analytics.csv"'
