@@ -774,29 +774,23 @@ async def export_marketing_manager_dashboard_snapshot_comparison_csv(
         "record_type", "path", "status", "previous", "current",
         "absolute_change", "percent_change",
     )
+    export_time = datetime.now(timezone.utc)
     buffer = StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=columns)
     writer.writeheader()
-    writer.writerow({
-        "record_type": "metadata",
-        "path": "period_start",
-        "current": comparison["period_start"],
-    })
-    writer.writerow({
-        "record_type": "metadata",
-        "path": "period_end",
-        "current": comparison["period_end"],
-    })
-    writer.writerow({
-        "record_type": "metadata",
-        "path": "report_definition_version",
-        "current": comparison["report_definition_version"],
-    })
-    writer.writerow({
-        "record_type": "metadata",
-        "path": "change_count",
-        "current": comparison["change_count"],
-    })
+    metadata = (
+        ("baseline_id", comparison["baseline"]["id"]),
+        ("current_id", comparison["current"]["id"]),
+        ("baseline_hash", comparison["baseline"]["snapshot_hash"]),
+        ("current_hash", comparison["current"]["snapshot_hash"]),
+        ("period_start", comparison["period_start"]),
+        ("period_end", comparison["period_end"]),
+        ("report_definition_version", comparison["report_definition_version"]),
+        ("generated_at", export_time.isoformat()),
+        ("change_count", comparison["change_count"]),
+    )
+    for key, value in metadata:
+        writer.writerow({"record_type": "metadata", "path": key, "current": value})
     for change in comparison["changes"]:
         writer.writerow({
             "record_type": "metric_change",
@@ -808,7 +802,6 @@ async def export_marketing_manager_dashboard_snapshot_comparison_csv(
             "percent_change": change["percent_change"],
         })
 
-    export_time = datetime.now(timezone.utc)
     context.session.add(AuditEvent(
         tenant_id=context.access.tenant_id,
         actor_kind="user",
@@ -822,7 +815,7 @@ async def export_marketing_manager_dashboard_snapshot_comparison_csv(
         after_state={
             "format": "csv",
             "generated_at": export_time.isoformat(),
-            "row_count": comparison["change_count"] + 4,
+            "row_count": comparison["change_count"] + len(metadata),
             "column_count": len(columns),
             "baseline_hash": comparison["baseline"]["snapshot_hash"],
             "current_hash": comparison["current"]["snapshot_hash"],
