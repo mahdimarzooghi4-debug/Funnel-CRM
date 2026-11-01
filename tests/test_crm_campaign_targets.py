@@ -465,6 +465,21 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert comparison.status_code == 200, comparison.text
         assert comparison.json()["change_count"] == 0
 
+        comparison_export = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-comparisons/export.csv",
+            headers=headers,
+            params={"baseline_id": snapshot_id, "current_id": current_snapshot_id},
+        )
+        assert comparison_export.status_code == 200, comparison_export.text
+        assert comparison_export.headers["content-type"].startswith("text/csv")
+        assert "attachment;" in comparison_export.headers["content-disposition"]
+        comparison_csv = comparison_export.content.decode("utf-8-sig")
+        assert comparison_csv.startswith(
+            "record_type,path,status,previous,current,absolute_change,percent_change"
+        )
+        assert "report_definition_version" in comparison_csv
+        assert "change_count,," in comparison_csv
+
         assert report["metric_definitions"]["roas"]["key"] == "reported_roas"
         assert report["metric_outcomes"]["period_net_paid_to_spend"]["met"] == 1
         pooled_usd = next(
