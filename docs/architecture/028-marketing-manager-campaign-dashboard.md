@@ -35,3 +35,9 @@ A manager can record an action against a snapshot using `POST /api/v1/crm/analyt
 ## Verifying follow-up outcomes
 
 `POST /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action_id}/verifications` records an observed numeric metric from the action's baseline snapshot against a later snapshot. The snapshots must share a reporting period and definition version, and both hashes are verified. The manager may record an expected direction; the response reports whether the observed movement matched it. Verification records are append-only and can be listed from `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action_id}/verifications`. The result describes an observed change and does not establish that the action caused it.
+
+## Learning from recorded action outcomes
+
+`GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/verification-analytics` aggregates recorded metric observations by metric path. It reports observation counts, increase/decrease/no-change counts, average observed movement, expected-direction matches, and the match rate where an expected direction was supplied. The aggregation includes only verifications for actions created by the current identity.
+
+`GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/verification-analytics/export.csv` exports the summary and metric groups as UTF-8 CSV. The report describes recorded observations and does not establish that actions caused the measured changes.
