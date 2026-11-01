@@ -2548,6 +2548,38 @@ class CRMSalesTarget(Base):
     )
 
 
+class CRMChannelPartner(Base):
+    """A tenant-owned organization or person operating a sales channel."""
+
+    __tablename__ = "crm_channel_partners"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_channel_partners_tenant_id"),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 180", name="ck_crm_channel_partners_name"),
+        CheckConstraint("partner_type IN ('reseller','affiliate','agency','distributor','referral','other')", name="ck_crm_channel_partners_type"),
+        CheckConstraint("status IN ('prospect','active','paused','ended')", name="ck_crm_channel_partners_status"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_channel_partners_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"], ["organization_units.tenant_id", "organization_units.id"], name="fk_crm_channel_partners_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_channel_partners_creator_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_channel_partners_tenant_org_status", "tenant_id", "organization_unit_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(180), nullable=False)
+    partner_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="prospect", server_default=text("'prospect'"))
+    contact_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    territory: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
 class CRMCommissionPlan(Base):
     """Percentage-of-net-sales rule scoped to an organization or one seller."""
 

@@ -10,6 +10,7 @@ from funnel_crm.api.v1.crm_campaign_commerce_efficiency import router as crm_cam
 from funnel_crm.api.v1.crm_sales_forecasting import router as crm_sales_forecasting_router
 from funnel_crm.api.v1.crm_sales_targets import router as crm_sales_targets_router
 from funnel_crm.api.v1.crm_commissions import router as crm_commissions_router
+from funnel_crm.api.v1.crm_channel_partners import router as crm_channel_partners_api_router
 from funnel_crm.api.v1.crm_catalog import router as crm_catalog_router
 from funnel_crm.api.v1.crm_opportunity_catalog import router as crm_opportunity_catalog_router
 from funnel_crm.api.v1.crm_opportunity_offers import router as crm_opportunity_offers_router
@@ -66,6 +67,7 @@ router.include_router(crm_campaign_commerce_efficiency_router)
 router.include_router(crm_sales_forecasting_router)
 router.include_router(crm_sales_targets_router)
 router.include_router(crm_commissions_router)
+router.include_router(crm_channel_partners_api_router)
 router.include_router(crm_catalog_router)
 router.include_router(crm_opportunity_catalog_router)
 router.include_router(crm_opportunity_offers_router)
