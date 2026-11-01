@@ -485,6 +485,17 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         )
         assert repeated_close.status_code == 409
 
+        action_worklist = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions",
+            headers=headers,
+            params={"status": "completed"},
+        )
+        assert action_worklist.status_code == 200, action_worklist.text
+        assert action_worklist.json()["items"][0]["id"] == action["id"]
+        assert action_worklist.json()["items"][0]["outcome"] == (
+            "Channel lead confirmed the tracking gap."
+        )
+
         second_snapshot_response = await client.post(
             "/api/v1/crm/analytics/marketing-manager/campaigns/snapshots",
             headers=headers,
