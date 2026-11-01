@@ -751,3 +751,91 @@ async def compare_marketing_manager_dashboard_snapshots(
         "change_count": len(changes),
         "changes": changes,
     }
+
+
+
+@router.get(
+    "/campaigns/snapshot-comparisons/export.csv",
+    response_class=Response,
+    operation_id="exportMarketingManagerCampaignDashboardSnapshotComparisonCsv",
+    summary="Export a verified dashboard snapshot comparison as CSV",
+)
+async def export_marketing_manager_dashboard_snapshot_comparison_csv(
+    baseline_id: UUID = Query(...),
+    current_id: UUID = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> Response:
+    comparison = await compare_marketing_manager_dashboard_snapshots(
+        baseline_id=baseline_id,
+        current_id=current_id,
+        context=context,
+    )
+    columns = (
+        "record_type", "path", "status", "previous", "current",
+        "absolute_change", "percent_change",
+    )
+    buffer = StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=columns)
+    writer.writeheader()
+    writer.writerow({
+        "record_type": "metadata",
+        "path": "period_start",
+        "current": comparison["period_start"],
+    })
+    writer.writerow({
+        "record_type": "metadata",
+        "path": "period_end",
+        "current": comparison["period_end"],
+    })
+    writer.writerow({
+        "record_type": "metadata",
+        "path": "report_definition_version",
+        "current": comparison["report_definition_version"],
+    })
+    writer.writerow({
+        "record_type": "metadata",
+        "path": "change_count",
+        "current": comparison["change_count"],
+    })
+    for change in comparison["changes"]:
+        writer.writerow({
+            "record_type": "metric_change",
+            "path": _csv_safe_text(str(change["path"])),
+            "status": _csv_safe_text(str(change["status"])),
+            "previous": change["previous"],
+            "current": change["current"],
+            "absolute_change": change["absolute_change"],
+            "percent_change": change["percent_change"],
+        })
+
+    export_time = datetime.now(timezone.utc)
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_snapshot_comparison.exported",
+        target_type="crm_marketing_dashboard_snapshot_comparison",
+        target_key=f"{baseline_id}:{current_id}",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "format": "csv",
+            "generated_at": export_time.isoformat(),
+            "row_count": comparison["change_count"] + 4,
+            "column_count": len(columns),
+            "baseline_hash": comparison["baseline"]["snapshot_hash"],
+            "current_hash": comparison["current"]["snapshot_hash"],
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    filename = (
+        "funnel-crm-campaign-snapshot-comparison-"
+        f"{comparison['period_start']}-{comparison['period_end']}.csv"
+    )
+    return Response(
+        content="\\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
