@@ -1252,3 +1252,248 @@ async def get_marketing_manager_dashboard_action_analytics(
     ))
     await context.session.flush()
     return metrics
+
+
+class DashboardActionVerificationCreate(BaseModel):
+    current_snapshot_id: UUID
+    metric_path: str = Field(min_length=1, max_length=500)
+    expected_direction: str | None = Field(
+        default=None, pattern="^(increase|decrease|unchanged)$"
+    )
+
+    @field_validator("metric_path")
+    @classmethod
+    def normalize_metric_path(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("metric_path must contain a non-whitespace character")
+        return cleaned
+
+
+@router.post(
+    "/campaigns/snapshot-actions/{action_id}/verifications",
+    status_code=201,
+    operation_id="verifyMarketingManagerDashboardActionOutcome",
+    summary="Record the observed metric movement after a manager action",
+)
+async def verify_marketing_manager_dashboard_action_outcome(
+    action_id: UUID,
+    payload: DashboardActionVerificationCreate,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    action_result = await context.session.execute(
+        text("""
+            SELECT a.id, a.snapshot_id, a.creator_identity_id,
+                   baseline.period_start, baseline.period_end,
+                   baseline.report_definition_version, baseline.snapshot_hash,
+                   baseline.payload, baseline.created_at
+            FROM crm_marketing_dashboard_actions AS a
+            JOIN crm_marketing_dashboard_snapshots AS baseline
+              ON baseline.tenant_id = a.tenant_id AND baseline.id = a.snapshot_id
+            WHERE a.id = :action_id AND a.tenant_id = :tenant_id
+              AND a.creator_identity_id = :identity_id
+        """),
+        {
+            "action_id": action_id,
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+        },
+    )
+    action = action_result.mappings().one_or_none()
+    if action is None:
+        raise HTTPException(status_code=404, detail="Dashboard action not found")
+
+    current_result = await context.session.execute(
+        text("""
+            SELECT id, period_start, period_end, report_definition_version,
+                   snapshot_hash, payload, created_at
+            FROM crm_marketing_dashboard_snapshots
+            WHERE id = :snapshot_id AND tenant_id = :tenant_id
+              AND creator_identity_id = :identity_id
+        """),
+        {
+            "snapshot_id": payload.current_snapshot_id,
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+        },
+    )
+    current = current_result.mappings().one_or_none()
+    if current is None:
+        raise HTTPException(status_code=404, detail="Dashboard snapshot not found")
+    if (
+        action["period_start"] != current["period_start"]
+        or action["period_end"] != current["period_end"]
+        or action["report_definition_version"] != current["report_definition_version"]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Snapshots must use the same reporting period and report definition version",
+        )
+    if current["created_at"] <= action["created_at"]:
+        raise HTTPException(status_code=422, detail="Follow-up snapshot must be newer than the baseline")
+    for snapshot_hash, snapshot_payload in (
+        (action["snapshot_hash"], action["payload"]),
+        (current["snapshot_hash"], current["payload"]),
+    ):
+        actual_hash = hashlib.sha256(
+            _canonical_dashboard_json(snapshot_payload).encode("utf-8")
+        ).hexdigest()
+        if actual_hash != snapshot_hash:
+            raise HTTPException(status_code=500, detail="Dashboard snapshot integrity check failed")
+
+    baseline_metrics = _dashboard_numeric_values(action["payload"])
+    current_metrics = _dashboard_numeric_values(current["payload"])
+    if payload.metric_path not in baseline_metrics or payload.metric_path not in current_metrics:
+        raise HTTPException(
+            status_code=422,
+            detail="Metric path must exist as a numeric value in both snapshots",
+        )
+    baseline_value = baseline_metrics[payload.metric_path]
+    current_value = current_metrics[payload.metric_path]
+    delta = current_value - baseline_value
+    direction_matched: bool | None = None
+    if payload.expected_direction is not None:
+        direction_matched = {
+            "increase": delta > 0,
+            "decrease": delta < 0,
+            "unchanged": delta == 0,
+        }[payload.expected_direction]
+    result = await context.session.execute(
+        text("""
+            INSERT INTO crm_marketing_dashboard_action_verifications
+                (tenant_id, action_id, baseline_snapshot_id, current_snapshot_id,
+                 metric_path, baseline_value, current_value, absolute_change,
+                 expected_direction, direction_matched)
+            VALUES
+                (:tenant_id, :action_id, :baseline_snapshot_id, :current_snapshot_id,
+                 :metric_path, :baseline_value, :current_value, :absolute_change,
+                 :expected_direction, :direction_matched)
+            ON CONFLICT (tenant_id, action_id, current_snapshot_id, metric_path)
+            DO NOTHING
+            RETURNING id, verified_at
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "action_id": action_id,
+            "baseline_snapshot_id": action["snapshot_id"],
+            "current_snapshot_id": current["id"],
+            "metric_path": payload.metric_path,
+            "baseline_value": baseline_value,
+            "current_value": current_value,
+            "absolute_change": delta,
+            "expected_direction": payload.expected_direction,
+            "direction_matched": direction_matched,
+        },
+    )
+    verification = result.mappings().one_or_none()
+    if verification is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This action and metric were already verified against that snapshot",
+        )
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.outcome_verified",
+        target_type="crm_marketing_dashboard_action_verification",
+        target_key=str(verification["id"]),
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "action_id": str(action_id),
+            "baseline_snapshot_id": str(action["snapshot_id"]),
+            "current_snapshot_id": str(current["id"]),
+            "baseline_hash": action["snapshot_hash"],
+            "current_hash": current["snapshot_hash"],
+            "metric_path": payload.metric_path,
+            "expected_direction": payload.expected_direction,
+            "direction_matched": direction_matched,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {
+        "id": str(verification["id"]),
+        "action_id": str(action_id),
+        "baseline_snapshot_id": str(action["snapshot_id"]),
+        "current_snapshot_id": str(current["id"]),
+        "metric_path": payload.metric_path,
+        "baseline_value": format(baseline_value, "f"),
+        "current_value": format(current_value, "f"),
+        "absolute_change": format(delta, "f"),
+        "expected_direction": payload.expected_direction,
+        "direction_matched": direction_matched,
+        "verified_at": verification["verified_at"].isoformat(),
+        "interpretation": (
+            "Observed metric movement only; this comparison does not establish that "
+            "the action caused the change."
+        ),
+    }
+
+
+@router.get(
+    "/campaigns/snapshot-actions/{action_id}/verifications",
+    operation_id="listMarketingManagerDashboardActionVerifications",
+    summary="List recorded metric follow-up observations for a manager action",
+)
+async def list_marketing_manager_dashboard_action_verifications(
+    action_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    action = await context.session.execute(
+        text("""
+            SELECT id FROM crm_marketing_dashboard_actions
+            WHERE id = :action_id AND tenant_id = :tenant_id
+              AND creator_identity_id = :identity_id
+        """),
+        {
+            "action_id": action_id,
+            "tenant_id": context.access.tenant_id,
+            "identity_id": context.access.identity_id,
+        },
+    )
+    if action.first() is None:
+        raise HTTPException(status_code=404, detail="Dashboard action not found")
+    result = await context.session.execute(
+        text("""
+            SELECT id, baseline_snapshot_id, current_snapshot_id, metric_path,
+                   baseline_value, current_value, absolute_change,
+                   expected_direction, direction_matched, verified_at
+            FROM crm_marketing_dashboard_action_verifications
+            WHERE tenant_id = :tenant_id AND action_id = :action_id
+            ORDER BY verified_at DESC, id DESC
+        """),
+        {"tenant_id": context.access.tenant_id, "action_id": action_id},
+    )
+    items = [
+        {
+            "id": str(row["id"]),
+            "baseline_snapshot_id": str(row["baseline_snapshot_id"]),
+            "current_snapshot_id": str(row["current_snapshot_id"]),
+            "metric_path": row["metric_path"],
+            "baseline_value": format(row["baseline_value"], "f"),
+            "current_value": format(row["current_value"], "f"),
+            "absolute_change": format(row["absolute_change"], "f"),
+            "expected_direction": row["expected_direction"],
+            "direction_matched": row["direction_matched"],
+            "verified_at": row["verified_at"].isoformat(),
+        }
+        for row in result.mappings()
+    ]
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_action.verifications_read",
+        target_type="crm_marketing_dashboard_action",
+        target_key=str(action_id),
+        organization_unit_id=None,
+        before_state=None,
+        after_state={"returned_count": len(items)},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {"items": items}
