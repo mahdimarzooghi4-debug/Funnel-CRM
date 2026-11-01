@@ -1,11 +1,15 @@
 """Unified read-only dashboard for marketing managers."""
 
 import csv
+import hashlib
+import json
 from datetime import date, datetime, timezone
 from io import StringIO
 from decimal import Decimal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import text
 from pydantic import BaseModel
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
@@ -418,3 +422,186 @@ async def export_marketing_manager_campaign_dashboard_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _canonical_dashboard_json(payload: dict[str, object]) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+@router.post(
+    "/campaigns/snapshots",
+    status_code=201,
+    operation_id="createMarketingManagerCampaignDashboardSnapshot",
+    summary="Create an immutable, hash-verified dashboard snapshot",
+)
+async def create_marketing_manager_dashboard_snapshot(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    dashboard = await get_marketing_manager_campaign_dashboard(
+        period_start=period_start, period_end=period_end, context=context
+    )
+    payload = dashboard.model_dump(mode="json")
+    canonical = _canonical_dashboard_json(payload)
+    snapshot_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    result = await context.session.execute(
+        text("""
+            INSERT INTO crm_marketing_dashboard_snapshots
+                (tenant_id, creator_identity_id, period_start, period_end,
+                 report_definition_version, snapshot_hash, payload)
+            VALUES
+                (:tenant_id, :creator_identity_id, :period_start, :period_end,
+                 :version, :snapshot_hash, CAST(:payload AS jsonb))
+            RETURNING id, created_at
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "creator_identity_id": context.access.identity_id,
+            "period_start": period_start,
+            "period_end": period_end,
+            "version": dashboard.report_definition_version,
+            "snapshot_hash": snapshot_hash,
+            "payload": canonical,
+        },
+    )
+    row = result.mappings().one()
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_snapshot.created",
+        target_type="crm_marketing_dashboard_snapshot",
+        target_key=str(row["id"]),
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "report_definition_version": dashboard.report_definition_version,
+            "snapshot_hash": snapshot_hash,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {
+        "id": str(row["id"]),
+        "created_at": row["created_at"].isoformat(),
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "report_definition_version": dashboard.report_definition_version,
+        "snapshot_hash": snapshot_hash,
+    }
+
+
+@router.get(
+    "/campaigns/snapshots",
+    operation_id="listMarketingManagerCampaignDashboardSnapshots",
+    summary="List the current user's dashboard snapshots",
+)
+async def list_marketing_manager_dashboard_snapshots(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10000),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    result = await context.session.execute(
+        text("""
+            SELECT id, period_start, period_end, report_definition_version,
+                   snapshot_hash, created_at
+            FROM crm_marketing_dashboard_snapshots
+            WHERE tenant_id = :tenant_id AND creator_identity_id = :creator_identity_id
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit OFFSET :offset
+        """),
+        {
+            "tenant_id": context.access.tenant_id,
+            "creator_identity_id": context.access.identity_id,
+            "limit": limit,
+            "offset": offset,
+        },
+    )
+    items = [
+        {
+            "id": str(row["id"]),
+            "period_start": row["period_start"].isoformat(),
+            "period_end": row["period_end"].isoformat(),
+            "report_definition_version": row["report_definition_version"],
+            "snapshot_hash": row["snapshot_hash"],
+            "created_at": row["created_at"].isoformat(),
+        }
+        for row in result.mappings()
+    ]
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_snapshot.listed",
+        target_type="crm_marketing_dashboard_snapshot_collection",
+        target_key=f"{offset}:{limit}",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={"returned_count": len(items), "offset": offset, "limit": limit},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {"items": items, "limit": limit, "offset": offset}
+
+
+@router.get(
+    "/campaigns/snapshots/{snapshot_id}",
+    operation_id="getMarketingManagerCampaignDashboardSnapshot",
+    summary="Retrieve and verify one of the current user's dashboard snapshots",
+)
+async def get_marketing_manager_dashboard_snapshot(
+    snapshot_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict[str, object]:
+    result = await context.session.execute(
+        text("""
+            SELECT id, period_start, period_end, report_definition_version,
+                   snapshot_hash, payload, created_at
+            FROM crm_marketing_dashboard_snapshots
+            WHERE id = :id AND tenant_id = :tenant_id
+              AND creator_identity_id = :creator_identity_id
+        """),
+        {
+            "id": snapshot_id,
+            "tenant_id": context.access.tenant_id,
+            "creator_identity_id": context.access.identity_id,
+        },
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Dashboard snapshot not found")
+    payload = row["payload"]
+    actual_hash = hashlib.sha256(
+        _canonical_dashboard_json(payload).encode("utf-8")
+    ).hexdigest()
+    if actual_hash != row["snapshot_hash"]:
+        raise HTTPException(status_code=500, detail="Dashboard snapshot integrity check failed")
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.dashboard_snapshot.read",
+        target_type="crm_marketing_dashboard_snapshot",
+        target_key=str(snapshot_id),
+        organization_unit_id=None,
+        before_state=None,
+        after_state={"snapshot_hash": actual_hash, "integrity_verified": True},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return {
+        "id": str(row["id"]),
+        "created_at": row["created_at"].isoformat(),
+        "period_start": row["period_start"].isoformat(),
+        "period_end": row["period_end"].isoformat(),
+        "report_definition_version": row["report_definition_version"],
+        "snapshot_hash": actual_hash,
+        "integrity_verified": True,
+        "dashboard": payload,
+    }
