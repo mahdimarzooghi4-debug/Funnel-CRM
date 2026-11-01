@@ -53,3 +53,5 @@ A manager can record an action against a snapshot using `POST /api/v1/crm/analyt
 `GET /api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/export.csv` provides a spreadsheet-ready export with the same period, currency separation, and pacing basis.
 
 `GET /api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/alerts?period_start=YYYY-MM-DD&as_of=YYYY-MM-DD&variance_threshold_percent=10&limit=100` lists campaigns whose absolute spend variance from expected pace meets the requested percentage threshold. The threshold must be between 0 and 100; campaigns with missing observed spend or zero expected spend do not produce percentage alerts. The response states the threshold basis and whether the result was truncated, and the request is audited.
+
+`GET /api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/alerts/export.csv` exports the threshold-filtered alert list as UTF-8 CSV with a spreadsheet-compatible byte-order mark. It includes the selected period, threshold, campaign pacing values, and whether the alert list was truncated. Campaign names and statuses are protected against spreadsheet formulas, and the export request is audited.
