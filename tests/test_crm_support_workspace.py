@@ -12,7 +12,7 @@ def test_support_workspace_route_security_and_forms():
         assert page.headers['cache-control'] == 'no-store'
         assert "frame-ancestors 'none'" in page.headers['content-security-policy']
         assert 'lang="fa" dir="rtl"' in page.text
-        for name in ('case-form', 'queue', 'profile-next', 'next', 'overdue', 'history-panel', 'entry-form', 'history-next'):
+        for name in ('case-form', 'queue', 'profile-next', 'next', 'overdue', 'history-panel', 'entry-form', 'history-next', 'sla-form', 'sla-result'):
             assert f'id="{name}"' in page.text
         script = client.get('/assets/crm-support.js')
         assert script.status_code == 200
