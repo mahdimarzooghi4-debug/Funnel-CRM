@@ -24,6 +24,7 @@ from funnel_crm.web.crm_brand_reputation_workspace import router as crm_brand_re
 from funnel_crm.web.crm_security_integrations_workspace import router as crm_security_integrations_workspace_router
 from funnel_crm.web.crm_market_research_workspace import router as crm_market_research_workspace_router
 from funnel_crm.web.crm_marketing_planning_workspace import router as crm_marketing_planning_workspace_router
+from funnel_crm.web.crm_channel_partners_workspace import router as crm_channel_partners_workspace_router
 
 app = FastAPI(
     title="Funnel CRM API",
@@ -77,3 +78,4 @@ app.include_router(crm_brand_reputation_workspace_router)
 app.include_router(crm_security_integrations_workspace_router)
 app.include_router(crm_market_research_workspace_router)
 app.include_router(crm_marketing_planning_workspace_router)
+app.include_router(crm_channel_partners_workspace_router)
