@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -14,6 +14,8 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
     CRMMarketingCampaignTargetPlan,
+    CRMMarketingLearningReview,
+    CRMWorkItem,
     CRMProfileSegment,
     CRMProductCommerceEvent,
     Role,
@@ -51,6 +53,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert isinstance(identity, AuthenticatedIdentity)
 
     campaign_id, plan_id, segment_id = uuid4(), uuid4(), uuid4()
+    low_priority_campaign_id, low_priority_plan_id = uuid4(), uuid4()
     period_start, period_end = date(2026, 10, 19), date(2026, 10, 25)
     event_fact_ids = [uuid4(), uuid4(), uuid4(), uuid4()]
     async with tenant_session(
@@ -72,6 +75,14 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 planned_budget_amount=None, planned_budget_currency=None,
                 starts_at=None, ends_at=None, status="draft",
             ),
+            CRMMarketingCampaign(
+                id=low_priority_campaign_id, tenant_id=tenant_id,
+                organization_unit_id=root_id, segment_id=segment_id,
+                name="A campaign with no target misses",
+                objective_key="awareness", channel="web",
+                planned_budget_amount=None, planned_budget_currency=None,
+                starts_at=None, ends_at=None, status="draft",
+            ),
             RoleAssignment(
                 tenant_id=tenant_id, membership_id=context.access.membership_id,
                 role_id=role.id, organization_unit_id=root_id,
@@ -84,6 +95,10 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 tenant_id=tenant_id, role_id=role.id,
                 permission_key="crm.commerce_event:view",
             ),
+            RolePermission(
+                tenant_id=tenant_id, role_id=role.id,
+                permission_key="crm.work_item:view",
+            ),
         ])
         await context.session.flush()
         context.session.add(CRMMarketingCampaignTargetPlan(
@@ -95,6 +110,57 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             max_cpl_amount=None, cpl_currency=None,
             max_cost_per_conversion_amount=None, conversion_cost_currency=None,
             min_roas=Decimal("1.500000"), roas_currency="USD",
+            min_net_paid_to_spend=Decimal("2.000000"), net_paid_to_spend_currency="USD",
+        ))
+        await context.session.flush()
+        context.session.add(CRMMarketingCampaignTargetPlan(
+            id=low_priority_plan_id, tenant_id=tenant_id,
+            organization_unit_id=root_id, campaign_id=low_priority_campaign_id,
+            period_start=period_start, period_end=period_start,
+            impressions_target=1, clicks_target=None, leads_target=None,
+            conversions_target=None, max_spend_amount=None, max_spend_currency=None,
+            max_cpl_amount=None, cpl_currency=None,
+            max_cost_per_conversion_amount=None, conversion_cost_currency=None,
+            min_roas=None, roas_currency=None,
+            min_net_paid_to_spend=None, net_paid_to_spend_currency=None,
+        ))
+        await context.session.flush()
+        learning_review_id = uuid4()
+        context.session.add(CRMMarketingLearningReview(
+            id=learning_review_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            campaign_id=campaign_id, target_plan_id=plan_id,
+            assessment="Initial campaign review",
+            corrective_action="Review landing page changes",
+            status="planned",
+        ))
+        await context.session.flush()
+        context.session.add(CRMWorkItem(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            profile_id=None, opportunity_id=None, campaign_id=campaign_id,
+            assigned_membership_id=None, created_by_membership_id=context.access.membership_id,
+            title="Follow up on campaign review", description=None,
+            due_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            priority="normal", status="open", completed_at=None,
+            source_learning_review_id=learning_review_id, source_outcome_id=None,
+        ))
+        completed_learning_review_id = uuid4()
+        context.session.add(CRMMarketingLearningReview(
+            id=completed_learning_review_id, tenant_id=tenant_id,
+            organization_unit_id=root_id, campaign_id=campaign_id,
+            target_plan_id=plan_id, assessment="Completed action review",
+            corrective_action="Document campaign follow-up",
+            status="planned",
+        ))
+        await context.session.flush()
+        context.session.add(CRMWorkItem(
+            id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+            profile_id=None, opportunity_id=None, campaign_id=campaign_id,
+            assigned_membership_id=context.access.membership_id,
+            created_by_membership_id=context.access.membership_id,
+            title="Completed campaign follow-up", description=None,
+            due_at=None, priority="normal", status="completed",
+            completed_at=datetime.now(timezone.utc),
+            source_learning_review_id=completed_learning_review_id, source_outcome_id=None,
         ))
         context.session.add_all([
             CRMMarketingCampaignMeasurement(
@@ -102,7 +168,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 campaign_id=campaign_id, measured_on=date(2026, 10, 19),
                 source_label="verified analytics import",
                 impressions=60, clicks=5, reach=None, responses=None,
-                leads=None, conversions=None,
+                leads=2, conversions=1,
                 actual_spend_amount=Decimal("40.00"), actual_spend_currency="USD",
                 attributed_revenue_amount=None, attributed_revenue_currency=None,
             ),
@@ -111,7 +177,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 campaign_id=campaign_id, measured_on=date(2026, 10, 20),
                 source_label="verified analytics import",
                 impressions=20, clicks=2, reach=None, responses=None,
-                leads=None, conversions=None,
+                leads=1, conversions=1,
                 actual_spend_amount=Decimal("20.00"), actual_spend_currency="USD",
                 attributed_revenue_amount=None, attributed_revenue_currency=None,
             ),
@@ -124,6 +190,15 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
                 actual_spend_amount=Decimal("10.00"), actual_spend_currency="EUR",
                 attributed_revenue_amount=None, attributed_revenue_currency=None,
             ),
+            CRMMarketingCampaignMeasurement(
+                id=uuid4(), tenant_id=tenant_id, organization_unit_id=root_id,
+                campaign_id=low_priority_campaign_id, measured_on=period_start,
+                source_label="verified analytics import",
+                impressions=1, clicks=None, reach=None, responses=None,
+                leads=None, conversions=None, actual_spend_amount=None,
+                actual_spend_currency=None, attributed_revenue_amount=None,
+                attributed_revenue_currency=None,
+            ),
         ])
         for index, (kind, amount, currency, order_ref) in enumerate([
             ("paid", "80.00", "USD", "USD-1"),
@@ -134,7 +209,7 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
             context.session.add(CRMProductCommerceEvent(
                 id=event_fact_ids[index], tenant_id=tenant_id,
                 organization_unit_id=root_id, campaign_id=campaign_id,
-                profile_id=None, source_product="funnel.store",
+                profile_id=None, source_product="funnel.marketplace" if order_ref == "USD-2" else "funnel.store",
                 source_event_id=uuid4(),
                 event_type="commerce.order.refunded" if kind == "refunded" else "commerce.order.paid",
                 order_reference=order_ref, event_kind=kind,
@@ -161,7 +236,105 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         )
         assert queue_response.status_code == 200, queue_response.text
         queue = queue_response.json()
+        ranked_page_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id), "limit": 1, "offset": 0},
+        )
+        assert ranked_page_response.status_code == 200, ranked_page_response.text
+        ranked_page = ranked_page_response.json()
+        reason_filtered_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id), "attention_reason": "target_missed",
+                    "limit": 1},
+        )
+        assert reason_filtered_response.status_code == 200, reason_filtered_response.text
+        reason_filtered = reason_filtered_response.json()
+        status_filtered_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id),
+                    "status": "on_track_or_insufficient_signal"},
+        )
+        assert status_filtered_response.status_code == 200, status_filtered_response.text
+        status_filtered = status_filtered_response.json()
+        metric_filtered_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id), "metric_key": "clicks",
+                    "metric_status": "not_met"},
+        )
+        assert metric_filtered_response.status_code == 200, metric_filtered_response.text
+        metric_filtered = metric_filtered_response.json()
+        period_comparison_response = await client.get(
+            "/api/v1/crm/campaigns/portfolio-period-comparison",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={
+                "baseline_start": "2026-10-19",
+                "baseline_end": "2026-10-19",
+                "comparison_start": "2026-10-20",
+                "comparison_end": "2026-10-21",
+                "organization_unit_id": str(root_id),
+            },
+        )
+        export_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue/export.csv",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id), "metric_key": "clicks",
+                    "metric_status": "not_met"},
+        )
 
+    assert period_comparison_response.status_code == 200, period_comparison_response.text
+    comparison = period_comparison_response.json()
+    assert comparison["baseline_campaign_count"] == 2
+    assert comparison["comparison_campaign_count"] == 1
+    assert comparison["metrics"]["impressions"]["baseline_value"] == 61
+    assert comparison["metrics"]["impressions"]["comparison_value"] == 20
+    assert comparison["metrics"]["impressions"]["change"] == -41
+    assert comparison["metrics"]["impressions"]["change_percent"] == "-67.21"
+    assert comparison["metrics"]["clicks"]["change_percent"] == "-60.00"
+    assert comparison["metrics"]["click_through_rate"]["baseline_value"] == "8.20"
+    assert comparison["metrics"]["click_through_rate"]["comparison_value"] == "10.00"
+    assert comparison["metrics"]["click_through_rate"]["change"] == "1.80"
+    assert comparison["metrics"]["click_through_rate"]["value_unit"] == "percent"
+    assert comparison["metrics"]["click_through_rate"]["change_unit"] == "percentage_points"
+    assert comparison["metrics"]["click_through_rate"]["baseline_observed_days"] == 1
+    assert comparison["metrics"]["click_to_lead_rate"]["baseline_value"] == "40.00"
+    assert comparison["metrics"]["click_to_lead_rate"]["comparison_value"] == "50.00"
+    assert comparison["metrics"]["lead_to_conversion_rate"]["comparison_value"] == "100.00"
+    assert comparison["metrics"]["leads"]["baseline_value"] == 2
+    assert comparison["commerce_scope_status"] == "complete"
+    comparison_financial = {
+        row["currency"]: row
+        for row in comparison["financial_outcomes_by_currency"]
+    }
+    assert comparison_financial["USD"]["baseline_net_paid_amount"] == "110.000000"
+    assert comparison_financial["USD"]["comparison_net_paid_amount"] == "0"
+    assert comparison_financial["EUR"]["baseline_net_paid_amount"] == "6.000000"
+    period_source_outcomes = {
+        (row["source_product"], row["currency"]): row
+        for row in comparison["source_product_outcomes"]
+    }
+    assert period_source_outcomes[("funnel.store", "USD")]["baseline_paid_amount"] == "80.000000"
+    assert period_source_outcomes[("funnel.store", "USD")]["baseline_paid_share_percent"] == "66.67"
+    assert period_source_outcomes[("funnel.store", "USD")]["baseline_refunded_share_percent"] == "100.00"
+    assert period_source_outcomes[("funnel.marketplace", "USD")]["baseline_paid_share_percent"] == "33.33"
+    assert period_source_outcomes[("funnel.store", "EUR")]["baseline_paid_share_percent"] == "100.00"
+    assert period_source_outcomes[("funnel.store", "USD")]["comparison_paid_amount"] == "0"
+    assert period_source_outcomes[("funnel.store", "USD")]["comparison_paid_share_percent"] is None
+    assert export_response.status_code == 200, export_response.text
+    assert export_response.headers["content-type"].startswith("text/csv")
+    assert "attachment; filename=" in export_response.headers["content-disposition"]
+    assert "campaign_name" in export_response.text
+    assert "Decision workspace campaign" in export_response.text
+    assert str(plan_id) in export_response.text
+    assert "metric_clicks_status" in export_response.text
     assert workspace["campaign_name"] == "Decision workspace campaign"
     assert workspace["period_calendar_days"] == 7
     assert workspace["causal_attribution_applied"] is False
@@ -175,9 +348,15 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert workspace["metrics"]["spend"]["status"] == "met"
     assert workspace["metrics"]["paid_to_spend"]["actual"] == "2.000000"
     assert workspace["metrics"]["paid_to_spend"]["status"] == "met"
+    assert workspace["metrics"]["period_net_paid_to_spend"]["actual"] == "1.833333"
+    assert workspace["metrics"]["period_net_paid_to_spend"]["status"] == "not_met"
     assert workspace["metric_definitions"]["spend"]["key"] == "actual_spend"
     assert workspace["metric_definitions"]["impressions"]["key"] == "impressions"
     assert workspace["metric_definitions"]["paid_to_spend"]["key"] == "paid_to_spend"
+    assert workspace["metric_definitions"]["net_paid_amount"]["key"] == "net_paid_amount"
+    assert workspace["metric_definitions"]["net_paid_amount_per_paid_order"]["key"] == "net_paid_amount_per_paid_order"
+    assert workspace["metric_definitions"]["period_net_paid_to_spend"]["key"] == "period_net_paid_to_spend"
+    assert "not accounting profit" in workspace["commerce_basis"]
     assert "بازده علّی تبلیغ" in workspace["metric_definitions"]["paid_to_spend"]["limitations"]
     assert workspace["coverage_definition"]["key"] == "recorded_day_coverage"
     currency_rows = {
@@ -188,15 +367,186 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
     assert currency_rows["USD"]["paid_order_count"] == 2
     assert currency_rows["USD"]["paid_amount"] == "120.000000"
     assert currency_rows["USD"]["refunded_amount"] == "10.000000"
+    assert currency_rows["USD"]["net_paid_amount"] == "110.000000"
+    assert currency_rows["USD"]["net_paid_amount_per_paid_order"] == "55.000000"
     assert currency_rows["USD"]["observed_paid_to_spend_multiple"] == "2.000000"
+    assert currency_rows["USD"]["observed_net_paid_to_spend_multiple"] == "1.833333"
     assert currency_rows["EUR"]["paid_amount"] == "6.000000"
-    assert queue["total_count"] == 1
+    assert currency_rows["EUR"]["net_paid_amount"] == "6.000000"
+    assert currency_rows["EUR"]["net_paid_amount_per_paid_order"] == "6.000000"
+    source_rows = {
+        (row["source_product"], row["currency"]): row
+        for row in workspace["commerce_outcomes_by_source_product"]
+    }
+    assert source_rows[("funnel.store", "USD")]["net_paid_amount"] == "70.000000"
+    assert source_rows[("funnel.store", "USD")]["net_paid_amount_per_paid_order"] == "70.000000"
+    assert source_rows[("funnel.marketplace", "USD")]["paid_amount"] == "40.000000"
+    assert source_rows[("funnel.marketplace", "USD")]["net_paid_amount"] == "40.000000"
+    assert source_rows[("funnel.marketplace", "USD")]["net_paid_amount_per_paid_order"] == "40.000000"
+    assert source_rows[("funnel.store", "EUR")]["net_paid_amount"] == "6.000000"
+    assert queue["total_count"] == 2
+    assert queue["summary"]["total_count"] == 2
+    assert queue["summary"]["campaign_count"] == 2
+    assert queue["summary"]["status_counts"] == {
+        "review_required": 1, "on_track_or_insufficient_signal": 1
+    }
+    assert queue["summary"]["attention_reason_counts"]["target_missed"] == 1
+    assert queue["summary"]["metric_status_counts"]["clicks"] == {
+        "met": 0, "not_met": 1, "no_data": 0
+    }
+    assert queue["summary"]["commerce_scope_status"] == "complete"
+    assert "union of the filtered target-plan date windows" in queue["summary"]["financial_period_basis"]
+    financial_by_currency = {
+        row["currency"]: row
+        for row in queue["summary"]["financial_outcomes_by_currency"]
+    }
+    assert financial_by_currency["USD"]["recorded_spend_amount"] == "60.000000"
+    assert financial_by_currency["USD"]["paid_amount"] == "120.000000"
+    assert financial_by_currency["USD"]["refunded_amount"] == "10.000000"
+    assert financial_by_currency["USD"]["net_paid_amount"] == "110.000000"
+    assert financial_by_currency["EUR"]["recorded_spend_amount"] == "10.000000"
+    assert financial_by_currency["EUR"]["net_paid_amount"] == "6.000000"
+    source_product_outcomes = {
+        (row["source_product"], row["currency"]): row
+        for row in queue["summary"]["source_product_outcomes"]
+    }
+    assert source_product_outcomes[("funnel.store", "USD")]["net_paid_amount"] == "70.000000"
+    assert source_product_outcomes[("funnel.store", "USD")]["paid_amount_share_percent"] == "66.67"
+    assert source_product_outcomes[("funnel.store", "USD")]["refunded_amount_share_percent"] == "100.00"
+    assert source_product_outcomes[("funnel.marketplace", "USD")]["paid_amount_share_percent"] == "33.33"
+    assert source_product_outcomes[("funnel.store", "EUR")]["paid_amount_share_percent"] == "100.00"
     assert queue["automatic_recommendation_issued"] is False
+    assert ranked_page["total_count"] == 2
+    assert ranked_page["has_more"] is True
+    assert len(ranked_page["items"]) == 1
+    assert ranked_page["items"][0]["target_plan_id"] == str(plan_id)
+    assert reason_filtered["total_count"] == 1
+    assert reason_filtered["has_more"] is False
+    assert reason_filtered["items"][0]["target_plan_id"] == str(plan_id)
+    assert status_filtered["total_count"] == 1
+    assert status_filtered["items"][0]["target_plan_id"] == str(low_priority_plan_id)
+    assert metric_filtered["total_count"] == 1
+    assert metric_filtered["summary"]["campaign_count"] == 1
+    assert metric_filtered["summary"]["metric_status_counts"]["clicks"]["not_met"] == 1
+    assert metric_filtered["items"][0]["target_plan_id"] == str(plan_id)
+    assert metric_filtered["items"][0]["metrics"]["clicks"]["status"] == "not_met"
     assert queue["items"][0]["target_plan_id"] == str(plan_id)
     assert queue["items"][0]["status"] == "review_required"
-    assert set(queue["items"][0]["attention_reasons"]) == {
-        "target_missed", "low_recorded_day_coverage"
+    assert queue["items"][0]["missed_metric_count"] == 2
+    assert queue["items"][0]["latest_measurement_date"] == "2026-10-21"
+    queue_metrics = queue["items"][0]["metrics"]
+    assert queue_metrics["impressions"]["status"] == "met"
+    assert queue_metrics["impressions"]["target"] == 80
+    assert queue_metrics["impressions"]["actual"] == 80
+    assert queue_metrics["clicks"]["status"] == "not_met"
+    assert queue_metrics["clicks"]["target"] == 10
+    assert queue_metrics["clicks"]["actual"] == 7
+    assert Decimal(queue_metrics["period_net_paid_to_spend"]["actual"]) == Decimal("1.833333")
+    assert queue_metrics["period_net_paid_to_spend"]["status"] == "not_met"
+    assert queue["items"][0]["commerce_data_status"] == "observed"
+    assert queue["items"][0]["planned_learning_review_count"] == 2
+    assert queue["items"][0]["evaluated_learning_review_count"] == 0
+    assert queue["items"][0]["open_learning_action_count"] == 1
+    assert queue["items"][0]["overdue_learning_action_count"] == 1
+    assert queue["items"][0]["unassigned_learning_action_count"] == 1
+    assert queue["items"][0]["completed_learning_action_count"] == 1
+    assert queue["items"][0]["tracked_learning_action_count"] == 2
+    assert Decimal(queue["items"][0]["learning_action_completion_rate_percent"]) == Decimal("50.00")
+    queue_currency = {
+        row["currency"]: row for row in queue["items"][0]["commerce_outcomes_by_currency"]
     }
+    assert queue_currency["USD"]["paid_amount"] == "120.000000"
+    assert queue_currency["USD"]["refunded_amount"] == "10.000000"
+    assert queue_currency["USD"]["net_paid_amount"] == "110.000000"
+    assert queue_currency["USD"]["paid_order_count"] == 2
+    assert queue_currency["USD"]["refunded_order_count"] == 1
+    assert queue_currency["USD"]["net_paid_amount_per_paid_order"] == "55.000000"
+    assert queue_currency["EUR"]["net_paid_amount"] == "6.000000"
+    assert queue_currency["EUR"]["paid_order_count"] == 1
+    assert queue_currency["EUR"]["net_paid_amount_per_paid_order"] == "6.000000"
+    assert set(queue["items"][0]["attention_reasons"]) == {
+        "target_missed", "net_commerce_target_missed", "low_recorded_day_coverage"
+    }
+
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        await context.session.execute(delete(CRMProductCommerceEvent).where(
+            CRMProductCommerceEvent.tenant_id == tenant_id,
+            CRMProductCommerceEvent.campaign_id == campaign_id,
+        ))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        no_events_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id)},
+        )
+        assert no_events_response.status_code == 200, no_events_response.text
+        no_events_item = no_events_response.json()["items"][0]
+        assert no_events_item["commerce_outcomes_by_currency"] == []
+        assert no_events_item["commerce_data_status"] == "no_linked_events"
+
+    async with tenant_session(
+        runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
+    ) as context:
+        await context.session.execute(delete(RolePermission).where(
+            RolePermission.tenant_id == tenant_id,
+            RolePermission.role_id == role.id,
+            RolePermission.permission_key == "crm.commerce_event:view",
+        ))
+        await context.session.execute(delete(RolePermission).where(
+            RolePermission.tenant_id == tenant_id,
+            RolePermission.role_id == role.id,
+            RolePermission.permission_key == "crm.work_item:view",
+        ))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        restricted_period_comparison = await client.get(
+            "/api/v1/crm/campaigns/portfolio-period-comparison",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={
+                "baseline_start": "2026-10-19",
+                "baseline_end": "2026-10-19",
+                "comparison_start": "2026-10-20",
+                "comparison_end": "2026-10-21",
+                "organization_unit_id": str(root_id),
+            },
+        )
+        assert restricted_period_comparison.status_code == 200, restricted_period_comparison.text
+        assert restricted_period_comparison.json()["commerce_scope_status"] == "not_authorized"
+        restricted_period_financial = restricted_period_comparison.json()["financial_outcomes_by_currency"]
+        assert len(restricted_period_financial) == 2
+        assert all(row["baseline_paid_amount"] == "0" for row in restricted_period_financial)
+        assert all(row["comparison_paid_amount"] == "0" for row in restricted_period_financial)
+        assert all(row["baseline_refunded_amount"] == "0" for row in restricted_period_financial)
+        assert all(row["comparison_refunded_amount"] == "0" for row in restricted_period_financial)
+        assert restricted_period_comparison.json()["source_product_outcomes"] == []
+        restricted_queue_response = await client.get(
+            "/api/v1/crm/campaigns/decision-queue",
+            headers={"X-Workspace-ID": str(tenant_id)},
+            params={"period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                    "organization_unit_id": str(root_id)},
+        )
+        assert restricted_queue_response.status_code == 200, restricted_queue_response.text
+        restricted_item = restricted_queue_response.json()["items"][0]
+        assert restricted_item["commerce_outcomes_by_currency"] == []
+        assert restricted_item["commerce_data_status"] == "not_authorized"
+        assert restricted_queue_response.json()["summary"]["commerce_scope_status"] == "not_authorized"
+        restricted_financial = restricted_queue_response.json()["summary"]["financial_outcomes_by_currency"]
+        assert len(restricted_financial) == 2
+        assert all(row["paid_event_count"] == 0 for row in restricted_financial)
+        assert all(row["refund_event_count"] == 0 for row in restricted_financial)
+        assert restricted_queue_response.json()["summary"]["source_product_outcomes"] == []
+        assert restricted_item["open_learning_action_count"] is None
+        assert restricted_item["completed_learning_action_count"] is None
+        assert restricted_item["tracked_learning_action_count"] is None
+        assert restricted_item["learning_action_completion_rate_percent"] is None
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity
@@ -213,15 +563,27 @@ async def test_campaign_decision_workspace_shows_targets_coverage_and_linked_out
         ))
         await context.session.execute(delete(CRMMarketingCampaignMeasurement).where(
             CRMMarketingCampaignMeasurement.tenant_id == tenant_id,
-            CRMMarketingCampaignMeasurement.campaign_id == campaign_id,
+            CRMMarketingCampaignMeasurement.campaign_id.in_(
+                (campaign_id, low_priority_campaign_id)
+            ),
+        ))
+        await context.session.execute(delete(CRMWorkItem).where(
+            CRMWorkItem.tenant_id == tenant_id,
+            CRMWorkItem.campaign_id == campaign_id,
+        ))
+        await context.session.execute(delete(CRMMarketingLearningReview).where(
+            CRMMarketingLearningReview.tenant_id == tenant_id,
+            CRMMarketingLearningReview.target_plan_id.in_(
+                (plan_id, low_priority_plan_id)
+            ),
         ))
         await context.session.execute(delete(CRMMarketingCampaignTargetPlan).where(
             CRMMarketingCampaignTargetPlan.tenant_id == tenant_id,
-            CRMMarketingCampaignTargetPlan.id == plan_id,
+            CRMMarketingCampaignTargetPlan.id.in_((plan_id, low_priority_plan_id)),
         ))
         await context.session.execute(delete(CRMMarketingCampaign).where(
             CRMMarketingCampaign.tenant_id == tenant_id,
-            CRMMarketingCampaign.id == campaign_id,
+            CRMMarketingCampaign.id.in_((campaign_id, low_priority_campaign_id)),
         ))
         await context.session.execute(delete(CRMProfileSegment).where(
             CRMProfileSegment.tenant_id == tenant_id,

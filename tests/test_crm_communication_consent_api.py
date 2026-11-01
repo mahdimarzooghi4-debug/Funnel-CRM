@@ -11,10 +11,12 @@ from funnel_crm.api.v1.crm_communication_consent import router
 from funnel_crm.platform.models import (
     AuditEvent,
     CRMCommunicationConsentEvent,
+    CRMConsentProductSyncOutbox,
     CRMProfile,
     Role,
     RoleAssignment,
     RolePermission,
+    ProductCustomerIdentity,
     TenantRecord,
 )
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
@@ -71,6 +73,14 @@ async def test_consent_ledger_is_explicit_append_only_and_latest_withdrawal_deni
                 profile_kind="person",
                 display_name="Consent test",
                 lifecycle_stage="lead",
+            )
+        )
+        context.session.add(
+            ProductCustomerIdentity(
+                tenant_id=tenant_id,
+                source_product="funnel.store",
+                external_customer_id="crm-customer-42",
+                profile_id=profile_id,
             )
         )
         role = Role(tenant_id=tenant_id, name="Consent manager")
@@ -183,6 +193,19 @@ async def test_consent_ledger_is_explicit_append_only_and_latest_withdrawal_deni
             )
         ).all()
         assert [event.decision for event in events] == ["granted", "withdrawn"]
+        feed_events = (
+            await context.session.scalars(
+                select(CRMConsentProductSyncOutbox)
+                .where(
+                    CRMConsentProductSyncOutbox.tenant_id == tenant_id,
+                    CRMConsentProductSyncOutbox.recipient_product == "funnel.store",
+                )
+                .order_by(CRMConsentProductSyncOutbox.sequence)
+            )
+        ).all()
+        assert [item.decision for item in feed_events] == ["granted", "withdrawn"]
+        assert [item.sequence for item in feed_events] == [1, 2]
+        assert all(item.external_customer_id == "crm-customer-42" for item in feed_events)
         with pytest.raises(DBAPIError):
             async with context.session.begin_nested():
                 events[-1].decision = "granted"

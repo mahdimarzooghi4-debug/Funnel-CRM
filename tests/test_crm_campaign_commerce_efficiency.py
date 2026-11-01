@@ -165,10 +165,16 @@ async def test_campaign_efficiency_matches_spend_and_explicit_commerce_links_by_
     assert Decimal(metrics["USD"]["spend_amount"]) == Decimal("100.00")
     assert Decimal(metrics["USD"]["paid_amount"]) == Decimal("250.00")
     assert Decimal(metrics["USD"]["refunded_amount"]) == Decimal("25.00")
+    assert Decimal(metrics["USD"]["net_paid_amount"]) == Decimal("225.00")
+    assert Decimal(metrics["USD"]["net_paid_amount_per_paid_order"]) == Decimal("225.000000")
     assert Decimal(metrics["USD"]["observed_paid_to_spend_multiple"]) == Decimal("2.500000")
+    assert Decimal(metrics["USD"]["observed_net_paid_to_spend_multiple"]) == Decimal("2.250000")
     assert Decimal(metrics["USD"]["observed_refunds_to_spend_multiple"]) == Decimal("0.250000")
     assert Decimal(metrics["EUR"]["spend_amount"]) == Decimal("20.00")
     assert Decimal(metrics["EUR"]["paid_amount"]) == Decimal("10.00")
+    assert Decimal(metrics["EUR"]["net_paid_amount"]) == Decimal("10.00")
+    assert Decimal(metrics["EUR"]["net_paid_amount_per_paid_order"]) == Decimal("10.000000")
+    assert Decimal(metrics["EUR"]["observed_net_paid_to_spend_multiple"]) == Decimal("0.500000")
     assert Decimal(metrics["EUR"]["observed_paid_to_spend_multiple"]) == Decimal("0.500000")
     assert "net_revenue" not in report
 

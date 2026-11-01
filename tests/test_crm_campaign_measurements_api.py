@@ -104,14 +104,24 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
                 "clicks": 50,
                 "leads": 5,
                 "conversions": 2,
+                "assigned_count": 120,
+                "exposure_count": 100,
+                "return_count": 2,
+                "refunded_amount": "12",
+                "refunded_currency": "USD",
                 "actual_spend_amount": "20",
                 "actual_spend_currency": "USD",
+                "incentive_cost_amount": "5",
+                "incentive_cost_currency": "USD",
                 "attributed_revenue_amount": "100",
                 "attributed_revenue_currency": "USD",
             },
         )
         assert first.status_code == 200, first.text
         measurement_id = first.json()["id"]
+        assert first.json()["assigned_count"] == 120
+        assert first.json()["exposure_count"] == 100
+        assert Decimal(first.json()["incentive_cost_amount"]) == Decimal("5")
 
         updated = await client.put(
             f"/api/v1/crm/campaigns/{campaign_id}/measurements/{first_day.isoformat()}",
@@ -124,8 +134,15 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
                 "responses": 8,
                 "leads": 5,
                 "conversions": 2,
+                "assigned_count": 120,
+                "exposure_count": 110,
+                "return_count": 2,
+                "refunded_amount": "15",
+                "refunded_currency": "USD",
                 "actual_spend_amount": "20",
                 "actual_spend_currency": "USD",
+                "incentive_cost_amount": "6",
+                "incentive_cost_currency": "USD",
                 "attributed_revenue_amount": "100",
                 "attributed_revenue_currency": "USD",
             },
@@ -144,8 +161,15 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
                 "clicks": 25,
                 "leads": 4,
                 "conversions": 1,
+                "assigned_count": 50,
+                "exposure_count": 45,
+                "return_count": 1,
+                "refunded_amount": "5",
+                "refunded_currency": "EUR",
                 "actual_spend_amount": "10",
                 "actual_spend_currency": "EUR",
+                "incentive_cost_amount": "3",
+                "incentive_cost_currency": "EUR",
                 "attributed_revenue_amount": "40",
                 "attributed_revenue_currency": "EUR",
             },
@@ -168,13 +192,156 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
             "responses": 8,
             "leads": 9,
             "conversions": 3,
+            "assigned_count": 170,
+            "exposure_count": 155,
+            "return_count": 3,
         }
         assert report["coverage_days"]["responses"] == 1
+        assert report["coverage_days"]["assigned_count"] == 2
+        assert report["coverage_days"]["exposure_count"] == 2
+        assert report["incentive_cost_by_currency"] == {"EUR": "3.000000", "USD": "6.000000"}
+        assert report["refunded_amount_by_currency"] == {"EUR": "5.000000", "USD": "15.000000"}
         assert report["click_through_rate_percent"] == 5.0
         assert report["lead_rate_per_click_percent"] == 12.0
         assert report["conversion_rate_per_click_percent"] == 4.0
         assert report["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
         assert report["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
+
+        portfolio = await client.get(
+            "/api/v1/crm/campaigns/performance",
+            headers=headers,
+            params={"period_start": first_day.isoformat(), "period_end": second_day.isoformat()},
+        )
+        assert portfolio.status_code == 200, portfolio.text
+        portfolio_report = portfolio.json()
+        assert portfolio_report["campaign_count"] == 1
+        assert portfolio_report["measured_campaign_count"] == 1
+        item = portfolio_report["items"][0]
+        assert item["campaign_id"] == str(campaign_id)
+        assert item["planned_budget_amount"] == "500.000000"
+        assert item["record_count"] == 2
+        assert item["totals"]["conversions"] == 3
+        assert item["conversion_rate_per_click_percent"] == 4.0
+        assert item["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
+        assert item["budget_consumption"] == {
+            "planned_amount": "500.000000",
+            "currency": "USD",
+            "measured_spend_in_budget_currency": "20.000000",
+            "remaining_amount": "480.000000",
+            "consumed_percent": 4.0,
+            "spend_in_other_currencies": {"EUR": "10.000000"},
+        }
+
+        channels = await client.get(
+            "/api/v1/crm/campaigns/performance/channels",
+            headers=headers,
+            params={"period_start": first_day.isoformat(), "period_end": second_day.isoformat()},
+        )
+        assert channels.status_code == 200, channels.text
+        channel_report = channels.json()
+        assert channel_report["channel_count"] == 1
+        web = channel_report["items"][0]
+        assert web["channel"] == "web"
+        assert web["campaign_count"] == 1
+        assert web["totals"]["impressions"] == 1500
+        assert web["click_through_rate_percent"] == 5.0
+        assert web["lead_rate_per_click_percent"] == 12.0
+        assert web["planned_budget_by_currency"] == {"USD": "500.000000"}
+        assert web["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
+        assert web["efficiency"]["attributed_revenue_minus_spend_by_currency"] == {
+            "EUR": "30.000000", "USD": "80.000000"
+        }
+
+        segments = await client.get(
+            "/api/v1/crm/campaigns/performance/segments",
+            headers=headers,
+            params={"period_start": first_day.isoformat(), "period_end": second_day.isoformat()},
+        )
+        assert segments.status_code == 200, segments.text
+        segment_report = segments.json()
+        assert segment_report["aggregation_basis"] == "campaign_configured_audience_segment"
+        assert segment_report["segment_count"] == 1
+        segment = segment_report["items"][0]
+        assert segment["segment_id"] == str(segment_id)
+        assert segment["segment_name"].startswith("Measurement audience ")
+        assert segment["campaign_count"] == 1
+        assert segment["totals"]["conversions"] == 3
+        assert segment["conversion_rate_per_click_percent"] == 4.0
+        assert segment["efficiency"]["return_on_ad_spend_by_currency"] == {"EUR": 4.0, "USD": 5.0}
+
+        quality = await client.get(
+            "/api/v1/crm/campaigns/performance/data-quality",
+            headers=headers,
+            params={"period_start": first_day.isoformat(), "period_end": second_day.isoformat()},
+        )
+        assert quality.status_code == 200, quality.text
+        quality_report = quality.json()
+        assert quality_report["campaign_count"] == 1
+        assert quality_report["expected_campaign_days"] == 2
+        assert quality_report["covered_campaign_days"] == 2
+        assert quality_report["missing_campaign_days"] == 0
+        quality_item = quality_report["items"][0]
+        assert quality_item["expected_days_basis"] == "reporting_period_incomplete_campaign_schedule"
+        assert quality_item["metric_coverage"]["impressions"]["coverage_percent"] == "100.00"
+        assert quality_item["metric_coverage"]["responses"]["coverage_percent"] == "50.00"
+        assert quality_item["days_since_last_measurement"] == 0
+        assert quality_item["out_of_schedule_measurement_days"] == 0
+
+        invalid_quality_period = await client.get(
+            "/api/v1/crm/campaigns/performance/data-quality",
+            headers=headers,
+            params={"period_start": date(2025, 10, 16).isoformat(), "period_end": date(2026, 10, 17).isoformat()},
+        )
+        assert invalid_quality_period.status_code == 422
+        assert item["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
+        assert item["efficiency"]["attributed_revenue_minus_spend_by_currency"] == {
+            "EUR": "30.000000", "USD": "80.000000"
+        }
+        assert item["efficiency"]["return_on_ad_spend_by_currency"] == {"EUR": 4.0, "USD": 5.0}
+
+        comparison = await client.get(
+            "/api/v1/crm/campaigns/performance/compare",
+            headers=headers,
+            params={
+                "current_start": second_day.isoformat(),
+                "current_end": second_day.isoformat(),
+                "previous_start": first_day.isoformat(),
+                "previous_end": first_day.isoformat(),
+            },
+        )
+        assert comparison.status_code == 200, comparison.text
+        compared = comparison.json()["items"][0]
+        assert compared["current"]["efficiency"]["return_on_ad_spend_by_currency"] == {"EUR": 4.0}
+        assert compared["previous"]["efficiency"]["return_on_ad_spend_by_currency"] == {"USD": 5.0}
+        assert compared["count_metrics"]["impressions"] == {
+            "current_value": 500.0,
+            "previous_value": 1000.0,
+            "delta": -500.0,
+            "change_percent": -50.0,
+        }
+        assert compared["rate_metrics"]["conversion_rate_per_click_percent"]["change_percent"] == 0.0
+        assert compared["spend_by_currency"]["EUR"]["previous_value"] is None
+        assert compared["spend_by_currency"]["EUR"]["delta"] is None
+        assert compared["spend_by_currency"]["USD"]["current_value"] is None
+
+        unequal_periods = await client.get(
+            "/api/v1/crm/campaigns/performance/compare",
+            headers=headers,
+            params={
+                "current_start": first_day.isoformat(),
+                "current_end": second_day.isoformat(),
+                "previous_start": first_day.isoformat(),
+                "previous_end": first_day.isoformat(),
+            },
+        )
+        assert unequal_periods.status_code == 422
+
+        too_long = await client.get(
+            "/api/v1/crm/campaigns/performance",
+            headers=headers,
+            params={"period_start": date(2025, 10, 16).isoformat(), "period_end": date(2026, 10, 17).isoformat()},
+        )
+        assert too_long.status_code == 422
 
         invalid = await client.put(
             f"/api/v1/crm/campaigns/{campaign_id}/measurements/{date(2026, 10, 18).isoformat()}",
@@ -185,6 +352,34 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
             },
         )
         assert invalid.status_code == 422
+
+        invalid_delivery_count = await client.put(
+            f"/api/v1/crm/campaigns/{campaign_id}/measurements/{date(2026, 10, 19).isoformat()}",
+            headers=headers,
+            json={"source_label": "invalid export", "assigned_count": -1},
+        )
+        assert invalid_delivery_count.status_code == 422
+
+        invalid_incentive_pair = await client.put(
+            f"/api/v1/crm/campaigns/{campaign_id}/measurements/{date(2026, 10, 20).isoformat()}",
+            headers=headers,
+            json={"source_label": "incomplete incentive", "incentive_cost_amount": "2"},
+        )
+        assert invalid_incentive_pair.status_code == 422
+
+        invalid_refund_pair = await client.put(
+            f"/api/v1/crm/campaigns/{campaign_id}/measurements/{date(2026, 10, 21).isoformat()}",
+            headers=headers,
+            json={"source_label": "incomplete refund", "refunded_amount": "2"},
+        )
+        assert invalid_refund_pair.status_code == 422
+
+        invalid_return_count = await client.put(
+            f"/api/v1/crm/campaigns/{campaign_id}/measurements/{date(2026, 10, 22).isoformat()}",
+            headers=headers,
+            json={"source_label": "invalid returns report", "return_count": -1},
+        )
+        assert invalid_return_count.status_code == 422
 
     async with tenant_session(
         runtime_session_factory, requested_tenant_id=tenant_id, identity=identity

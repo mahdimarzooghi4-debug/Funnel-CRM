@@ -9,9 +9,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaigns import router
+from funnel_crm.api.v1.crm_campaign_readiness import router as readiness_router
+from funnel_crm.api.v1.crm_work_items import router as work_items_router
+from funnel_crm.api.v1.crm_communication_consent import router as consent_router
 from funnel_crm.platform.models import (
+    CRMContactPoint,
     CRMMarketingCampaign,
+    CRMProfile,
     CRMProfileSegment,
+    TenantRecord,
     Role,
     RoleAssignment,
     RolePermission,
@@ -32,6 +38,9 @@ def make_app(
         return await call_next(request)
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(readiness_router, prefix="/api/v1")
+    app.include_router(work_items_router, prefix="/api/v1")
+    app.include_router(consent_router, prefix="/api/v1")
     return app
 
 
@@ -59,6 +68,25 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
             is_active=True,
         )
         context.session.add(segment)
+        profile_id = uuid4()
+        context.session.add(TenantRecord(
+            id=profile_id, tenant_id=tenant_id,
+            organization_unit_id=root_id, record_type="crm_profile",
+        ))
+        await context.session.flush()
+        context.session.add(CRMProfile(
+            id=profile_id, tenant_id=tenant_id, organization_unit_id=root_id,
+            profile_kind="person", display_name="Campaign readiness profile",
+            lifecycle_stage="lead",
+        ))
+        await context.session.flush()
+        context.session.add(CRMContactPoint(
+            id=uuid4(), tenant_id=tenant_id, profile_id=profile_id,
+            channel="email", encrypted_value=b"x" * 29,
+            encryption_key_id="test-key", fingerprint_key_id=None,
+            match_fingerprint=None, verification_status="verified", is_primary=True,
+        ))
+        await context.session.flush()
         role = Role(tenant_id=tenant_id, name=f"Campaign manager {uuid4().hex[:8]}")
         context.session.add(role)
         await context.session.flush()
@@ -82,6 +110,34 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
                     tenant_id=tenant_id, role_id=role.id,
                     permission_key="crm.segment:view",
                 ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.profile:view",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.contact_point:view",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.communication_consent:view",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.communication_consent:record",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.work_item:create",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.work_item:view",
+                ),
+                RolePermission(
+                    tenant_id=tenant_id, role_id=role.id,
+                    permission_key="crm.work_item:update",
+                ),
             ]
         )
         await context.session.flush()
@@ -102,6 +158,7 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
                 "segment_id": str(segment_id),
                 "name": "Spring offer",
                 "objective_key": "repeat_purchase",
+                "communication_purpose_key": "repeat_purchase",
                 "channel": "email",
                 "planned_budget_amount": "1200.50",
                 "planned_budget_currency": "USD",
@@ -112,8 +169,183 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert created.status_code == 201, created.text
         campaign_id = created.json()["id"]
         assert created.json()["status"] == "draft"
+        assert created.json()["communication_purpose_key"] == "repeat_purchase"
         assert created.json()["planned_budget_amount"] == "1200.50"
         assert created.json()["planned_budget_currency"] == "USD"
+
+        readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        assert readiness.status_code == 200, readiness.text
+        readiness_result = readiness.json()
+        assert readiness_result["communication_purpose_key"] == "repeat_purchase"
+        assert readiness_result["launch_readiness"] == "needs_attention"
+        eligibility_check = next(
+            item for item in readiness_result["checks"]
+            if item["key"] == "channel_eligibility"
+        )
+        assert eligibility_check["status"] == "missing"
+        assert eligibility_check["count"] == 0
+
+        portfolio = await client.get(
+            "/api/v1/crm/campaigns/readiness-portfolio",
+            headers=headers,
+            params={"limit": 1, "offset": 0},
+        )
+        assert portfolio.status_code == 200, portfolio.text
+        portfolio_result = portfolio.json()
+        assert portfolio_result["total_draft_campaigns"] == 1
+        assert portfolio_result["has_more"] is False
+        assert portfolio_result["ready_for_manager_review_count"] == 0
+        assert portfolio_result["needs_attention_count"] == 1
+        assert portfolio_result["items"][0]["campaign_id"] == campaign_id
+        assert portfolio_result["attention_by_check"]["channel_eligibility"] == 1
+        filtered_portfolio = await client.get(
+            "/api/v1/crm/campaigns/readiness-portfolio",
+            headers=headers,
+            params={
+                "channel": "email",
+                "communication_purpose_key": "repeat_purchase",
+            },
+        )
+        assert filtered_portfolio.status_code == 200, filtered_portfolio.text
+        assert filtered_portfolio.json()["total_draft_campaigns"] == 1
+        assert filtered_portfolio.json()["items"][0]["campaign_id"] == campaign_id
+        empty_portfolio = await client.get(
+            "/api/v1/crm/campaigns/readiness-portfolio",
+            headers=headers,
+            params={"channel": "email", "communication_purpose_key": "awareness"},
+        )
+        assert empty_portfolio.status_code == 200, empty_portfolio.text
+        assert empty_portfolio.json()["total_draft_campaigns"] == 0
+        assert empty_portfolio.json()["items"] == []
+
+        missing_follow_up = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
+            headers=headers,
+            json={"decision": "request_changes"},
+        )
+        assert missing_follow_up.status_code == 422
+
+        manager_review = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
+            headers=headers,
+            json={
+                "decision": "hold",
+                "note": "Wait for audience consent",
+                "follow_up": {
+                    "title": "Resolve consent gap",
+                    "priority": "high",
+                },
+            },
+        )
+        assert manager_review.status_code == 200, manager_review.text
+        review_result = manager_review.json()
+        assert review_result["latest_manager_review"]["decision"] == "hold"
+        assert review_result["latest_manager_review"]["note"] == "Wait for audience consent"
+        follow_up_id = review_result["latest_manager_review"]["follow_up_work_item_id"]
+        assert UUID(follow_up_id)
+        assert review_result["open_work_item_count"] == 1
+        assert review_result["latest_manager_review"]["follow_up_status"] == "open"
+        assert review_result["launch_readiness"] == "needs_attention"
+        held_schedule = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/lifecycle",
+            headers=headers,
+            json={"action": "schedule"},
+        )
+        assert held_schedule.status_code == 409
+        assert "manager decision" in held_schedule.json()["detail"]
+        completed_task = await client.patch(
+            f"/api/v1/crm/work-items/{follow_up_id}",
+            headers=headers,
+            json={"status": "completed"},
+        )
+        assert completed_task.status_code == 200, completed_task.text
+        refreshed_readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        assert refreshed_readiness.status_code == 200, refreshed_readiness.text
+        refreshed_review = refreshed_readiness.json()["latest_manager_review"]
+        assert refreshed_review["follow_up_work_item_id"] == follow_up_id
+        assert refreshed_review["follow_up_status"] == "completed"
+        assert refreshed_readiness.json()["open_work_item_count"] == 0
+
+        second_review = await client.post(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-review",
+            headers=headers,
+            json={
+                "decision": "request_changes",
+                "note": "Replace the campaign audience",
+                "follow_up": {"title": "Revise audience segment"},
+            },
+        )
+        assert second_review.status_code == 200, second_review.text
+        history_page = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-reviews",
+            headers=headers,
+            params={"limit": 1, "offset": 0},
+        )
+        assert history_page.status_code == 200, history_page.text
+        history_result = history_page.json()
+        assert history_result["total"] == 2
+        assert history_result["has_more"] is True
+        assert history_result["items"][0]["decision"] == "request_changes"
+        assert history_result["items"][0]["follow_up_status"] == "open"
+        earlier_history = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness-reviews",
+            headers=headers,
+            params={"limit": 1, "offset": 1},
+        )
+        assert earlier_history.status_code == 200, earlier_history.text
+        earlier_result = earlier_history.json()
+        assert earlier_result["has_more"] is False
+        assert earlier_result["items"][0]["decision"] == "hold"
+        assert earlier_result["items"][0]["follow_up_status"] == "completed"
+
+        marketing_consent = await client.post(
+            f"/api/v1/crm/profiles/{profile_id}/communication-consents",
+            headers=headers,
+            json={
+                "purpose_key": "marketing",
+                "channel": "email",
+                "decision": "granted",
+                "policy_version": "v1",
+            },
+        )
+        assert marketing_consent.status_code == 201, marketing_consent.text
+        wrong_purpose_readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        wrong_check = next(
+            item for item in wrong_purpose_readiness.json()["checks"]
+            if item["key"] == "channel_eligibility"
+        )
+        assert wrong_check["count"] == 0
+
+        campaign_consent = await client.post(
+            f"/api/v1/crm/profiles/{profile_id}/communication-consents",
+            headers=headers,
+            json={
+                "purpose_key": "repeat_purchase",
+                "channel": "email",
+                "decision": "granted",
+                "policy_version": "v1",
+            },
+        )
+        assert campaign_consent.status_code == 201, campaign_consent.text
+        eligible_readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        eligible_check = next(
+            item for item in eligible_readiness.json()["checks"]
+            if item["key"] == "channel_eligibility"
+        )
+        assert eligible_check["status"] == "complete"
+        assert eligible_check["count"] == 1
 
         listed = await client.get("/api/v1/crm/campaigns", headers=headers)
         assert listed.status_code == 200
@@ -135,6 +367,18 @@ async def test_campaign_planning_lifecycle_is_scoped_and_never_sends(
         assert updated.status_code == 200, updated.text
         assert updated.json()["channel"] == "store"
         assert updated.json()["planned_budget_amount"] == "1000.00"
+
+        unsupported_readiness = await client.get(
+            f"/api/v1/crm/campaigns/{campaign_id}/readiness",
+            headers=headers,
+        )
+        assert unsupported_readiness.status_code == 200, unsupported_readiness.text
+        unsupported_check = next(
+            item for item in unsupported_readiness.json()["checks"]
+            if item["key"] == "channel_eligibility"
+        )
+        assert unsupported_check["status"] == "unsupported"
+        assert unsupported_check["count"] is None
 
         archived = await client.post(
             f"/api/v1/crm/campaigns/{campaign_id}/archive", headers=headers

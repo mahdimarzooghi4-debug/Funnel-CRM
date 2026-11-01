@@ -65,7 +65,7 @@ _PAGE = """<!doctype html>
   <script src="/assets/budget-scenario-comparison.js" defer></script>
 </head>
 <body>
-  <header><strong>FUNNEL CRM</strong></header>
+  <header><strong>FUNNEL CRM</strong> · <a href="/workspace/crm-activity-capture" style="color:#fff">ثبت فعالیت میدانی</a></header>
   <main>
     <div class="intro">
       <div>
@@ -272,19 +272,40 @@ _PAGE = """<!doctype html>
         <label for="learning-lesson-query">جست‌وجو در درس‌های آموخته‌شده
           <input id="learning-lesson-query" type="search" maxlength="120" placeholder="مثلاً زمان‌بندی پیگیری">
         </label>
-        <button id="search-learning-lessons" type="button">جست‌وجو</button>
+        <label for="learning-campaign-query">نام کمپین
+          <input id="learning-campaign-query" type="search" maxlength="120" placeholder="بخشی از نام کمپین">
+        </label>
+        <label for="learning-review-status">وضعیت بررسی
+          <select id="learning-review-status">
+            <option value="">همهٔ وضعیت‌ها</option>
+            <option value="planned">در انتظار پیگیری</option>
+            <option value="evaluated">ارزیابی‌شده</option>
+          </select>
+        </label>
+        <button id="search-learning-lessons" type="button">جست‌وجو و فیلتر</button>
       </div>
       <label for="learning-overdue-only" style="display:flex;align-items:center;gap:8px;margin:10px 0">
         <input id="learning-overdue-only" type="checkbox" style="width:18px;min-height:18px">
         فقط بررسی‌های دارای کار موعدگذشته
       </label>
       <div id="learning-portfolio-counts" class="cards" aria-live="polite"></div>
+      <h4>خلاصه به تفکیک کمپین</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th scope="col">کمپین</th><th scope="col">کل بررسی‌ها</th><th scope="col">در انتظار پیگیری</th><th scope="col">ارزیابی‌شده</th></tr></thead>
+        <tbody id="learning-campaign-summary"></tbody>
+      </table></div>
       <div class="table-wrap">
         <table>
           <thead><tr><th scope="col">کمپین</th><th scope="col">دورهٔ مبنا</th><th scope="col">وضعیت بررسی</th><th scope="col">ارزیابی ثبت‌شده</th><th scope="col">اقدام ثبت‌شده</th><th scope="col">وضعیت کار CRM</th><th scope="col">واگذاری</th><th scope="col">موعد</th><th scope="col">به‌روزرسانی کار</th></tr></thead>
           <tbody id="learning-portfolio-items"></tbody>
         </table>
       </div>
+      <div id="learning-portfolio-pagination" class="actions" aria-live="polite">
+        <button id="learning-page-previous" type="button" disabled>صفحهٔ قبل</button>
+        <span id="learning-page-range" class="hint">۰ نتیجه</span>
+        <button id="learning-page-next" type="button" disabled>صفحهٔ بعد</button>
+      </div>
+      <div class="actions"><button id="export-learning-csv" type="button">خروجی CSV همهٔ نتایج فیلترشده</button><span class="hint">همهٔ صفحه‌ها با همین فیلترها در فایل قرار می‌گیرند.</span></div>
       <h3 style="margin-top:22px">نسبت تبدیل ثبت‌شده به سرنخ</h3>
       <p class="muted">نسبت مجموع تبدیل‌های ثبت‌شده به سرنخ‌های ثبت‌شده است؛ فقط کمپین‌هایی با هر دو مقدار و سرنخ مثبت وارد می‌شوند. این شاخص، نرخ تبدیل یکتای افراد یا انتساب علّی را اثبات نمی‌کند.</p>
       <div class="table-wrap">
@@ -325,6 +346,8 @@ _CLIENT_SCRIPT = r"""(() => {
   let selectedVarianceReview = null;
   let selectedVarianceReviewId = null;
   let latestLearningPortfolio = null;
+  let learningPortfolioOffset = 0;
+  const learningPortfolioPageSize = 100;
   const workspaceMemberships = new Map();
 
   const params = new URLSearchParams(window.location.search);
@@ -1548,29 +1571,80 @@ _CLIENT_SCRIPT = r"""(() => {
       button.disabled = false;
     }
   }
-  async function loadLearningPortfolio(fields) {
+  function learningPortfolioFilters() {
+    return {
+      lessonQuery: byId("learning-lesson-query").value.trim(),
+      campaignQuery: byId("learning-campaign-query").value.trim(),
+      reviewStatus: byId("learning-review-status").value,
+      overdueOnly: byId("learning-overdue-only").checked,
+    };
+  }
+  function learningPortfolioPath(fields, offset, filters, includeWorkItems = true) {
     const query = new URLSearchParams({
       period_start: fields.start,
       period_end: fields.end,
       organization_unit_id: fields.organization,
-      include_work_items: "true",
-      limit: "100",
+      include_work_items: String(includeWorkItems),
+      limit: String(learningPortfolioPageSize),
+      offset: String(offset),
     });
-    const lessonQuery = byId("learning-lesson-query").value.trim();
-    if (lessonQuery) query.set("lesson_query", lessonQuery);
-    const overdueOnly = byId("learning-overdue-only").checked;
-    if (overdueOnly) query.set("overdue_only", "true");
-    const path = "/api/v1/crm/marketing-learning/reviews/portfolio?" + query.toString();
+    if (filters.lessonQuery) query.set("lesson_query", filters.lessonQuery);
+    if (filters.campaignQuery) query.set("campaign_query", filters.campaignQuery);
+    if (filters.reviewStatus) query.set("status", filters.reviewStatus);
+    if (filters.overdueOnly && includeWorkItems) query.set("overdue_only", "true");
+    return "/api/v1/crm/marketing-learning/reviews/portfolio?" + query.toString();
+  }
+  async function loadLearningPortfolio(fields, offset = learningPortfolioOffset) {
+    const filters = learningPortfolioFilters();
+    const overdueOnly = filters.overdueOnly;
     try {
-      return { report: await getJson(path, fields.workspace), workItemsVisible: true };
+      return { report: await getJson(learningPortfolioPath(fields, offset, filters), fields.workspace), workItemsVisible: true };
     } catch (_) {
-      query.set("include_work_items", "false");
-      if (overdueOnly) query.delete("overdue_only");
       try {
-        return { report: await getJson("/api/v1/crm/marketing-learning/reviews/portfolio?" + query.toString(), fields.workspace), workItemsVisible: false };
+        return { report: await getJson(learningPortfolioPath(fields, offset, filters, false), fields.workspace), workItemsVisible: false };
       } catch (_) {
         return { report: null, workItemsVisible: false };
       }
+    }
+  }
+  async function exportLearningPortfolioCsv(fields) {
+    const filters = learningPortfolioFilters();
+    const reviews = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      if (offset >= 100000) throw new Error("خروجی بیش از سقف ۱۰۰٬۰۰۰ ردیف است؛ فیلترها را محدودتر کنید.");
+      const page = await loadLearningPortfolioWithFilters(fields, offset, filters);
+      if (!page?.items) throw new Error("دریافت همهٔ صفحه‌های بررسی‌ها ناموفق بود.");
+      reviews.push(...page.items);
+      hasMore = Boolean(page.has_more);
+      offset += page.limit || learningPortfolioPageSize;
+    }
+    const rows = [["کمپین", "وضعیت بررسی", "شروع دورهٔ مبنا", "پایان دورهٔ مبنا", "شروع پیگیری", "پایان پیگیری", "ارزیابی", "اقدام اصلاحی", "اثربخشی پیگیری", "درس آموخته‌شده", "وضعیت کار CRM", "موعد کار"]];
+    reviews.forEach((item) => rows.push([
+      item.campaign_name, learningReviewStatusLabel(item.review.status), item.baseline_period_start,
+      item.baseline_period_end, item.follow_up_period_start, item.follow_up_period_end,
+      item.review.assessment, item.review.corrective_action, item.review.follow_up_effectiveness,
+      item.review.lesson_learned, item.work_item ? learningWorkItemStatusLabel(item.work_item.status) : "ایجاد نشده",
+      item.work_item?.due_at,
+    ]));
+    const csv = "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `marketing-learning-${fields.start}-${fields.end}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  async function loadLearningPortfolioWithFilters(fields, offset, filters) {
+    try {
+      return await getJson(learningPortfolioPath(fields, offset, filters), fields.workspace);
+    } catch (_) {
+      if (filters.overdueOnly) throw new Error("برای خروجی بررسی‌های موعدگذشته، جزئیات کارهای CRM در دسترس نیست.");
+      return getJson(learningPortfolioPath(fields, offset, filters, false), fields.workspace);
     }
   }
   function learningReviewStatusLabel(status) {
@@ -1734,12 +1808,17 @@ _CLIENT_SCRIPT = r"""(() => {
   function renderLearningPortfolio(result) {
     const note = byId("learning-portfolio-note");
     const counts = byId("learning-portfolio-counts");
+    const campaignSummary = byId("learning-campaign-summary");
     const body = byId("learning-portfolio-items");
     counts.replaceChildren();
+    campaignSummary.replaceChildren();
     body.replaceChildren();
     latestLearningPortfolio = result?.report || null;
     if (!latestLearningPortfolio) {
       byId("learning-overdue-only").disabled = true;
+      byId("learning-page-previous").disabled = true;
+      byId("learning-page-next").disabled = true;
+      byId("learning-page-range").textContent = "فهرست در دسترس نیست";
       note.textContent = "فهرست بررسی‌ها در این محدوده در دسترس نیست یا مجوز مشاهده ثبت نشده است.";
       return;
     }
@@ -1748,6 +1827,15 @@ _CLIENT_SCRIPT = r"""(() => {
       byId("learning-overdue-only").checked = false;
     }
     const report = latestLearningPortfolio;
+    learningPortfolioOffset = Number(report.offset) || 0;
+    const items = report.items || [];
+    const rangeStart = report.total_count ? learningPortfolioOffset + 1 : 0;
+    const rangeEnd = Math.min(learningPortfolioOffset + items.length, report.total_count);
+    byId("learning-page-range").textContent = report.total_count
+      ? `${formatNumber.format(rangeStart)} تا ${formatNumber.format(rangeEnd)} از ${formatNumber.format(report.total_count)}`
+      : "۰ نتیجه";
+    byId("learning-page-previous").disabled = learningPortfolioOffset <= 0;
+    byId("learning-page-next").disabled = !report.has_more;
     const taskCounts = report.work_item_counts;
     const summary = [
       ["بررسی‌ها", report.total_count],
@@ -1761,13 +1849,21 @@ _CLIENT_SCRIPT = r"""(() => {
       card.append(element("strong", "", formatNumber.format(value)), element("span", "muted", label));
       counts.appendChild(card);
     });
+    (report.campaign_summaries || []).forEach((item) => {
+      const row = document.createElement("tr");
+      row.append(element("td", "", item.campaign_name),
+        element("td", "", formatNumber.format(item.review_count)),
+        element("td", "", formatNumber.format(item.planned_count)),
+        element("td", "", formatNumber.format(item.evaluated_count)));
+      campaignSummary.appendChild(row);
+    });
     note.textContent = result.workItemsVisible
       ? "وضعیت بررسی‌ها و کارهای پیوندخورده بر اساس دادهٔ ثبت‌شده است؛ تغییر وضعیت فقط با ثبت صریح شما انجام می‌شود."
       : "بررسی‌ها بر اساس مجوز مشاهده نمایش داده شده‌اند؛ جزئیات کارها برای حساب شما در دسترس نیست.";
     if (report.lesson_query) {
       note.textContent += ` جست‌وجوی درس: «${report.lesson_query}»؛ ${formatNumber.format(report.total_count)} نتیجه.`;
     }
-    const items = report.items || [];
+    if (report.campaign_query) note.textContent += ` کمپین: «${report.campaign_query}».`;
     if (!items.length) {
       const row = document.createElement("tr");
       const cell = element("td", "muted", "برای این واحد و بازه بررسی مدیریتی ثبت نشده است.");
@@ -2322,6 +2418,7 @@ _CLIENT_SCRIPT = r"""(() => {
       try {
         previousTargetPortfolio = await getJson("/api/v1/crm/analytics/campaign-target-performance/portfolio?" + previousTargetQuery.toString(), fields.workspace);
       } catch (_) {}
+      learningPortfolioOffset = 0;
       renderCampaignTargetOutcomes(result, targetPortfolio);
       renderChannelTargetSummary(result, targetPortfolio);
       renderTargetVarianceSummary(targetPortfolio);
@@ -2347,10 +2444,33 @@ _CLIENT_SCRIPT = r"""(() => {
   byId("save-variance-review").addEventListener("click", saveVarianceReview);
   byId("create-variance-review-work-item").addEventListener("click", createVarianceReviewWorkItem);
   byId("learning-overdue-only").addEventListener("change", async () => {
+    learningPortfolioOffset = 0;
     if (latestFields) renderLearningPortfolio(await loadLearningPortfolio(latestFields));
   });
   byId("search-learning-lessons").addEventListener("click", async () => {
+    learningPortfolioOffset = 0;
     if (latestFields) renderLearningPortfolio(await loadLearningPortfolio(latestFields));
+  });
+  byId("export-learning-csv").addEventListener("click", async () => {
+    if (!latestFields) return;
+    const button = byId("export-learning-csv");
+    button.disabled = true;
+    try {
+      await exportLearningPortfolioCsv(latestFields);
+      setStatus("خروجی CSV همهٔ نتایج فیلترشده آماده شد.", false);
+    } catch (error) {
+      setStatus(error.message || "ساخت خروجی CSV ناموفق بود.", true);
+    } finally { button.disabled = false; }
+  });
+  byId("learning-page-previous").addEventListener("click", async () => {
+    if (latestFields && learningPortfolioOffset > 0) {
+      renderLearningPortfolio(await loadLearningPortfolio(latestFields, Math.max(0, learningPortfolioOffset - learningPortfolioPageSize)));
+    }
+  });
+  byId("learning-page-next").addEventListener("click", async () => {
+    if (latestFields && latestLearningPortfolio?.has_more) {
+      renderLearningPortfolio(await loadLearningPortfolio(latestFields, learningPortfolioOffset + learningPortfolioPageSize));
+    }
   });
   byId("cancel-variance-review").addEventListener("click", () => {
     selectedVarianceReview = null;

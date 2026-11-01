@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
@@ -7,6 +8,11 @@ from fastapi import FastAPI, Request
 
 from funnel_crm.api.v1.crm_opportunities import router
 from funnel_crm.api.v1.crm_sales_forecasting import router as forecast_router
+from funnel_crm.api.v1.crm_catalog import router as catalog_router
+from funnel_crm.api.v1.crm_opportunity_catalog import router as opportunity_catalog_router
+from funnel_crm.api.v1.crm_opportunity_offers import router as opportunity_offers_router
+from funnel_crm.api.v1.crm_offer_plans import router as offer_plans_router
+from funnel_crm.api.v1.crm_offer_scenarios import router as offer_scenarios_router
 from funnel_crm.platform.models import Role, RoleAssignment, RolePermission
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
@@ -22,6 +28,11 @@ def make_app(session_factory, identity: AuthenticatedIdentity) -> FastAPI:
 
     app.include_router(router, prefix="/api/v1")
     app.include_router(forecast_router, prefix="/api/v1")
+    app.include_router(catalog_router, prefix="/api/v1")
+    app.include_router(opportunity_catalog_router, prefix="/api/v1")
+    app.include_router(opportunity_offers_router, prefix="/api/v1")
+    app.include_router(offer_plans_router, prefix="/api/v1")
+    app.include_router(offer_scenarios_router, prefix="/api/v1")
     return app
 
 
@@ -60,6 +71,15 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
                     "crm.opportunity:view",
                     "crm.opportunity:create",
                     "crm.opportunity:update",
+                    "crm.catalog:view",
+                    "crm.catalog:manage",
+                    "crm.offer:view",
+                    "crm.offer:create",
+                    "crm.offer_plan:view",
+                    "crm.offer_plan:create",
+                    "crm.offer_plan:update",
+                    "crm.offer_plan:approve",
+                    "crm.offer_plan:scenario",
                 )
             ],
         ])
@@ -119,6 +139,142 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert created.status_code == 201, created.text
         opportunity_id = created.json()["id"]
 
+        catalog_item = await client.post(
+            "/api/v1/crm/catalog/items", headers=headers,
+            json={"organization_unit_id": str(root_id), "code": "OFFER-01",
+                  "name": "Retail onboarding", "item_type": "service", "category": "Services"},
+        )
+        assert catalog_item.status_code == 201, catalog_item.text
+        attached = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/catalog-items", headers=headers,
+            json={"catalog_item_id": catalog_item.json()["id"],
+                  "expected_catalog_version": catalog_item.json()["version"]},
+        )
+        assert attached.status_code == 201, attached.text
+        assert attached.json()["name"] == "Retail onboarding"
+        assert attached.json()["category"] == "Services"
+        item_list = await client.get(
+            f"/api/v1/crm/opportunities/{opportunity_id}/catalog-items", headers=headers,
+        )
+        assert [row["id"] for row in item_list.json()["items"]] == [attached.json()["id"]]
+        duplicate_link = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/catalog-items", headers=headers,
+            json={"catalog_item_id": catalog_item.json()["id"], "expected_catalog_version": 1},
+        )
+        assert duplicate_link.status_code == 409
+        price = await client.post(
+            f"/api/v1/crm/catalog/items/{catalog_item.json()['id']}/prices",
+            headers=headers, json={"amount": "250.00", "currency": "USD"},
+        )
+        assert price.status_code == 201, price.text
+        offer = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts", headers=headers,
+            json={"lines": [{"catalog_item_id": catalog_item.json()["id"],
+                             "expected_catalog_version": 1,
+                             "price_version": price.json()["version"], "quantity": "2"}]},
+        )
+        assert offer.status_code == 201, offer.text
+        assert offer.json()["status"] == "draft"
+        assert offer.json()["lines"][0]["unit_amount"] == "250.000000"
+        assert offer.json()["totals_by_currency"] == {"USD": "500.000000"}
+        revised_offer = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts/{offer.json()['id']}/revisions",
+            headers=headers,
+            json={"lines": [{"catalog_item_id": catalog_item.json()["id"],
+                             "expected_catalog_version": 1,
+                             "price_version": price.json()["version"], "quantity": "3"}]},
+        )
+        assert revised_offer.status_code == 201, revised_offer.text
+        assert revised_offer.json()["revision_number"] == 2
+        assert revised_offer.json()["previous_revision_id"] == offer.json()["id"]
+        assert revised_offer.json()["totals_by_currency"] == {"USD": "750.000000"}
+        stale_revision = await client.post(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts/{offer.json()['id']}/revisions",
+            headers=headers,
+            json={"lines": [{"catalog_item_id": catalog_item.json()["id"],
+                             "expected_catalog_version": 1,
+                             "price_version": price.json()["version"], "quantity": "4"}]},
+        )
+        assert stale_revision.status_code == 409
+        offer_list = await client.get(
+            f"/api/v1/crm/opportunities/{opportunity_id}/offer-drafts", headers=headers,
+        )
+        assert {entry["id"] for entry in offer_list.json()["items"]} == {
+            offer.json()["id"], revised_offer.json()["id"],
+        }
+
+        planned_offer = await client.post(
+            "/api/v1/crm/offer-plans", headers=headers,
+            json={"organization_unit_id": str(root_id), "name": "Retail launch offer",
+                  "objective": "Increase first-month customer conversion",
+                  "offer_type": "store-defined incentive", "catalog_item_id": catalog_item.json()["id"],
+                  "audience_description": "New customers in assigned stores", "channel": "store",
+                  "location_scope": "Central region", "eligibility_conditions": "First purchase only",
+                  "success_metric": "First purchase conversion"},
+        )
+        assert planned_offer.status_code == 201, planned_offer.text
+        assert planned_offer.json()["status"] == "draft"
+        assert planned_offer.json()["version"] == 1
+        scenario = await client.post(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/scenarios", headers=headers,
+            json={"name": "Low uptake", "audience_size": 80, "expected_use_rate": "12.5",
+                  "price_version": price.json()["version"], "offer_value_per_use": "25",
+                  "campaign_budget_amount": "100", "campaign_budget_currency": "USD",
+                  "assumptions": "Take-up is 12.5%; each use generates one sale."},
+        )
+        assert scenario.status_code == 201, scenario.text
+        scenario_data = scenario.json()
+        assert scenario_data["plan_version"] == 1
+        assert scenario_data["expected_uses"] == "10.0"
+        assert Decimal(scenario_data["gross_reference_revenue"]) == Decimal("2500")
+        assert Decimal(scenario_data["planned_offer_value"]) == Decimal("250")
+        assert Decimal(scenario_data["revenue_after_offer"]) == Decimal("2250")
+        assert Decimal(scenario_data["revenue_after_offer_and_campaign_budget"]) == Decimal("2150")
+        assert scenario_data["margin_estimate"] is None
+        listed_scenarios = await client.get(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/scenarios", headers=headers,
+        )
+        assert [x["id"] for x in listed_scenarios.json()["items"]] == [scenario_data["id"]]
+        plan_list = await client.get("/api/v1/crm/offer-plans", headers=headers,
+                                     params={"organization_unit_id": str(root_id)})
+        assert plan_list.status_code == 200, plan_list.text
+        assert [item["id"] for item in plan_list.json()["items"]] == [planned_offer.json()["id"]]
+        plan_update = await client.patch(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}", headers=headers,
+            json={"expected_version": 1, "eligibility_conditions": "First purchase from an assigned store"},
+        )
+        assert plan_update.status_code == 200, plan_update.text
+        assert plan_update.json()["version"] == 2
+        requested_changes = await client.post(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/decision", headers=headers,
+            json={"expected_version": 2, "decision": "request_changes", "comment": "Clarify the audience."},
+        )
+        assert requested_changes.status_code == 200, requested_changes.text
+        assert requested_changes.json()["status"] == "changes_requested"
+        revised_plan = await client.patch(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}", headers=headers,
+            json={"expected_version": 3, "audience_description": "New customers at assigned stores"},
+        )
+        assert revised_plan.status_code == 200, revised_plan.text
+        assert revised_plan.json()["status"] == "draft"
+        approved_plan = await client.post(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/decision", headers=headers,
+            json={"expected_version": 4, "decision": "approve", "comment": "Reviewed for the CRM plan."},
+        )
+        assert approved_plan.status_code == 200, approved_plan.text
+        assert approved_plan.json()["status"] == "approved"
+        stale_plan_update = await client.patch(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}", headers=headers,
+            json={"expected_version": 5, "objective": "Approved plans are locked"},
+        )
+        assert stale_plan_update.status_code == 409
+        approved_scenario = await client.post(
+            f"/api/v1/crm/offer-plans/{planned_offer.json()['id']}/scenarios", headers=headers,
+            json={"name": "After approval", "audience_size": 10, "expected_use_rate": 50,
+                  "assumptions": "This must be rejected."},
+        )
+        assert approved_scenario.status_code == 409
+
         board = await client.get(
             "/api/v1/crm/opportunities",
             headers=headers,
@@ -145,7 +301,7 @@ async def test_sales_pipeline_and_opportunity_board_are_scoped_and_audited(
         assert history.status_code == 200, history.text
         history_page = history.json()
         assert history_page["opportunity_id"] == opportunity_id
-        assert history_page["total"] == 2
+        assert history_page["total"] == 3
         assert len(history_page["items"]) == 1
         latest_event = history_page["items"][0]
         assert latest_event["action_key"] == "crm_opportunity.updated"

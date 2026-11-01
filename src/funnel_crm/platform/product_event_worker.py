@@ -1,0 +1,254 @@
+"""Run tenant-scoped product event consumers as a standalone worker.
+
+The worker discovers workspace IDs from a read-only registry.
+Run one worker service per configured tenant set; the API process remains isolated
+from background event processing.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import signal
+from typing import Any, Iterable
+from uuid import UUID
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from funnel_crm.platform.commerce_orders import PostgresCommerceOrderEventConsumer
+from funnel_crm.platform.commerce_event_sync import (
+    PostgresProductCommerceEventConsumer,
+)
+from funnel_crm.platform.contact_point_crypto import ContactPointKeyring
+from funnel_crm.platform.communication_consent_sync import PostgresProductConsentEventConsumer
+from funnel_crm.platform.customer_profile_sync import PostgresProductEventConsumer
+from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
+
+logger = logging.getLogger("funnel_crm.product_event_worker")
+
+
+def tenant_ids_from_registry(rows: Iterable[UUID]) -> tuple[UUID, ...]:
+    """Normalize tenant IDs returned by the read-only worker registry."""
+    tenant_ids = tuple(rows)
+    if len(set(tenant_ids)) != len(tenant_ids):
+        raise ValueError("worker tenant registry contains duplicate UUIDs")
+    return tenant_ids
+
+
+async def load_worker_tenant_ids(
+    session_factory: async_sessionmaker[Any],
+) -> tuple[UUID, ...]:
+    """Read tenant IDs only; event rows remain under tenant RLS."""
+    async with session_factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT tenant_id FROM product_event_worker_tenants "
+                "ORDER BY tenant_id"
+            )
+        )
+        return tenant_ids_from_registry(result.scalars().all())
+
+
+def configured_poll_seconds(raw: str | None = None) -> float:
+    """Return a bounded delay between polling cycles."""
+    value = raw if raw is not None else os.environ.get(
+        "FUNNEL_CRM_EVENT_WORKER_POLL_SECONDS", "5"
+    )
+    try:
+        seconds = float(value)
+    except ValueError as exc:
+        raise ValueError("worker poll interval must be numeric") from exc
+    if not 0.25 <= seconds <= 300:
+        raise ValueError("worker poll interval must be between 0.25 and 300 seconds")
+    return seconds
+
+
+
+def configured_tenant_concurrency(raw: str | None = None) -> int:
+    """Return the bounded number of Workspaces processed concurrently."""
+    value = raw if raw is not None else os.environ.get(
+        "FUNNEL_CRM_EVENT_WORKER_TENANT_CONCURRENCY", "4"
+    )
+    try:
+        concurrency = int(value)
+    except ValueError as exc:
+        raise ValueError("worker tenant concurrency must be an integer") from exc
+    if not 1 <= concurrency <= 32:
+        raise ValueError("worker tenant concurrency must be between 1 and 32")
+    return concurrency
+
+
+async def process_tenant_batch(
+    tenant_id: UUID,
+    *,
+    customer_consumer: Any,
+    commerce_consumer: Any,
+    legacy_commerce_consumer: Any,
+    consent_consumer: Any,
+) -> None:
+    """Run each consumer independently and report aggregate processing counts."""
+    for consumer_name, consumer in (
+        ("customer", customer_consumer),
+        ("commerce", commerce_consumer),
+        ("legacy_commerce", legacy_commerce_consumer),
+        ("consent", consent_consumer),
+    ):
+        try:
+            result = await consumer.process_batch(tenant_id)
+        except Exception as exc:
+            logger.error(
+                "Product event consumer failed tenant=%s consumer=%s error_type=%s",
+                tenant_id,
+                consumer_name,
+                type(exc).__name__,
+            )
+            continue
+        if not result.claimed:
+            continue
+        log = logger.warning if result.failed else logger.info
+        log(
+            "Product event batch tenant=%s consumer=%s claimed=%s processed=%s failed=%s retry_scheduled=%s",
+            tenant_id,
+            consumer_name,
+            result.claimed,
+            result.processed,
+            result.failed,
+            result.retry_scheduled,
+        )
+
+
+
+async def process_tenant_batches(
+    tenant_ids: Iterable[UUID],
+    *,
+    concurrency: int,
+    customer_consumer: Any,
+    commerce_consumer: Any,
+    legacy_commerce_consumer: Any,
+    consent_consumer: Any,
+) -> None:
+    """Process tenant batches concurrently with a hard in-process bound."""
+    if not 1 <= concurrency <= 32:
+        raise ValueError("worker tenant concurrency must be between 1 and 32")
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def process_one(tenant_id: UUID) -> None:
+        async with semaphore:
+            await process_tenant_batch(
+                tenant_id,
+                customer_consumer=customer_consumer,
+                commerce_consumer=commerce_consumer,
+                legacy_commerce_consumer=legacy_commerce_consumer,
+                consent_consumer=consent_consumer,
+            )
+
+    await asyncio.gather(*(process_one(tenant_id) for tenant_id in tenant_ids))
+
+
+
+async def wait_for_poll_or_shutdown(
+    stop_event: asyncio.Event, poll_seconds: float
+) -> bool:
+    """Wait for the next poll, returning early when graceful shutdown is requested."""
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=poll_seconds)
+    except asyncio.TimeoutError:
+        return False
+    return True
+
+
+async def run_worker(
+    *,
+    poll_seconds: float,
+    database_url: str,
+    once: bool = False,
+    tenant_concurrency: int = 4,
+    stop_event: asyncio.Event | None = None,
+) -> None:
+    """Process CRM customer and commerce events for all registered workspaces."""
+    payload_keyring = IntegrationPayloadKeyring.from_environment()
+    contact_keyring = ContactPointKeyring.from_environment()
+    engine = create_async_engine(database_url, pool_pre_ping=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    customer_consumer = PostgresProductEventConsumer(
+        session_factory,
+        payload_keyring=payload_keyring,
+        contact_keyring=contact_keyring,
+    )
+    commerce_consumer = PostgresProductCommerceEventConsumer(
+        session_factory,
+        payload_keyring=payload_keyring,
+    )
+    legacy_commerce_consumer = PostgresCommerceOrderEventConsumer(
+        session_factory,
+        payload_keyring=payload_keyring,
+    )
+    consent_consumer = PostgresProductConsentEventConsumer(
+        session_factory,
+        payload_keyring=payload_keyring,
+    )
+    shutdown = stop_event or asyncio.Event()
+    try:
+        while not shutdown.is_set():
+            try:
+                tenant_ids = await load_worker_tenant_ids(session_factory)
+            except Exception as exc:
+                logger.error(
+                    "Product event tenant registry unavailable error_type=%s",
+                    type(exc).__name__,
+                )
+                tenant_ids = ()
+            await process_tenant_batches(
+                tenant_ids,
+                concurrency=tenant_concurrency,
+                customer_consumer=customer_consumer,
+                commerce_consumer=commerce_consumer,
+                legacy_commerce_consumer=legacy_commerce_consumer,
+                consent_consumer=consent_consumer,
+            )
+            if once or shutdown.is_set():
+                return
+            if await wait_for_poll_or_shutdown(shutdown, poll_seconds):
+                logger.info("Product event worker received graceful shutdown")
+                return
+    finally:
+        await engine.dispose()
+
+
+async def main() -> None:
+    """Validate configuration and drain the current worker cycle on termination."""
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise ValueError("DATABASE_URL is required")
+
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    installed_signals: list[signal.Signals] = []
+    for stop_signal in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(stop_signal, stop_event.set)
+        except (NotImplementedError, RuntimeError):
+            continue
+        installed_signals.append(stop_signal)
+    try:
+        await run_worker(
+            poll_seconds=configured_poll_seconds(),
+            database_url=database_url,
+            tenant_concurrency=configured_tenant_concurrency(),
+            once=os.environ.get("FUNNEL_CRM_EVENT_WORKER_ONCE", "").lower()
+            in {"1", "true", "yes"},
+            stop_event=stop_event,
+        )
+    finally:
+        for stop_signal in installed_signals:
+            loop.remove_signal_handler(stop_signal)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    asyncio.run(main())

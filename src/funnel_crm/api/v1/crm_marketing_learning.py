@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import aliased
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
@@ -105,16 +105,28 @@ class LearningPortfolioItem(BaseModel):
     work_item: WorkItemRead | None = None
 
 
+class LearningCampaignSummary(BaseModel):
+    campaign_id: UUID
+    campaign_name: str
+    review_count: int
+    planned_count: int
+    evaluated_count: int
+
+
 class LearningPortfolioReport(BaseModel):
     generated_at: datetime
     period_start: date | None
     period_end: date | None
     status_filter: Literal["planned", "evaluated"] | None
     lesson_query: str | None
+    campaign_query: str | None
     total_count: int
+    limit: int
+    offset: int
     planned_count: int
     evaluated_count: int
     work_item_counts: dict[str, int] | None
+    campaign_summaries: list[LearningCampaignSummary]
     can_update_work_items: bool
     can_manage_marketing_reviews: bool
     has_more: bool
@@ -320,11 +332,13 @@ async def get_learning_portfolio(
     include_work_items: bool = False,
     overdue_only: bool = False,
     lesson_query: str | None = Query(default=None, max_length=120),
+    campaign_query: str | None = Query(default=None, max_length=120),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> LearningPortfolioReport:
     lesson_query = lesson_query.strip() if lesson_query and lesson_query.strip() else None
+    campaign_query = campaign_query.strip() if campaign_query and campaign_query.strip() else None
     if period_start is not None and period_end is not None and period_start > period_end:
         raise HTTPException(status_code=422, detail="period_start must not be after period_end")
     if period_start is not None and period_end is not None and (period_end - period_start).days > 365:
@@ -388,6 +402,13 @@ async def get_learning_portfolio(
         review_filters.append(CRMMarketingLearningReview.lesson_learned.ilike(
             f"%{escaped_query}%", escape="\\"
         ))
+    if campaign_query is not None:
+        escaped_query = campaign_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        matching_campaigns = select(CRMMarketingCampaign.id).where(
+            CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaign.name.ilike(f"%{escaped_query}%", escape="\\"),
+        )
+        review_filters.append(CRMMarketingLearningReview.campaign_id.in_(matching_campaigns))
     filters = list(review_filters)
     if status is not None:
         filters.append(CRMMarketingLearningReview.status == status)
@@ -437,6 +458,34 @@ async def get_learning_portfolio(
               & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
         .where(*review_filters).group_by(CRMMarketingLearningReview.status)
     )).all()
+    campaign_summary_rows = (await context.session.execute(
+        select(
+            CRMMarketingCampaign.id,
+            CRMMarketingCampaign.name,
+            func.count(CRMMarketingLearningReview.id),
+            func.sum(case((CRMMarketingLearningReview.status == "planned", 1), else_=0)),
+            func.sum(case((CRMMarketingLearningReview.status == "evaluated", 1), else_=0)),
+        )
+        .join(CRMMarketingLearningReview,
+              (CRMMarketingCampaign.tenant_id == CRMMarketingLearningReview.tenant_id)
+              & (CRMMarketingCampaign.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+              & (CRMMarketingCampaign.id == CRMMarketingLearningReview.campaign_id))
+        .join(CRMMarketingCampaignTargetPlan,
+              (CRMMarketingCampaignTargetPlan.tenant_id == CRMMarketingLearningReview.tenant_id)
+              & (CRMMarketingCampaignTargetPlan.organization_unit_id == CRMMarketingLearningReview.organization_unit_id)
+              & (CRMMarketingCampaignTargetPlan.campaign_id == CRMMarketingLearningReview.campaign_id)
+              & (CRMMarketingCampaignTargetPlan.id == CRMMarketingLearningReview.target_plan_id))
+        .where(*filters)
+        .group_by(CRMMarketingCampaign.id, CRMMarketingCampaign.name)
+        .order_by(func.count(CRMMarketingLearningReview.id).desc(), CRMMarketingCampaign.name)
+    )).all()
+    campaign_summaries = [LearningCampaignSummary(
+        campaign_id=campaign_id,
+        campaign_name=campaign_name,
+        review_count=int(review_count or 0),
+        planned_count=int(planned_count or 0),
+        evaluated_count=int(evaluated_count or 0),
+    ) for campaign_id, campaign_name, review_count, planned_count, evaluated_count in campaign_summary_rows]
     work_item_counts: dict[str, int] | None = None
     if include_work_items:
         task_status_rows = (await context.session.execute(
@@ -510,6 +559,7 @@ async def get_learning_portfolio(
                      "status": status, "include_work_items": include_work_items,
                      "overdue_only": overdue_only,
                      "lesson_query": lesson_query,
+                     "campaign_query": campaign_query,
                      "total_count": total, "returned_count": len(items),
                      "offset": offset, "limit": limit},
         correlation_id=None,
@@ -517,9 +567,12 @@ async def get_learning_portfolio(
     await context.session.flush()
     return LearningPortfolioReport(
         generated_at=report_generated_at, period_start=period_start,
-        period_end=period_end, status_filter=status, lesson_query=lesson_query, total_count=total,
+        period_end=period_end, status_filter=status, lesson_query=lesson_query,
+        campaign_query=campaign_query, total_count=total,
+        limit=limit, offset=offset,
         planned_count=counts.get("planned", 0), evaluated_count=counts.get("evaluated", 0),
         work_item_counts=work_item_counts,
+        campaign_summaries=campaign_summaries,
         can_update_work_items=can_update_work_items,
         can_manage_marketing_reviews=can_manage_marketing_reviews,
         has_more=offset + len(items) < total, items=items,

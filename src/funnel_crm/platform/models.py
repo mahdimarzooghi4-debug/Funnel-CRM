@@ -614,6 +614,45 @@ class ProductConnection(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+
+class ProductConnectionCredential(Base):
+    """One individually revocable credential for a tenant product connection."""
+
+    __tablename__ = "product_connection_credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "octet_length(credential_digest) = 32",
+            name="ck_product_connection_credentials_digest",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "connection_id"],
+            ["product_connections.tenant_id", "product_connections.id"],
+            name="fk_product_connection_credentials_connection",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_product_connection_credentials_connection",
+            "tenant_id",
+            "connection_id",
+            "created_at",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    credential_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    connection_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    credential_digest: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
 class IntegrationEventInbox(Base):
     """Durable tenant-scoped receipt for an event from a verified product connection."""
 
@@ -803,10 +842,14 @@ class CRMMarketingCampaign(Base):
             name="ck_crm_marketing_campaigns_objective",
         ),
         CheckConstraint(
+            "communication_purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}$'",
+            name="ck_crm_marketing_campaigns_communication_purpose",
+        ),
+        CheckConstraint(
             "channel IN ('email', 'phone', 'messaging', 'social', 'web', 'store', 'field', 'other')",
             name="ck_crm_marketing_campaigns_channel",
         ),
-        CheckConstraint("status IN ('draft', 'archived')", name="ck_crm_marketing_campaigns_status"),
+        CheckConstraint("status IN ('draft', 'scheduled', 'active', 'paused', 'completed', 'archived')", name="ck_crm_marketing_campaigns_status"),
         CheckConstraint(
             "(planned_budget_amount IS NULL AND planned_budget_currency IS NULL) OR "
             "(planned_budget_amount IS NOT NULL AND planned_budget_amount >= 0 "
@@ -845,6 +888,9 @@ class CRMMarketingCampaign(Base):
     segment_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     objective_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    communication_purpose_key: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="marketing", server_default="marketing"
+    )
     channel: Mapped[str] = mapped_column(String(24), nullable=False)
     planned_budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     planned_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
@@ -927,6 +973,93 @@ class CRMMarketingBudgetScenarioLine(Base):
     planned_budget_currency: Mapped[str] = mapped_column(String(3), nullable=False)
 
 
+class CRMMarketingCampaignAsset(Base):
+    """A reusable or campaign-linked marketing asset with review state."""
+
+    __tablename__ = "crm_marketing_campaign_assets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_campaign_assets_tenant_id"),
+        CheckConstraint("length(trim(title)) BETWEEN 1 AND 160", name="ck_crm_marketing_campaign_assets_title"),
+        CheckConstraint(
+            "channel IN ('email', 'phone', 'messaging', 'social', 'web', 'store', 'field', 'other')",
+            name="ck_crm_marketing_campaign_assets_channel",
+        ),
+        CheckConstraint(
+            "asset_kind IN ('copy', 'image', 'video', 'landing_page', 'document', 'other')",
+            name="ck_crm_marketing_campaign_assets_kind",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'in_review', 'approved', 'rejected', 'retired')",
+            name="ck_crm_marketing_campaign_assets_status",
+        ),
+        CheckConstraint(
+            "body IS NOT NULL OR external_url IS NOT NULL",
+            name="ck_crm_marketing_campaign_assets_content",
+        ),
+        CheckConstraint(
+            "locale IS NULL OR locale ~ '^[a-z]{2}(-[A-Z]{2})?$'",
+            name="ck_crm_marketing_campaign_assets_locale",
+        ),
+        CheckConstraint(
+            "(status IN ('approved', 'rejected') AND reviewed_by_membership_id IS NOT NULL AND reviewed_at IS NOT NULL) OR "
+            "(status NOT IN ('approved', 'rejected') AND reviewed_by_membership_id IS NULL AND reviewed_at IS NULL)",
+            name="ck_crm_marketing_campaign_assets_review_state",
+        ),
+        CheckConstraint(
+            "status <> 'rejected' OR review_note IS NOT NULL",
+            name="ck_crm_marketing_campaign_assets_rejection_note",
+        ),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_marketing_campaign_assets_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_marketing_campaign_assets_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["tenant_id", "organization_unit_id", "campaign_id"],
+            ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.organization_unit_id",
+             "crm_marketing_campaigns.id"],
+            name="fk_crm_marketing_campaign_assets_campaign_same_org", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_marketing_campaign_assets_creator_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "reviewed_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_marketing_campaign_assets_reviewer_same_tenant", ondelete="RESTRICT"),
+        Index(
+            "ix_crm_marketing_campaign_assets_tenant_org_status",
+            "tenant_id", "organization_unit_id", "status",
+        ),
+        Index(
+            "ix_crm_marketing_campaign_assets_tenant_campaign",
+            "tenant_id", "campaign_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    campaign_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    asset_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    body: Mapped[str | None] = mapped_column(String(12000), nullable=True)
+    external_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    locale: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    reviewed_by_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("now()"),
+    )
+
+
 class CRMMarketingCampaignMeasurement(Base):
     """Externally recorded daily metrics for a planned marketing campaign."""
 
@@ -947,7 +1080,10 @@ class CRMMarketingCampaignMeasurement(Base):
             "(clicks IS NULL OR clicks >= 0) AND "
             "(responses IS NULL OR responses >= 0) AND "
             "(leads IS NULL OR leads >= 0) AND "
-            "(conversions IS NULL OR conversions >= 0)",
+            "(conversions IS NULL OR conversions >= 0) AND "
+            "(assigned_count IS NULL OR assigned_count >= 0) AND "
+            "(exposure_count IS NULL OR exposure_count >= 0) AND "
+            "(return_count IS NULL OR return_count >= 0)",
             name="ck_crm_marketing_campaign_measurements_counts",
         ),
         CheckConstraint(
@@ -967,9 +1103,28 @@ class CRMMarketingCampaignMeasurement(Base):
             name="ck_crm_marketing_campaign_measurements_revenue",
         ),
         CheckConstraint(
+            "(incentive_cost_amount IS NULL AND incentive_cost_currency IS NULL) OR "
+            "(incentive_cost_amount IS NOT NULL AND incentive_cost_amount >= 0 "
+            "AND length(incentive_cost_currency) = 3 "
+            "AND incentive_cost_currency = upper(incentive_cost_currency) "
+            "AND incentive_cost_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_measurements_incentive_cost",
+        ),
+        CheckConstraint(
+            "(refunded_amount IS NULL AND refunded_currency IS NULL) OR "
+            "(refunded_amount IS NOT NULL AND refunded_amount >= 0 "
+            "AND length(refunded_currency) = 3 "
+            "AND refunded_currency = upper(refunded_currency) "
+            "AND refunded_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_measurements_refunded_amount",
+        ),
+        CheckConstraint(
             "impressions IS NOT NULL OR reach IS NOT NULL OR clicks IS NOT NULL OR "
             "responses IS NOT NULL OR leads IS NOT NULL OR conversions IS NOT NULL OR "
-            "actual_spend_amount IS NOT NULL OR attributed_revenue_amount IS NOT NULL",
+            "assigned_count IS NOT NULL OR exposure_count IS NOT NULL OR "
+            "actual_spend_amount IS NOT NULL OR attributed_revenue_amount IS NOT NULL OR "
+            "incentive_cost_amount IS NOT NULL OR return_count IS NOT NULL OR "
+            "refunded_amount IS NOT NULL",
             name="ck_crm_marketing_campaign_measurements_has_observation",
         ),
         ForeignKeyConstraint(
@@ -1005,10 +1160,17 @@ class CRMMarketingCampaignMeasurement(Base):
     responses: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     leads: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     conversions: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    assigned_count: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    exposure_count: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    return_count: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
     actual_spend_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     actual_spend_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     attributed_revenue_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     attributed_revenue_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    incentive_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    incentive_cost_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    refunded_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    refunded_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
         default=lambda: datetime.now(timezone.utc), server_default=text("now()"),
@@ -1236,7 +1398,7 @@ class CRMCommunicationConsentEvent(Base):
     __tablename__ = "crm_communication_consent_events"
     __table_args__ = (
         CheckConstraint(
-            "purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}"+chr(36)+"'",
+            "purpose_key ~ '^[a-z][a-z0-9_.-]{0,79}$'",
             name="ck_crm_consent_purpose_key",
         ),
         CheckConstraint(
@@ -1251,6 +1413,14 @@ class CRMCommunicationConsentEvent(Base):
             "length(trim(policy_version)) BETWEEN 1 AND 64",
             name="ck_crm_consent_policy_version",
         ),
+        CheckConstraint(
+            "(source_product IS NULL) = (source_event_id IS NULL)",
+            name="ck_crm_consent_source_pair",
+        ),
+        CheckConstraint(
+            "source_product IS NULL OR source_product ~ '^[a-z0-9][a-z0-9._-]{1,79}$'",
+            name="ck_crm_consent_source_product",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "profile_id"],
             ["crm_profiles.tenant_id", "crm_profiles.id"],
@@ -1258,13 +1428,22 @@ class CRMCommunicationConsentEvent(Base):
             ondelete="CASCADE",
         ),
         Index(
-            "ix_crm_consent_latest_by_scope",
+            "ix_crm_consent_latest_by_decision_time",
             "tenant_id",
             "profile_id",
             "purpose_key",
             "channel",
+            "decision_at",
             "recorded_at",
             "id",
+        ),
+        Index(
+            "uq_crm_consent_source_event",
+            "tenant_id",
+            "source_product",
+            "source_event_id",
+            unique=True,
+            postgresql_where=text("source_event_id IS NOT NULL"),
         ),
     )
 
@@ -1275,10 +1454,139 @@ class CRMCommunicationConsentEvent(Base):
     channel: Mapped[str] = mapped_column(String(32), nullable=False)
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_product: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_event_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    decision_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("clock_timestamp()"),
+    )
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
     )
 
+
+class CRMConsentProductSyncSequence(Base):
+    """Commit-ordered sequence allocated per tenant and product."""
+
+    __tablename__ = "crm_consent_product_sync_sequences"
+    __table_args__ = (
+        CheckConstraint("last_sequence >= 0", name="ck_crm_consent_sync_sequence_nonnegative"),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_crm_consent_sync_sequence_workspace",
+            ondelete="CASCADE",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    recipient_product: Mapped[str] = mapped_column(String(80), primary_key=True)
+    last_sequence: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+
+
+class CRMConsentProductSyncOutbox(Base):
+    """Append-only consent changes queued for products with mapped identities."""
+
+    __tablename__ = "crm_consent_product_sync_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(recipient_product)) BETWEEN 2 AND 80",
+            name="ck_crm_consent_sync_outbox_product",
+        ),
+        CheckConstraint(
+            "length(trim(external_customer_id)) BETWEEN 1 AND 200",
+            name="ck_crm_consent_sync_outbox_external_id",
+        ),
+        CheckConstraint(
+            "decision IN ('granted', 'withdrawn')",
+            name="ck_crm_consent_sync_outbox_decision",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "recipient_product",
+            "sequence",
+            name="uq_crm_consent_sync_outbox_sequence",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "recipient_product",
+            "consent_event_id",
+            name="uq_crm_consent_sync_outbox_event",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_crm_consent_sync_outbox_workspace",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["consent_event_id"],
+            ["crm_communication_consent_events.id"],
+            name="fk_crm_consent_sync_outbox_event",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_crm_consent_sync_outbox_recipient_cursor",
+            "tenant_id",
+            "recipient_product",
+            "sequence",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    recipient_product: Mapped[str] = mapped_column(String(80), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    consent_event_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    external_customer_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    purpose_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_product: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_event_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class CRMConsentProductSyncCheckpoint(Base):
+    """Latest product-confirmed cursor for its consent change feed."""
+
+    __tablename__ = "crm_consent_product_sync_checkpoints"
+    __table_args__ = (
+        CheckConstraint(
+            "last_acked_sequence >= 0",
+            name="ck_crm_consent_sync_checkpoint_nonnegative",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["workspaces.id"],
+            name="fk_crm_consent_sync_checkpoint_workspace",
+            ondelete="CASCADE",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    recipient_product: Mapped[str] = mapped_column(String(80), primary_key=True)
+    last_acked_sequence: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
 
 
 class ProductCustomerIdentity(Base):
@@ -1521,9 +1829,16 @@ class CRMMarketingCampaignTargetPlan(Base):
             name="ck_crm_marketing_campaign_target_plans_roas_pair",
         ),
         CheckConstraint(
+            "(min_net_paid_to_spend IS NULL AND net_paid_to_spend_currency IS NULL) OR "
+            "(min_net_paid_to_spend IS NOT NULL AND min_net_paid_to_spend >= 0 AND "
+            "length(net_paid_to_spend_currency) = 3 AND net_paid_to_spend_currency = upper(net_paid_to_spend_currency) "
+            "AND net_paid_to_spend_currency ~ '^[A-Z][A-Z][A-Z]')",
+            name="ck_crm_marketing_campaign_target_plans_net_paid_to_spend_pair",
+        ),
+        CheckConstraint(
             "impressions_target IS NOT NULL OR clicks_target IS NOT NULL OR leads_target IS NOT NULL OR "
             "conversions_target IS NOT NULL OR max_spend_amount IS NOT NULL OR max_cpl_amount IS NOT NULL OR "
-            "max_cost_per_conversion_amount IS NOT NULL OR min_roas IS NOT NULL",
+            "max_cost_per_conversion_amount IS NOT NULL OR min_roas IS NOT NULL OR min_net_paid_to_spend IS NOT NULL",
             name="ck_crm_marketing_campaign_target_plans_has_goal",
         ),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
@@ -1558,6 +1873,8 @@ class CRMMarketingCampaignTargetPlan(Base):
     conversion_cost_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     min_roas: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     roas_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    min_net_paid_to_spend: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    net_paid_to_spend_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
@@ -1587,18 +1904,25 @@ class CRMMarketingCampaignExperiment(Base):
             name="ck_crm_marketing_campaign_experiments_period",
         ),
         CheckConstraint(
-            "primary_metric IN ('impressions', 'clicks', 'leads', 'conversions', "
-            "'click_through_rate_percent', 'conversion_rate_per_click_percent', "
-            "'cost_per_lead', 'cost_per_conversion', 'roas')",
+            "primary_metric IN ('impressions', 'clicks', 'leads', 'conversions', 'return_count', 'paid_order_count', "
+            "'refunded_order_count', 'refunded_order_rate_percent', 'matched_refund_order_rate_percent', 'matched_paid_refund_order_count', 'paid_order_refund_match_rate_percent', "
+            "'unmatched_refund_order_count', 'paid_order_without_refund_count', 'click_through_rate_percent', "
+            "'conversion_rate_per_click_percent', 'cost_per_lead', 'cost_per_conversion', 'roas', "
+            "'incentive_cost', 'paid_amount', 'net_paid_amount', 'net_paid_to_spend', 'net_paid_amount_per_paid_order', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount')",
             name="ck_crm_marketing_campaign_experiments_metric",
         ),
         CheckConstraint(
-            "(primary_metric IN ('cost_per_lead', 'cost_per_conversion', 'roas') "
+            "(primary_metric IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'net_paid_to_spend', 'incentive_cost', 'paid_amount', 'net_paid_amount', 'net_paid_to_spend', 'net_paid_amount_per_paid_order', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount') "
             "AND currency IS NOT NULL AND length(currency) = 3 AND currency = upper(currency) "
             "AND currency ~ '^[A-Z][A-Z][A-Z]') OR "
-            "(primary_metric NOT IN ('cost_per_lead', 'cost_per_conversion', 'roas') AND currency IS NULL)",
+            "(primary_metric NOT IN ('cost_per_lead', 'cost_per_conversion', 'roas', 'net_paid_to_spend', 'incentive_cost', 'paid_amount', 'net_paid_amount', 'net_paid_to_spend', 'net_paid_amount_per_paid_order', 'average_paid_order_value', 'average_refund_per_order', 'refund_to_paid_amount_percent', 'refunded_amount', 'refund_amount') AND currency IS NULL)",
             name="ck_crm_marketing_campaign_experiments_currency",
         ),
+        CheckConstraint("jsonb_typeof(guardrail_metrics) = 'array'", name="ck_crm_marketing_campaign_experiments_guardrails_array"),
+        CheckConstraint("length(trim(allocation_method)) BETWEEN 1 AND 250", name="ck_crm_marketing_campaign_experiments_allocation_method"),
+        CheckConstraint("known_limitations IS NULL OR length(trim(known_limitations)) BETWEEN 1 AND 1000", name="ck_crm_marketing_campaign_experiments_known_limitations"),
+        CheckConstraint("audience_snapshot IS NULL OR (jsonb_typeof(audience_snapshot) = 'object' AND octet_length(audience_snapshot::text) <= 8192)", name="ck_crm_marketing_campaign_experiments_audience_snapshot"),
+        CheckConstraint("decision IS NULL OR (jsonb_typeof(decision) = 'object' AND octet_length(decision::text) <= 8192)", name="ck_crm_marketing_campaign_experiments_decision"),
         ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
             name="fk_crm_marketing_campaign_experiments_workspace", ondelete="CASCADE"),
         ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
@@ -1617,6 +1941,15 @@ class CRMMarketingCampaignExperiment(Base):
     hypothesis: Mapped[str] = mapped_column(String(1000), nullable=False)
     primary_metric: Mapped[str] = mapped_column(String(40), nullable=False)
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    guardrail_metrics: Mapped[list[dict[str, str | None]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    allocation_method: Mapped[str] = mapped_column(
+        String(250), nullable=False, default="unspecified", server_default=text("'unspecified'")
+    )
+    known_limitations: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    audience_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    decision: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     period_start: Mapped[date] = mapped_column(Date(), nullable=False)
     period_end: Mapped[date] = mapped_column(Date(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -1874,6 +2207,12 @@ class CRMWorkItem(Base):
             name="ck_crm_work_items_status",
         ),
         CheckConstraint(
+            "(source_campaign_target_plan_id IS NULL AND source_campaign_metric_key IS NULL AND source_campaign_signal_type IS NULL) OR "
+            "(source_campaign_target_plan_id IS NOT NULL AND campaign_id IS NOT NULL "
+            "AND source_campaign_metric_key IS NOT NULL AND source_campaign_signal_type IN ('measurement_gap', 'target_gap'))",
+            name="ck_crm_work_items_campaign_signal_source",
+        ),
+        CheckConstraint(
             "profile_id IS NOT NULL OR opportunity_id IS NOT NULL OR campaign_id IS NOT NULL",
             name="ck_crm_work_items_has_context",
         ),
@@ -1910,10 +2249,20 @@ class CRMWorkItem(Base):
         ForeignKeyConstraint(["tenant_id", "source_outcome_id"],
             ["crm_work_item_outcomes.tenant_id", "crm_work_item_outcomes.id"],
             name="fk_crm_work_items_outcome_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "source_campaign_target_plan_id"],
+            ["crm_marketing_campaign_target_plans.tenant_id", "crm_marketing_campaign_target_plans.id"],
+            name="fk_crm_work_items_campaign_target_plan_same_tenant", ondelete="RESTRICT"),
         UniqueConstraint("tenant_id", "source_learning_review_id",
                          name="uq_crm_work_items_source_learning_review"),
         UniqueConstraint("tenant_id", "source_outcome_id",
                          name="uq_crm_work_items_source_outcome"),
+        Index(
+            "uq_crm_work_items_open_campaign_signal",
+            "tenant_id", "campaign_id", "source_campaign_target_plan_id", "source_campaign_metric_key",
+            unique=True,
+            postgresql_where=text("source_campaign_target_plan_id IS NOT NULL AND status IN ('open', 'in_progress')"),
+            sqlite_where=text("source_campaign_target_plan_id IS NOT NULL AND status IN ('open', 'in_progress')"),
+        ),
         Index(
             "ix_crm_work_items_tenant_org_status_due",
             "tenant_id", "organization_unit_id", "status", "due_at",
@@ -1944,6 +2293,9 @@ class CRMWorkItem(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_learning_review_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     source_outcome_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    source_campaign_target_plan_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    source_campaign_metric_key: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source_campaign_signal_type: Mapped[str | None] = mapped_column(String(24), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
@@ -2007,6 +2359,64 @@ class CRMWorkItemOutcome(Base):
         server_default=text("now()"),
     )
 
+class CRMWorkItemCampaignSignalOutcome(Base):
+    """Append-only manager outcome and metric snapshot for a campaign signal task."""
+
+    __tablename__ = "crm_work_item_campaign_signal_outcomes"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_work_item_campaign_signal_outcomes_tenant_id"),
+        UniqueConstraint("tenant_id", "request_id", name="uq_crm_work_item_campaign_signal_outcomes_request"),
+        CheckConstraint(
+            "decision_key IN ('adjusted', 'data_corrected', 'no_change', 'escalated', 'other')",
+            name="ck_crm_work_item_campaign_signal_outcomes_decision",
+        ),
+        CheckConstraint(
+            "signal_type IN ('measurement_gap', 'target_gap')",
+            name="ck_crm_work_item_campaign_signal_outcomes_signal_type",
+        ),
+        CheckConstraint(
+            "metric_status IN ('met', 'not_met', 'no_data')",
+            name="ck_crm_work_item_campaign_signal_outcomes_metric_status",
+        ),
+        CheckConstraint(
+            "observed_days >= 0 AND period_days > 0 AND observed_days <= period_days",
+            name="ck_crm_work_item_campaign_signal_outcomes_coverage",
+        ),
+        CheckConstraint("length(trim(notes)) BETWEEN 1 AND 2000",
+                        name="ck_crm_work_item_campaign_signal_outcomes_notes"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_work_item_campaign_signal_outcomes_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "work_item_id"],
+            ["crm_work_items.tenant_id", "crm_work_items.id"],
+            name="fk_crm_work_item_campaign_signal_outcomes_item_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "recorded_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_work_item_campaign_signal_outcomes_recorder_same_tenant", ondelete="RESTRICT"),
+        Index("ix_crm_work_item_campaign_signal_outcomes_tenant_item_time",
+              "tenant_id", "work_item_id", "occurred_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    request_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    work_item_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    recorded_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    metric_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    signal_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    decision_key: Mapped[str] = mapped_column(String(24), nullable=False)
+    notes: Mapped[str] = mapped_column(String(2000), nullable=False)
+    metric_actual: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    metric_target: Mapped[str] = mapped_column(String(80), nullable=False)
+    metric_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    observed_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    period_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
 class CRMProductCommerceEvent(Base):
     """Source fact for an explicitly recorded paid order or refund event."""
 
@@ -2043,6 +2453,12 @@ class CRMProductCommerceEvent(Base):
             name="fk_crm_product_commerce_events_profile_same_tenant", ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["tenant_id", "seller_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_product_commerce_events_seller_same_tenant",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
             ["tenant_id", "organization_unit_id", "campaign_id"],
             ["crm_marketing_campaigns.tenant_id",
              "crm_marketing_campaigns.organization_unit_id",
@@ -2058,6 +2474,10 @@ class CRMProductCommerceEvent(Base):
             "ix_crm_product_commerce_events_tenant_campaign_time",
             "tenant_id", "campaign_id", "occurred_at",
         ),
+        Index(
+            "ix_crm_product_commerce_events_tenant_seller_time",
+            "tenant_id", "seller_membership_id", "occurred_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -2065,6 +2485,7 @@ class CRMProductCommerceEvent(Base):
     organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     campaign_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     profile_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     source_product: Mapped[str] = mapped_column(String(80), nullable=False)
     source_event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -2125,3 +2546,409 @@ class CRMSalesTarget(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
+
+
+class CRMChannelPartner(Base):
+    """A tenant-owned organization or person operating a sales channel."""
+
+    __tablename__ = "crm_channel_partners"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_channel_partners_tenant_id"),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 180", name="ck_crm_channel_partners_name"),
+        CheckConstraint("partner_type IN ('reseller','affiliate','agency','distributor','referral','other')", name="ck_crm_channel_partners_type"),
+        CheckConstraint("status IN ('prospect','active','paused','ended')", name="ck_crm_channel_partners_status"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_channel_partners_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"], ["organization_units.tenant_id", "organization_units.id"], name="fk_crm_channel_partners_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_channel_partners_creator_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_channel_partners_tenant_org_status", "tenant_id", "organization_unit_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(180), nullable=False)
+    partner_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="prospect", server_default=text("'prospect'"))
+    contact_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    territory: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMCommissionPlan(Base):
+    """Percentage-of-net-sales rule scoped to an organization or one seller."""
+
+    __tablename__ = "crm_commission_plans"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_commission_plans_tenant_id"),
+        CheckConstraint("rate_percent > 0 AND rate_percent <= 100", name="ck_crm_commission_plans_rate"),
+        CheckConstraint("effective_start IS NULL OR effective_end IS NULL OR effective_start <= effective_end", name="ck_crm_commission_plans_effective_window"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_commission_plans_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_commission_plans_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "seller_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plans_seller_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plans_creator_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_commission_plans_tenant_org", "tenant_id", "organization_unit_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    effective_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMCommissionPlanVersion(Base):
+    """Immutable rule values for one version of a commission plan."""
+
+    __tablename__ = "crm_commission_plan_versions"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_crm_commission_plan_versions_version_positive"),
+        CheckConstraint("rate_percent > 0 AND rate_percent <= 100", name="ck_crm_commission_plan_versions_rate"),
+        CheckConstraint("effective_start IS NULL OR effective_end IS NULL OR effective_start <= effective_end", name="ck_crm_commission_plan_versions_effective_window"),
+        ForeignKeyConstraint(["tenant_id", "plan_id"],
+            ["crm_commission_plans.tenant_id", "crm_commission_plans.id"],
+            name="fk_crm_commission_plan_versions_plan_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "seller_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plan_versions_seller_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "changed_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_plan_versions_actor_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_commission_plan_versions_tenant_plan", "tenant_id", "plan_id", "version"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    effective_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    changed_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMCommissionCalculation(Base):
+    """Immutable calculation snapshot; it does not approve or pay commission."""
+
+    __tablename__ = "crm_commission_calculations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_commission_calculations_tenant_id"),
+        UniqueConstraint("tenant_id", "plan_id", "request_id", name="uq_crm_commission_calculations_request"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_commission_calculations_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "plan_id"],
+            ["crm_commission_plans.tenant_id", "crm_commission_plans.id"],
+            name="fk_crm_commission_calculations_plan_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "plan_id", "plan_version"],
+            ["crm_commission_plan_versions.tenant_id", "crm_commission_plan_versions.plan_id", "crm_commission_plan_versions.version"],
+            name="fk_crm_commission_calculations_plan_version_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_calculations_creator_same_tenant", ondelete="CASCADE"),
+        CheckConstraint("period_start <= period_end", name="ck_crm_commission_calculations_period"),
+        Index("ix_crm_commission_calculations_tenant_plan", "tenant_id", "plan_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    rate_percent: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMCommissionCalculationRow(Base):
+    """Currency-separated seller totals and exact source event lineage."""
+
+    __tablename__ = "crm_commission_calculation_rows"
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id", "calculation_id"],
+            ["crm_commission_calculations.tenant_id", "crm_commission_calculations.id"],
+            name="fk_crm_commission_rows_calculation_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "seller_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_commission_rows_seller_same_tenant", ondelete="CASCADE"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_commission_rows_currency"),
+        UniqueConstraint("tenant_id", "calculation_id", "seller_membership_id", "currency",
+            name="uq_crm_commission_rows_seller_currency"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    calculation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    seller_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    paid_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    refunded_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    commission_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    source_event_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+
+
+class CRMProductCatalogItem(Base):
+    """Workspace-owned product or service available for commercial offers."""
+
+    __tablename__ = "crm_product_catalog_items"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_product_catalog_items_tenant_id"),
+        UniqueConstraint("tenant_id", "organization_unit_id", "code", name="uq_crm_product_catalog_items_code"),
+        CheckConstraint("item_type IN ('product', 'service')", name="ck_crm_product_catalog_items_type"),
+        CheckConstraint("length(trim(code)) BETWEEN 1 AND 80", name="ck_crm_product_catalog_items_code"),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 200", name="ck_crm_product_catalog_items_name"),
+        CheckConstraint("category IS NULL OR length(trim(category)) BETWEEN 1 AND 120", name="ck_crm_product_catalog_items_category"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"],
+            name="fk_crm_product_catalog_items_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"],
+            ["organization_units.tenant_id", "organization_units.id"],
+            name="fk_crm_product_catalog_items_org_same_tenant", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_product_catalog_items_creator_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_product_catalog_items_tenant_org", "tenant_id", "organization_unit_id", "is_active"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    code: Mapped[str] = mapped_column(String(80), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    item_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMProductCatalogPriceVersion(Base):
+    """Append-only currency price version for a catalog item."""
+
+    __tablename__ = "crm_product_catalog_price_versions"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_crm_product_catalog_price_versions_version"),
+        CheckConstraint("amount >= 0", name="ck_crm_product_catalog_price_versions_amount"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_product_catalog_price_versions_currency"),
+        CheckConstraint("effective_start IS NULL OR effective_end IS NULL OR effective_start <= effective_end", name="ck_crm_product_catalog_price_versions_window"),
+        ForeignKeyConstraint(["tenant_id", "item_id"],
+            ["crm_product_catalog_items.tenant_id", "crm_product_catalog_items.id"],
+            name="fk_crm_product_catalog_prices_item_same_tenant", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"],
+            ["workspace_memberships.tenant_id", "workspace_memberships.id"],
+            name="fk_crm_product_catalog_prices_creator_same_tenant", ondelete="CASCADE"),
+        Index("ix_crm_product_catalog_prices_tenant_item", "tenant_id", "item_id", "version"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    item_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    effective_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMOpportunityCatalogItem(Base):
+    """Immutable product reference captured on a sales opportunity."""
+
+    __tablename__ = "crm_opportunity_catalog_items"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_opportunity_catalog_items_tenant_id"),
+        UniqueConstraint("tenant_id", "opportunity_id", "catalog_item_id", name="uq_crm_opportunity_catalog_items_link"),
+        CheckConstraint("catalog_item_version >= 1", name="ck_crm_opportunity_catalog_items_version"),
+        CheckConstraint("item_type_snapshot IN ('product', 'service')", name="ck_crm_opportunity_catalog_items_type"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_opportunity_catalog_items_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "opportunity_id"], ["crm_opportunities.tenant_id", "crm_opportunities.id"], name="fk_crm_opportunity_catalog_items_opportunity", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "catalog_item_id"], ["crm_product_catalog_items.tenant_id", "crm_product_catalog_items.id"], name="fk_crm_opportunity_catalog_items_catalog", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_opportunity_catalog_items_creator", ondelete="CASCADE"),
+        Index("ix_crm_opportunity_catalog_items_tenant_opportunity", "tenant_id", "opportunity_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    opportunity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    catalog_item_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    catalog_item_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_code_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
+    item_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    item_type_snapshot: Mapped[str] = mapped_column(String(16), nullable=False)
+    category_snapshot: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMOpportunityOfferDraft(Base):
+    """A non-binding draft offer assembled from catalog price snapshots."""
+
+    __tablename__ = "crm_opportunity_offer_drafts"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_opportunity_offer_drafts_tenant_id"),
+        UniqueConstraint("tenant_id", "previous_revision_id", name="uq_crm_opportunity_offer_drafts_previous_revision"),
+        CheckConstraint("status = 'draft'", name="ck_crm_opportunity_offer_drafts_status"),
+        CheckConstraint("revision_number >= 1", name="ck_crm_opportunity_offer_drafts_revision_number"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_opportunity_offer_drafts_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "opportunity_id"], ["crm_opportunities.tenant_id", "crm_opportunities.id"], name="fk_crm_opportunity_offer_drafts_opportunity", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "previous_revision_id"], ["crm_opportunity_offer_drafts.tenant_id", "crm_opportunity_offer_drafts.id"], name="fk_crm_opportunity_offer_drafts_previous_revision", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_opportunity_offer_drafts_creator", ondelete="CASCADE"),
+        Index("ix_crm_opportunity_offer_drafts_tenant_opportunity", "tenant_id", "opportunity_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    opportunity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default=text("'draft'"))
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    previous_revision_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMOpportunityOfferDraftLine(Base):
+    """Immutable-in-practice line snapshots for an offer draft."""
+
+    __tablename__ = "crm_opportunity_offer_draft_lines"
+    __table_args__ = (
+        CheckConstraint("line_number >= 1", name="ck_crm_opportunity_offer_draft_lines_number"),
+        CheckConstraint("quantity > 0", name="ck_crm_opportunity_offer_draft_lines_quantity"),
+        CheckConstraint("unit_amount >= 0", name="ck_crm_opportunity_offer_draft_lines_amount"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_crm_opportunity_offer_draft_lines_currency"),
+        ForeignKeyConstraint(["tenant_id", "offer_id"], ["crm_opportunity_offer_drafts.tenant_id", "crm_opportunity_offer_drafts.id"], name="fk_crm_opportunity_offer_draft_lines_offer", ondelete="CASCADE"),
+        Index("ix_crm_opportunity_offer_draft_lines_tenant_offer", "tenant_id", "offer_id", "line_number"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    offer_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    line_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    catalog_item_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    catalog_item_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    catalog_price_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_code_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
+    item_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    unit_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+
+
+class CRMMarketingOfferPlan(Base):
+    """Configurable, non-activating marketing offer proposal draft."""
+
+    __tablename__ = "crm_marketing_offer_plans"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_offer_plans_tenant_id"),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 160", name="ck_crm_marketing_offer_plans_name"),
+        CheckConstraint("length(trim(objective)) BETWEEN 1 AND 2000", name="ck_crm_marketing_offer_plans_objective"),
+        CheckConstraint("status IN ('draft', 'changes_requested', 'approved')", name="ck_crm_marketing_offer_plans_status"),
+        CheckConstraint("version >= 1", name="ck_crm_marketing_offer_plans_version"),
+        CheckConstraint("starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at", name="ck_crm_marketing_offer_plans_schedule"),
+        CheckConstraint(
+            "(status = 'draft' AND reviewed_by_membership_id IS NULL AND reviewed_at IS NULL AND review_note IS NULL) OR "
+            "(status IN ('changes_requested', 'approved') AND reviewed_by_membership_id IS NOT NULL "
+            "AND reviewed_at IS NOT NULL AND review_note IS NOT NULL)",
+            name="ck_crm_marketing_offer_plans_review_state",
+        ),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_marketing_offer_plans_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "organization_unit_id"], ["organization_units.tenant_id", "organization_units.id"], name="fk_crm_marketing_offer_plans_org", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "campaign_id"], ["crm_marketing_campaigns.tenant_id", "crm_marketing_campaigns.id"], name="fk_crm_marketing_offer_plans_campaign", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "catalog_item_id"], ["crm_product_catalog_items.tenant_id", "crm_product_catalog_items.id"], name="fk_crm_marketing_offer_plans_catalog_item", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["tenant_id", "owner_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_marketing_offer_plans_owner", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "reviewed_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_marketing_offer_plans_reviewer", ondelete="RESTRICT"),
+        Index("ix_crm_marketing_offer_plans_tenant_org_status", "tenant_id", "organization_unit_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    organization_unit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    objective: Mapped[str] = mapped_column(String(2000), nullable=False)
+    offer_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    catalog_item_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    audience_description: Mapped[str] = mapped_column(String(1000), nullable=False)
+    channel: Mapped[str] = mapped_column(String(80), nullable=False)
+    location_scope: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    eligibility_conditions: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    success_metric: Mapped[str] = mapped_column(String(500), nullable=False)
+    campaign_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft", server_default=text("'draft'"))
+    review_note: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    reviewed_by_membership_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    owner_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class CRMMarketingOfferScenario(Base):
+    """Immutable, assumption-based economic scenario for one plan version."""
+
+    __tablename__ = "crm_marketing_offer_scenarios"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_crm_marketing_offer_scenarios_tenant_id"),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 160", name="ck_crm_marketing_offer_scenarios_name"),
+        CheckConstraint("audience_size >= 0", name="ck_crm_marketing_offer_scenarios_audience"),
+        CheckConstraint("expected_use_rate >= 0 AND expected_use_rate <= 100", name="ck_crm_marketing_offer_scenarios_use_rate"),
+        CheckConstraint("plan_version >= 1 AND catalog_item_version >= 1", name="ck_crm_marketing_offer_scenarios_versions"),
+        CheckConstraint("(price_version IS NULL AND unit_amount IS NULL AND offer_value_per_use IS NULL AND currency IS NULL) OR "
+                        "(price_version IS NOT NULL AND unit_amount IS NOT NULL AND offer_value_per_use IS NOT NULL AND currency IS NOT NULL)",
+                        name="ck_crm_marketing_offer_scenarios_price_snapshot"),
+        CheckConstraint("unit_amount IS NULL OR (offer_value_per_use >= 0 AND offer_value_per_use <= unit_amount)",
+                        name="ck_crm_marketing_offer_scenarios_offer_value"),
+        CheckConstraint("(campaign_budget_amount IS NULL AND campaign_budget_currency IS NULL) OR "
+                        "(campaign_budget_amount IS NOT NULL AND campaign_budget_amount >= 0 AND campaign_budget_currency ~ '^[A-Z]{3}$')",
+                        name="ck_crm_marketing_offer_scenarios_budget_pair"),
+        CheckConstraint("length(trim(assumptions)) BETWEEN 1 AND 4000", name="ck_crm_marketing_offer_scenarios_assumptions"),
+        ForeignKeyConstraint(["tenant_id"], ["workspaces.id"], name="fk_crm_marketing_offer_scenarios_workspace", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "offer_plan_id"], ["crm_marketing_offer_plans.tenant_id", "crm_marketing_offer_plans.id"], name="fk_crm_marketing_offer_scenarios_plan", ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id", "created_by_membership_id"], ["workspace_memberships.tenant_id", "workspace_memberships.id"], name="fk_crm_marketing_offer_scenarios_creator", ondelete="CASCADE"),
+        Index("ix_crm_marketing_offer_scenarios_tenant_plan", "tenant_id", "offer_plan_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    offer_plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    audience_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_use_rate: Mapped[Decimal] = mapped_column(Numeric(6, 3), nullable=False)
+    catalog_item_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    catalog_item_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    price_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    unit_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    offer_value_per_use: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    campaign_budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    campaign_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    assumptions: Mapped[str] = mapped_column(String(4000), nullable=False)
+    created_by_membership_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

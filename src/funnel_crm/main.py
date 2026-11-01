@@ -4,6 +4,27 @@ from fastapi import FastAPI
 
 from funnel_crm.api.v1.router import router as v1_router
 from funnel_crm.web.budget_scenario_comparison import router as budget_scenario_workspace_router
+from funnel_crm.web.crm_activity_capture import router as crm_activity_capture_router
+from funnel_crm.web.crm_commission_workspace import router as crm_commission_workspace_router
+from funnel_crm.web.crm_catalog_workspace import router as crm_catalog_workspace_router
+from funnel_crm.web.crm_offer_workspace import router as crm_offer_workspace_router
+from funnel_crm.web.crm_offer_plan_workspace import router as crm_offer_plan_workspace_router
+from funnel_crm.web.crm_manager_workspace import router as crm_manager_workspace_router
+from funnel_crm.web.crm_customer_workspace import router as crm_customer_workspace_router
+from funnel_crm.web.crm_campaign_workspace import router as crm_campaign_workspace_router
+from funnel_crm.web.crm_sales_workspace import router as crm_sales_workspace_router
+from funnel_crm.web.crm_operations_workspace import router as crm_operations_workspace_router
+from funnel_crm.web.crm_analytics_workspace import router as crm_analytics_workspace_router
+from funnel_crm.web.crm_assistant_workspace import router as crm_assistant_workspace_router
+from funnel_crm.web.crm_workflow_workspace import router as crm_workflow_workspace_router
+from funnel_crm.web.crm_lifecycle_workspace import router as crm_lifecycle_workspace_router
+from funnel_crm.web.crm_learning_workspace import router as crm_learning_workspace_router
+from funnel_crm.web.crm_local_marketing_workspace import router as crm_local_marketing_workspace_router
+from funnel_crm.web.crm_brand_reputation_workspace import router as crm_brand_reputation_workspace_router
+from funnel_crm.web.crm_security_integrations_workspace import router as crm_security_integrations_workspace_router
+from funnel_crm.web.crm_market_research_workspace import router as crm_market_research_workspace_router
+from funnel_crm.web.crm_marketing_planning_workspace import router as crm_marketing_planning_workspace_router
+from funnel_crm.web.crm_channel_partners_workspace import router as crm_channel_partners_workspace_router
 
 app = FastAPI(
     title="Funnel CRM API",
@@ -37,3 +58,24 @@ async def readiness() -> dict[str, str]:
 
 app.include_router(v1_router)
 app.include_router(budget_scenario_workspace_router)
+app.include_router(crm_activity_capture_router)
+app.include_router(crm_commission_workspace_router)
+app.include_router(crm_catalog_workspace_router)
+app.include_router(crm_offer_workspace_router)
+app.include_router(crm_offer_plan_workspace_router)
+app.include_router(crm_manager_workspace_router)
+app.include_router(crm_customer_workspace_router)
+app.include_router(crm_campaign_workspace_router)
+app.include_router(crm_sales_workspace_router)
+app.include_router(crm_operations_workspace_router)
+app.include_router(crm_analytics_workspace_router)
+app.include_router(crm_assistant_workspace_router)
+app.include_router(crm_workflow_workspace_router)
+app.include_router(crm_lifecycle_workspace_router)
+app.include_router(crm_learning_workspace_router)
+app.include_router(crm_local_marketing_workspace_router)
+app.include_router(crm_brand_reputation_workspace_router)
+app.include_router(crm_security_integrations_workspace_router)
+app.include_router(crm_market_research_workspace_router)
+app.include_router(crm_marketing_planning_workspace_router)
+app.include_router(crm_channel_partners_workspace_router)

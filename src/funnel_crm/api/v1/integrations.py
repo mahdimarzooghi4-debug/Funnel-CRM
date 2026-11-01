@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
-from uuid import UUID
+from typing import Any, Literal, Protocol
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -94,6 +94,131 @@ def authorize_product_event(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Contract version is not granted")
 
 
+
+class ProductConsentEligibilityCheck(BaseModel):
+    """Point-in-time consent query from one connected product."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+    external_customer_id: str = Field(min_length=1, max_length=200)
+    purpose_key: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
+    channel: str = Field(pattern=r"^(email|phone|postal_address|social_handle|website)$")
+
+    @field_validator("external_customer_id")
+    @classmethod
+    def strip_external_customer_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("external_customer_id must not be blank")
+        return value
+
+
+class ProductConsentEligibilityItem(BaseModel):
+    """One consent query in a bounded product batch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference: str = Field(min_length=1, max_length=100)
+    external_customer_id: str = Field(min_length=1, max_length=200)
+    purpose_key: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
+    channel: str = Field(pattern=r"^(email|phone|postal_address|social_handle|website)$")
+
+    @field_validator("reference", "external_customer_id")
+    @classmethod
+    def strip_required_values(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must not be blank")
+        return value
+
+
+class ProductConsentChangesCheck(BaseModel):
+    """Request a page of durable consent changes for this product."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+    after_sequence: int = Field(default=0, ge=0)
+    limit: int = Field(default=100, ge=1, le=100)
+
+
+class ProductConsentChangesAckCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+    acknowledged_sequence: int = Field(ge=0)
+
+
+class ProductConsentChangesStatusCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+
+
+class ProductConsentChangesStatusResult(BaseModel):
+    source_product: str
+    produced_sequence: int
+    acknowledged_sequence: int
+    pending_count: int
+    checkpoint_updated_at: datetime | None
+
+
+class ProductConsentChangesAckResult(BaseModel):
+    source_product: str
+    acknowledged_sequence: int
+
+
+class ProductConsentChangeItem(BaseModel):
+    """One product-specific consent change with its stable cursor."""
+
+    sequence: int
+    consent_event_id: int
+    external_customer_id: str
+    purpose_key: str
+    channel: str
+    decision: Literal["granted", "withdrawn"]
+    policy_version: str
+    decision_at: datetime
+    source_product: str | None
+    source_event_id: UUID | None
+
+
+class ProductConsentChangesResult(BaseModel):
+    changes: list[ProductConsentChangeItem]
+    next_sequence: int
+    has_more: bool
+
+
+class ProductConsentEligibilityBatchCheck(BaseModel):
+    """A bounded set of checks scoped to one workspace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: UUID
+    checks: list[ProductConsentEligibilityItem] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def require_unique_references(self) -> "ProductConsentEligibilityBatchCheck":
+        references = [check.reference for check in self.checks]
+        if len(set(references)) != len(references):
+            raise ValueError("references must be unique")
+        return self
+
+
+class ProductConsentEligibilityResult(BaseModel):
+    """Fail-closed result returned to the requesting product."""
+
+    status: Literal["unknown", "granted", "withdrawn"]
+    allowed: bool
+    decision: Literal["granted", "withdrawn"] | None
+    consent_event_id: int | None
+    policy_version: str | None
+    source_product: str | None
+    decision_at: datetime | None
+    recorded_at: datetime | None
+
+
 @router.post(
     "/events",
     status_code=status.HTTP_202_ACCEPTED,
@@ -142,3 +267,719 @@ async def ingest_product_event(
         )
     receipt = await sink.accept(connection, event)
     return {"event_id": str(receipt.event_id), "accepted": True, "duplicate": receipt.duplicate}
+
+
+
+def _record_product_consent_eligibility_access(
+    session, connection: VerifiedProductConnection, statuses: list[str]
+) -> None:
+    """Record aggregate product access without customer identifiers."""
+    from funnel_crm.platform.models import AuditEvent
+
+    session.add(
+        AuditEvent(
+            tenant_id=connection.tenant_id,
+            actor_kind="system",
+            actor_identity_id=None,
+            actor_membership_id=None,
+            action_key="integration.communication_eligibility.checked",
+            target_type="product_connection",
+            target_key=str(connection.connection_id),
+            before_state=None,
+            after_state={
+                "source_product": connection.source_product,
+                "check_count": len(statuses),
+                "granted_count": statuses.count("granted"),
+                "withdrawn_count": statuses.count("withdrawn"),
+                "unknown_count": statuses.count("unknown"),
+            },
+            correlation_id=uuid4(),
+        )
+    )
+
+
+def _audited_product_consent_result(session, connection, **values):
+    result = ProductConsentEligibilityResult(**values)
+    _record_product_consent_eligibility_access(session, connection, [result.status])
+    return result
+
+
+@router.post(
+    "/communication-eligibility/check",
+    operation_id="checkProductCommunicationEligibility",
+    summary="Check live CRM consent before a product communicates",
+    responses={
+        401: {"description": "Missing or invalid product credential"},
+        403: {"description": "Connection is inactive or lacks the read contract"},
+        503: {"description": "CRM consent service is not configured"},
+    },
+)
+async def check_product_communication_eligibility(
+    payload: ProductConsentEligibilityCheck, request: Request
+) -> ProductConsentEligibilityResult:
+    """Read the current CRM decision using only a verified product grant."""
+    connection = getattr(request.state, "verified_product_connection", None)
+    if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=payload.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid product credential is required",
+        )
+    if not connection.active:
+        raise HTTPException(status_code=403, detail="Connection is disabled")
+    if payload.tenant_id != connection.tenant_id:
+        raise HTTPException(status_code=403, detail="Workspace is outside this connection")
+    if ("crm.customer.communication_eligibility", 1) not in connection.supported_contract_versions:
+        raise HTTPException(status_code=403, detail="Consent eligibility contract is not granted")
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CRM consent service is not configured",
+        )
+
+    from sqlalchemy import select, text
+
+    from funnel_crm.platform.models import (
+        CRMCommunicationConsentEvent,
+        CRMProfile,
+        ProductCustomerIdentity,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(connection.tenant_id)},
+            )
+            identity = await session.scalar(
+                select(ProductCustomerIdentity).where(
+                    ProductCustomerIdentity.tenant_id == connection.tenant_id,
+                    ProductCustomerIdentity.source_product == connection.source_product,
+                    ProductCustomerIdentity.external_customer_id
+                    == payload.external_customer_id,
+                )
+            )
+            if identity is None:
+                return _audited_product_consent_result(session, connection,
+                    status="unknown", allowed=False, decision=None,
+                    consent_event_id=None, policy_version=None,
+                    source_product=None, decision_at=None, recorded_at=None
+                )
+
+            profile = await session.scalar(
+                select(CRMProfile).where(
+                    CRMProfile.tenant_id == connection.tenant_id,
+                    CRMProfile.id == identity.profile_id,
+                    CRMProfile.archived_at.is_(None),
+                    CRMProfile.merged_into_profile_id.is_(None),
+                )
+            )
+            if profile is None:
+                return _audited_product_consent_result(session, connection,
+                    status="unknown", allowed=False, decision=None,
+                    consent_event_id=None, policy_version=None,
+                    source_product=None, decision_at=None, recorded_at=None
+                )
+
+            latest = await session.scalar(
+                select(CRMCommunicationConsentEvent)
+                .where(
+                    CRMCommunicationConsentEvent.tenant_id == connection.tenant_id,
+                    CRMCommunicationConsentEvent.profile_id == profile.id,
+                    CRMCommunicationConsentEvent.purpose_key == payload.purpose_key,
+                    CRMCommunicationConsentEvent.channel == payload.channel,
+                )
+                .order_by(
+                    CRMCommunicationConsentEvent.decision_at.desc(),
+                    CRMCommunicationConsentEvent.recorded_at.desc(),
+                    CRMCommunicationConsentEvent.id.desc(),
+                )
+                .limit(1)
+            )
+            if latest is None:
+                return _audited_product_consent_result(session, connection,
+                    status="unknown", allowed=False, decision=None,
+                    consent_event_id=None, policy_version=None,
+                    source_product=None, decision_at=None, recorded_at=None
+                )
+            return _audited_product_consent_result(session, connection,
+                status=latest.decision,
+                allowed=latest.decision == "granted",
+                decision=latest.decision,
+                consent_event_id=latest.id,
+                policy_version=latest.policy_version,
+                source_product=latest.source_product,
+                decision_at=latest.decision_at,
+                recorded_at=latest.recorded_at,
+            )
+
+
+class ProductConsentEligibilityBatchItemResult(ProductConsentEligibilityResult):
+    """Eligibility result correlated to one caller-provided reference."""
+
+    reference: str
+
+
+class ProductConsentEligibilityBatchResult(BaseModel):
+    """Ordered results for one bounded batch request."""
+
+    checks: list[ProductConsentEligibilityBatchItemResult]
+
+
+@router.post(
+    "/communication-consent/changes",
+    operation_id="readProductCommunicationConsentChanges",
+    summary="Read durable consent changes for a connected product",
+    responses={
+        401: {"description": "Missing or invalid product credential"},
+        403: {"description": "Connection is inactive or lacks the change-feed contract"},
+        503: {"description": "CRM consent service is not configured"},
+    },
+)
+async def read_product_communication_consent_changes(
+    payload: ProductConsentChangesCheck, request: Request
+) -> ProductConsentChangesResult:
+    """Return a bounded, commit-ordered page of product-mapped consent changes."""
+    connection = getattr(request.state, "verified_product_connection", None)
+    if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=payload.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid product credential is required",
+        )
+    if not connection.active:
+        raise HTTPException(status_code=403, detail="Connection is disabled")
+    if payload.tenant_id != connection.tenant_id:
+        raise HTTPException(status_code=403, detail="Workspace is outside this connection")
+    if (
+        "crm.customer.communication_consent_changes",
+        1,
+    ) not in connection.supported_contract_versions:
+        raise HTTPException(status_code=403, detail="Consent change-feed contract is not granted")
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CRM consent service is not configured",
+        )
+
+    from sqlalchemy import select, text
+
+    from funnel_crm.platform.models import (
+        AuditEvent,
+        CRMConsentProductSyncOutbox,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(connection.tenant_id)},
+            )
+            rows = (
+                await session.scalars(
+                    select(CRMConsentProductSyncOutbox)
+                    .where(
+                        CRMConsentProductSyncOutbox.tenant_id == connection.tenant_id,
+                        CRMConsentProductSyncOutbox.recipient_product
+                        == connection.source_product,
+                        CRMConsentProductSyncOutbox.sequence > payload.after_sequence,
+                    )
+                    .order_by(CRMConsentProductSyncOutbox.sequence.asc())
+                    .limit(payload.limit + 1)
+                )
+            ).all()
+            has_more = len(rows) > payload.limit
+            page = rows[: payload.limit]
+            next_sequence = page[-1].sequence if page else payload.after_sequence
+            session.add(
+                AuditEvent(
+                    tenant_id=connection.tenant_id,
+                    actor_kind="system",
+                    actor_identity_id=None,
+                    actor_membership_id=None,
+                    action_key="integration.communication_consent.changes_read",
+                    target_type="product_connection",
+                    target_key=str(connection.connection_id),
+                    before_state=None,
+                    after_state={
+                        "source_product": connection.source_product,
+                        "after_sequence": payload.after_sequence,
+                        "next_sequence": next_sequence,
+                        "change_count": len(page),
+                        "has_more": has_more,
+                    },
+                    correlation_id=uuid4(),
+                )
+            )
+            return ProductConsentChangesResult(
+                changes=[
+                    ProductConsentChangeItem(
+                        sequence=row.sequence,
+                        consent_event_id=row.consent_event_id,
+                        external_customer_id=row.external_customer_id,
+                        purpose_key=row.purpose_key,
+                        channel=row.channel,
+                        decision=row.decision,
+                        policy_version=row.policy_version,
+                        decision_at=row.decision_at,
+                        source_product=row.source_product,
+                        source_event_id=row.source_event_id,
+                    )
+                    for row in page
+                ],
+                next_sequence=next_sequence,
+                has_more=has_more,
+            )
+
+
+@router.post(
+    "/communication-consent/changes/ack",
+    operation_id="acknowledgeProductCommunicationConsentChanges",
+    summary="Acknowledge processed consent changes",
+    responses={
+        401: {"description": "Missing or invalid product credential"},
+        403: {"description": "Connection is inactive or lacks the change-feed contract"},
+        409: {"description": "Cursor moves backward or beyond the produced feed"},
+        503: {"description": "CRM consent service is not configured"},
+    },
+)
+async def acknowledge_product_communication_consent_changes(
+    payload: ProductConsentChangesAckCheck, request: Request
+) -> ProductConsentChangesAckResult:
+    """Persist a monotonic product cursor only after its changes are applied."""
+    connection = getattr(request.state, "verified_product_connection", None)
+    if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=payload.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid product credential is required",
+        )
+    if not connection.active:
+        raise HTTPException(status_code=403, detail="Connection is disabled")
+    if payload.tenant_id != connection.tenant_id:
+        raise HTTPException(status_code=403, detail="Workspace is outside this connection")
+    if (
+        "crm.customer.communication_consent_changes",
+        1,
+    ) not in connection.supported_contract_versions:
+        raise HTTPException(status_code=403, detail="Consent change-feed contract is not granted")
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CRM consent service is not configured",
+        )
+
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select, text
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from funnel_crm.platform.models import (
+        AuditEvent,
+        CRMConsentProductSyncCheckpoint,
+        CRMConsentProductSyncSequence,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(connection.tenant_id)},
+            )
+            sequence = await session.scalar(
+                select(CRMConsentProductSyncSequence.last_sequence).where(
+                    CRMConsentProductSyncSequence.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncSequence.recipient_product
+                    == connection.source_product,
+                )
+            )
+            produced_sequence = sequence or 0
+            if payload.acknowledged_sequence > produced_sequence:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Acknowledgement is beyond the produced consent feed",
+                )
+
+            checkpoint_table = CRMConsentProductSyncCheckpoint.__table__
+            await session.execute(
+                pg_insert(CRMConsentProductSyncCheckpoint)
+                .values(
+                    tenant_id=connection.tenant_id,
+                    recipient_product=connection.source_product,
+                    last_acked_sequence=0,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        checkpoint_table.c.tenant_id,
+                        checkpoint_table.c.recipient_product,
+                    ]
+                )
+            )
+            checkpoint = await session.scalar(
+                select(CRMConsentProductSyncCheckpoint)
+                .where(
+                    CRMConsentProductSyncCheckpoint.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncCheckpoint.recipient_product
+                    == connection.source_product,
+                )
+                .with_for_update()
+            )
+            if checkpoint is None:
+                raise RuntimeError("consent feed checkpoint could not be loaded")
+            if payload.acknowledged_sequence < checkpoint.last_acked_sequence:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Acknowledgement cannot move the product cursor backward",
+                )
+            checkpoint.last_acked_sequence = payload.acknowledged_sequence
+            checkpoint.updated_at = datetime.now(timezone.utc)
+            session.add(
+                AuditEvent(
+                    tenant_id=connection.tenant_id,
+                    actor_kind="system",
+                    actor_identity_id=None,
+                    actor_membership_id=None,
+                    action_key="integration.communication_consent.changes_acknowledged",
+                    target_type="product_connection",
+                    target_key=str(connection.connection_id),
+                    before_state=None,
+                    after_state={
+                        "source_product": connection.source_product,
+                        "acknowledged_sequence": payload.acknowledged_sequence,
+                    },
+                    correlation_id=uuid4(),
+                )
+            )
+            return ProductConsentChangesAckResult(
+                source_product=connection.source_product,
+                acknowledged_sequence=checkpoint.last_acked_sequence,
+            )
+
+
+@router.post(
+    "/communication-consent/changes/status",
+    operation_id="getProductCommunicationConsentSyncStatus",
+    summary="Read consent change-feed synchronization status",
+    responses={
+        401: {"description": "Missing or invalid product credential"},
+        403: {"description": "Connection is inactive or lacks the change-feed contract"},
+        503: {"description": "CRM consent service is not configured"},
+    },
+)
+async def get_product_communication_consent_sync_status(
+    payload: ProductConsentChangesStatusCheck, request: Request
+) -> ProductConsentChangesStatusResult:
+    """Report produced, acknowledged, and pending changes for this product."""
+    connection = getattr(request.state, "verified_product_connection", None)
+    if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=payload.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid product credential is required",
+        )
+    if not connection.active:
+        raise HTTPException(status_code=403, detail="Connection is disabled")
+    if payload.tenant_id != connection.tenant_id:
+        raise HTTPException(status_code=403, detail="Workspace is outside this connection")
+    if (
+        "crm.customer.communication_consent_changes",
+        1,
+    ) not in connection.supported_contract_versions:
+        raise HTTPException(status_code=403, detail="Consent change-feed contract is not granted")
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CRM consent service is not configured",
+        )
+
+    from sqlalchemy import func, select, text
+
+    from funnel_crm.platform.models import (
+        AuditEvent,
+        CRMConsentProductSyncCheckpoint,
+        CRMConsentProductSyncOutbox,
+        CRMConsentProductSyncSequence,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(connection.tenant_id)},
+            )
+            produced_sequence = await session.scalar(
+                select(CRMConsentProductSyncSequence.last_sequence).where(
+                    CRMConsentProductSyncSequence.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncSequence.recipient_product
+                    == connection.source_product,
+                )
+            ) or 0
+            checkpoint = await session.scalar(
+                select(CRMConsentProductSyncCheckpoint).where(
+                    CRMConsentProductSyncCheckpoint.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncCheckpoint.recipient_product
+                    == connection.source_product,
+                )
+            )
+            acknowledged_sequence = (
+                checkpoint.last_acked_sequence if checkpoint is not None else 0
+            )
+            pending_count = await session.scalar(
+                select(func.count()).select_from(CRMConsentProductSyncOutbox).where(
+                    CRMConsentProductSyncOutbox.tenant_id == connection.tenant_id,
+                    CRMConsentProductSyncOutbox.recipient_product
+                    == connection.source_product,
+                    CRMConsentProductSyncOutbox.sequence > acknowledged_sequence,
+                )
+            ) or 0
+            session.add(
+                AuditEvent(
+                    tenant_id=connection.tenant_id,
+                    actor_kind="system",
+                    actor_identity_id=None,
+                    actor_membership_id=None,
+                    action_key="integration.communication_consent.changes_status_read",
+                    target_type="product_connection",
+                    target_key=str(connection.connection_id),
+                    before_state=None,
+                    after_state={
+                        "source_product": connection.source_product,
+                        "produced_sequence": produced_sequence,
+                        "acknowledged_sequence": acknowledged_sequence,
+                        "pending_count": pending_count,
+                    },
+                    correlation_id=uuid4(),
+                )
+            )
+            return ProductConsentChangesStatusResult(
+                source_product=connection.source_product,
+                produced_sequence=produced_sequence,
+                acknowledged_sequence=acknowledged_sequence,
+                pending_count=pending_count,
+                checkpoint_updated_at=(
+                    checkpoint.updated_at if checkpoint is not None else None
+                ),
+            )
+
+
+@router.post(
+    "/communication-eligibility/check-batch",
+    operation_id="checkProductCommunicationEligibilityBatch",
+    summary="Check live CRM consent for a bounded batch of customers",
+    responses={
+        401: {"description": "Missing or invalid product credential"},
+        403: {"description": "Connection is inactive or lacks the read contract"},
+        503: {"description": "CRM consent service is not configured"},
+    },
+)
+async def check_product_communication_eligibility_batch(
+    payload: ProductConsentEligibilityBatchCheck, request: Request
+) -> ProductConsentEligibilityBatchResult:
+    """Resolve at most 100 checks with tenant-scoped set queries."""
+    connection = getattr(request.state, "verified_product_connection", None)
+    if not isinstance(connection, VerifiedProductConnection):
+        from funnel_crm.platform.integration_auth import authenticate_product_credential
+
+        connection = await authenticate_product_credential(
+            getattr(request.app.state, "session_factory", None),
+            tenant_id=payload.tenant_id,
+            authorization=request.headers.get("Authorization"),
+        )
+    if not isinstance(connection, VerifiedProductConnection):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid product credential is required",
+        )
+    if not connection.active:
+        raise HTTPException(status_code=403, detail="Connection is disabled")
+    if payload.tenant_id != connection.tenant_id:
+        raise HTTPException(status_code=403, detail="Workspace is outside this connection")
+    if ("crm.customer.communication_eligibility", 1) not in connection.supported_contract_versions:
+        raise HTTPException(status_code=403, detail="Consent eligibility contract is not granted")
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CRM consent service is not configured",
+        )
+
+    from sqlalchemy import func, select, text, tuple_
+
+    from funnel_crm.platform.models import (
+        CRMCommunicationConsentEvent,
+        CRMProfile,
+        ProductCustomerIdentity,
+    )
+
+    async with session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(connection.tenant_id)},
+            )
+            external_ids = list(dict.fromkeys(
+                check.external_customer_id for check in payload.checks
+            ))
+            identity_rows = (
+                await session.scalars(
+                    select(ProductCustomerIdentity).where(
+                        ProductCustomerIdentity.tenant_id == connection.tenant_id,
+                        ProductCustomerIdentity.source_product == connection.source_product,
+                        ProductCustomerIdentity.external_customer_id.in_(external_ids),
+                    )
+                )
+            ).all()
+            identity_by_external_id = {
+                identity.external_customer_id: identity for identity in identity_rows
+            }
+
+            profile_ids = list(dict.fromkeys(
+                identity.profile_id for identity in identity_rows
+            ))
+            profiles = (
+                await session.scalars(
+                    select(CRMProfile).where(
+                        CRMProfile.tenant_id == connection.tenant_id,
+                        CRMProfile.id.in_(profile_ids),
+                        CRMProfile.archived_at.is_(None),
+                        CRMProfile.merged_into_profile_id.is_(None),
+                    )
+                )
+            ).all() if profile_ids else []
+            valid_profile_ids = {profile.id for profile in profiles}
+
+            check_keys = {
+                (
+                    identity_by_external_id[check.external_customer_id].profile_id,
+                    check.purpose_key,
+                    check.channel,
+                )
+                for check in payload.checks
+                if check.external_customer_id in identity_by_external_id
+                and identity_by_external_id[check.external_customer_id].profile_id
+                in valid_profile_ids
+            }
+            latest_by_key = {}
+            if check_keys:
+                ranked_events = (
+                    select(
+                        CRMCommunicationConsentEvent.id.label("event_id"),
+                        func.row_number()
+                        .over(
+                            partition_by=(
+                                CRMCommunicationConsentEvent.profile_id,
+                                CRMCommunicationConsentEvent.purpose_key,
+                                CRMCommunicationConsentEvent.channel,
+                            ),
+                            order_by=(
+                                CRMCommunicationConsentEvent.decision_at.desc(),
+                                CRMCommunicationConsentEvent.recorded_at.desc(),
+                                CRMCommunicationConsentEvent.id.desc(),
+                            ),
+                        )
+                        .label("event_rank"),
+                    )
+                    .where(
+                        CRMCommunicationConsentEvent.tenant_id == connection.tenant_id,
+                        tuple_(
+                            CRMCommunicationConsentEvent.profile_id,
+                            CRMCommunicationConsentEvent.purpose_key,
+                            CRMCommunicationConsentEvent.channel,
+                        ).in_(list(check_keys)),
+                    )
+                    .subquery()
+                )
+                latest_rows = (
+                    await session.scalars(
+                        select(CRMCommunicationConsentEvent)
+                        .join(
+                            ranked_events,
+                            ranked_events.c.event_id == CRMCommunicationConsentEvent.id,
+                        )
+                        .where(ranked_events.c.event_rank == 1)
+                    )
+                ).all()
+                latest_by_key = {
+                    (row.profile_id, row.purpose_key, row.channel): row
+                    for row in latest_rows
+                }
+
+            results = []
+            for check in payload.checks:
+                identity = identity_by_external_id.get(check.external_customer_id)
+                profile_id = identity.profile_id if identity is not None else None
+                if profile_id not in valid_profile_ids:
+                    latest = None
+                else:
+                    latest = latest_by_key.get(
+                        (profile_id, check.purpose_key, check.channel)
+                    )
+                if latest is None:
+                    result = ProductConsentEligibilityResult(
+                        status="unknown",
+                        allowed=False,
+                        decision=None,
+                        consent_event_id=None,
+                        policy_version=None,
+                        source_product=None,
+                        decision_at=None,
+                        recorded_at=None,
+                    )
+                else:
+                    result = ProductConsentEligibilityResult(
+                        status=latest.decision,
+                        allowed=latest.decision == "granted",
+                        decision=latest.decision,
+                        consent_event_id=latest.id,
+                        policy_version=latest.policy_version,
+                        source_product=latest.source_product,
+                        decision_at=latest.decision_at,
+                        recorded_at=latest.recorded_at,
+                    )
+                results.append(
+                    ProductConsentEligibilityBatchItemResult(
+                        reference=check.reference,
+                        **result.model_dump(),
+                    )
+                )
+            _record_product_consent_eligibility_access(
+                session, connection, [result.status for result in results]
+            )
+            return ProductConsentEligibilityBatchResult(checks=results)

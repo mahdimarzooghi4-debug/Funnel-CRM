@@ -9,9 +9,19 @@ from funnel_crm.api.v1.crm_commerce_outcomes import router as crm_commerce_outco
 from funnel_crm.api.v1.crm_campaign_commerce_efficiency import router as crm_campaign_commerce_efficiency_router
 from funnel_crm.api.v1.crm_sales_forecasting import router as crm_sales_forecasting_router
 from funnel_crm.api.v1.crm_sales_targets import router as crm_sales_targets_router
+from funnel_crm.api.v1.crm_commissions import router as crm_commissions_router
+from funnel_crm.api.v1.crm_channel_partners import router as crm_channel_partners_api_router
+from funnel_crm.api.v1.crm_catalog import router as crm_catalog_router
+from funnel_crm.api.v1.crm_opportunity_catalog import router as crm_opportunity_catalog_router
+from funnel_crm.api.v1.crm_opportunity_offers import router as crm_opportunity_offers_router
+from funnel_crm.api.v1.crm_offer_plans import router as crm_offer_plans_router
+from funnel_crm.api.v1.crm_offer_scenarios import router as crm_offer_scenarios_router
 from funnel_crm.api.v1.crm_work_items import router as crm_work_items_router
 from funnel_crm.api.v1.crm_support_cases import router as crm_support_cases_router
 from funnel_crm.api.v1.crm_marketing_learning import router as crm_marketing_learning_router
+from funnel_crm.api.v1.crm_marketing_calendar import router as crm_marketing_calendar_router
+from funnel_crm.api.v1.crm_marketing_assets import router as crm_marketing_assets_router
+from funnel_crm.api.v1.crm_campaign_readiness import router as crm_campaign_readiness_router
 
 from funnel_crm.api.v1.crm_segments import router as crm_segments_router
 from funnel_crm.api.v1.crm_campaigns import router as crm_campaigns_router
@@ -21,6 +31,7 @@ from funnel_crm.api.v1.crm_campaign_target_analytics import router as crm_campai
 from funnel_crm.api.v1.crm_campaign_experiments import router as crm_campaign_experiments_router
 from funnel_crm.api.v1.crm_campaign_measurements import router as crm_campaign_measurements_router
 from funnel_crm.api.v1.crm_campaign_measurement_imports import router as crm_campaign_measurement_imports_router
+from funnel_crm.api.v1.crm_marketing_manager_dashboard import router as crm_marketing_manager_dashboard_router
 from funnel_crm.api.v1.crm_campaign_portfolio_analytics import router as crm_campaign_portfolio_analytics_router
 from funnel_crm.api.v1.crm_budget_scenarios import router as crm_budget_scenarios_router
 from funnel_crm.api.v1.crm_customer_activity_analytics import router as crm_customer_activity_analytics_router
@@ -35,6 +46,7 @@ from funnel_crm.api.v1.crm_custom_field_values import router as crm_custom_field
 from funnel_crm.api.v1.crm_profiles import router as crm_profiles_router
 from funnel_crm.api.v1.crm_communication_consent import router as crm_communication_consent_router
 from funnel_crm.api.v1.integrations import router as integrations_router
+from funnel_crm.api.v1.integration_event_operations import router as integration_event_operations_router
 from funnel_crm.api.v1.product_connections import router as product_connections_router
 from funnel_crm.api.v1.system import router as system_router
 from funnel_crm.api.v1.crm_metric_catalog import router as crm_metric_catalog_router
@@ -44,6 +56,7 @@ router = APIRouter(prefix="/api/v1")
 router.include_router(system_router)
 router.include_router(crm_workspace_context_router)
 router.include_router(integrations_router)
+router.include_router(integration_event_operations_router)
 router.include_router(product_connections_router)
 router.include_router(crm_profiles_router)
 router.include_router(crm_opportunities_router)
@@ -53,9 +66,19 @@ router.include_router(crm_commerce_outcomes_router)
 router.include_router(crm_campaign_commerce_efficiency_router)
 router.include_router(crm_sales_forecasting_router)
 router.include_router(crm_sales_targets_router)
+router.include_router(crm_commissions_router)
+router.include_router(crm_channel_partners_api_router)
+router.include_router(crm_catalog_router)
+router.include_router(crm_opportunity_catalog_router)
+router.include_router(crm_opportunity_offers_router)
+router.include_router(crm_offer_plans_router)
+router.include_router(crm_offer_scenarios_router)
 router.include_router(crm_work_items_router)
 router.include_router(crm_support_cases_router)
 router.include_router(crm_marketing_learning_router)
+router.include_router(crm_marketing_calendar_router)
+router.include_router(crm_marketing_assets_router)
+router.include_router(crm_campaign_readiness_router)
 router.include_router(crm_customer_activities_router)
 router.include_router(crm_customer_activity_analytics_router)
 router.include_router(crm_customer_lifecycle_analytics_router)
@@ -68,6 +91,7 @@ router.include_router(crm_campaign_target_analytics_router)
 router.include_router(crm_campaign_experiments_router)
 router.include_router(crm_campaign_measurements_router)
 router.include_router(crm_campaign_measurement_imports_router)
+router.include_router(crm_marketing_manager_dashboard_router)
 router.include_router(crm_campaign_portfolio_analytics_router)
 router.include_router(crm_budget_scenarios_router)
 router.include_router(crm_contact_points_router)

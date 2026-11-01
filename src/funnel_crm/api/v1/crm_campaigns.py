@@ -1,4 +1,4 @@
-"""Marketing campaign planning endpoints; sending and activation are intentionally absent."""
+"""Marketing campaign planning and lifecycle endpoints."""
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -10,12 +10,24 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import func, select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
+from funnel_crm.api.v1.crm_campaign_readiness import (
+    _campaign_readiness_basis,
+    get_campaign_readiness,
+)
 from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
-from funnel_crm.platform.models import AuditEvent, CRMMarketingCampaign, CRMProfileSegment
+from funnel_crm.platform.models import AuditEvent, CRMMarketingCampaign, CRMMarketingCampaignAsset, CRMProfileSegment
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
 router = APIRouter(prefix="/crm/campaigns", tags=["CRM marketing campaigns"])
 CampaignChannel = Literal["email", "phone", "messaging", "social", "web", "store", "field", "other"]
+CampaignStatus = Literal["draft", "scheduled", "active", "paused", "completed", "archived"]
+CampaignLifecycleAction = Literal["schedule", "launch", "pause", "resume", "complete", "unschedule", "archive"]
+
+
+class CampaignLifecycleTransition(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    action: CampaignLifecycleAction
+    note: str | None = Field(default=None, max_length=500)
 
 
 class CampaignCreate(BaseModel):
@@ -25,6 +37,7 @@ class CampaignCreate(BaseModel):
     segment_id: UUID
     name: str = Field(min_length=1, max_length=160)
     objective_key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
+    communication_purpose_key: str = Field(default="marketing", min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
     channel: CampaignChannel
     planned_budget_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     planned_budget_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
@@ -61,13 +74,14 @@ class CampaignUpdate(BaseModel):
     segment_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=160)
     objective_key: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
+    communication_purpose_key: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]{0,79}$")
     channel: CampaignChannel | None = None
     planned_budget_amount: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     planned_budget_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     starts_at: datetime | None = None
     ends_at: datetime | None = None
 
-    @field_validator("segment_id", "name", "objective_key", "channel")
+    @field_validator("segment_id", "name", "objective_key", "communication_purpose_key", "channel")
     @classmethod
     def reject_null_for_nonnullable(cls, value):
         if value is None:
@@ -102,6 +116,7 @@ class CampaignRead(BaseModel):
     segment_id: UUID
     name: str
     objective_key: str
+    communication_purpose_key: str
     channel: str
     planned_budget_amount: Decimal | None
     planned_budget_currency: str | None
@@ -159,7 +174,13 @@ def _audit(context: TenantSessionContext, campaign: CRMMarketingCampaign, action
             target_key=str(campaign.id),
             organization_unit_id=campaign.organization_unit_id,
             before_state=None,
-            after_state={"status": campaign.status, "channel": campaign.channel, "planned_budget_amount": str(campaign.planned_budget_amount) if campaign.planned_budget_amount is not None else None, "planned_budget_currency": campaign.planned_budget_currency},
+            after_state={
+                "status": campaign.status,
+                "channel": campaign.channel,
+                "communication_purpose_key": campaign.communication_purpose_key,
+                "planned_budget_amount": str(campaign.planned_budget_amount) if campaign.planned_budget_amount is not None else None,
+                "planned_budget_currency": campaign.planned_budget_currency,
+            },
             correlation_id=None,
         )
     )
@@ -169,7 +190,7 @@ def _audit(context: TenantSessionContext, campaign: CRMMarketingCampaign, action
 async def list_campaigns(
     context: TenantSessionContext = Depends(require_tenant_session),
     organization_unit_id: UUID | None = None,
-    status_filter: Literal["draft", "archived"] | None = Query(default=None, alias="status"),
+    status_filter: CampaignStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> CampaignPage:
@@ -212,7 +233,8 @@ async def create_campaign(
     campaign = CRMMarketingCampaign(
         id=uuid4(), tenant_id=context.access.tenant_id,
         organization_unit_id=payload.organization_unit_id, segment_id=payload.segment_id,
-        name=payload.name, objective_key=payload.objective_key, channel=payload.channel,
+        name=payload.name, objective_key=payload.objective_key,
+        communication_purpose_key=payload.communication_purpose_key, channel=payload.channel,
         starts_at=payload.starts_at, ends_at=payload.ends_at,
         planned_budget_amount=payload.planned_budget_amount,
         planned_budget_currency=payload.planned_budget_currency, status="draft",
@@ -243,7 +265,7 @@ async def update_campaign(
         raise HTTPException(status_code=404, detail="CRM campaign not found")
     await _require_permission(context, "crm.campaign:manage", campaign.organization_unit_id)
     if campaign.status != "draft":
-        raise HTTPException(status_code=409, detail="Archived campaigns cannot be updated")
+        raise HTTPException(status_code=409, detail="Only draft campaigns can be updated")
     if "segment_id" in changes:
         await _active_segment(
             context, segment_id=changes["segment_id"],
@@ -258,6 +280,116 @@ async def update_campaign(
     campaign.updated_at = datetime.now(timezone.utc)
     await context.session.flush()
     _audit(context, campaign, "crm_marketing_campaign.updated")
+    await context.session.flush()
+    return CampaignRead.model_validate(campaign)
+
+
+@router.post(
+    "/{campaign_id}/lifecycle", response_model=CampaignRead,
+    operation_id="transitionCRMMarketingCampaignLifecycle",
+)
+async def transition_campaign_lifecycle(
+    campaign_id: UUID, payload: CampaignLifecycleTransition,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignRead:
+    campaign = await context.session.scalar(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaign.id == campaign_id,
+        ).with_for_update()
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="CRM campaign not found")
+    await _require_permission(context, "crm.campaign:manage", campaign.organization_unit_id)
+    transitions = {
+        "schedule": ({"draft"}, "scheduled"), "launch": ({"scheduled"}, "active"),
+        "pause": ({"active"}, "paused"), "resume": ({"paused"}, "active"),
+        "complete": ({"active"}, "completed"), "unschedule": ({"scheduled"}, "draft"),
+        "archive": ({"draft", "scheduled", "paused", "completed"}, "archived"),
+    }
+    allowed_from, next_status = transitions[payload.action]
+    if campaign.status not in allowed_from:
+        raise HTTPException(status_code=409, detail=f"Action {payload.action} is not allowed for status {campaign.status}")
+    if payload.action == "schedule":
+        if campaign.starts_at is None or campaign.ends_at is None:
+            raise HTTPException(status_code=409, detail="Campaign needs start and end dates before scheduling")
+        await _active_segment(context, segment_id=campaign.segment_id, organization_unit_id=campaign.organization_unit_id)
+        latest_readiness_review = await context.session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == context.access.tenant_id,
+                AuditEvent.target_type == "crm_marketing_campaign_readiness_review",
+                AuditEvent.target_key == str(campaign.id),
+                AuditEvent.action_key == "crm_marketing_campaign.readiness_reviewed",
+            ).order_by(AuditEvent.occurred_at.desc(), AuditEvent.event_id.desc()).limit(1)
+        )
+        if (
+            latest_readiness_review is None
+            or latest_readiness_review.after_state is None
+            or latest_readiness_review.after_state.get("decision") != "proceed_to_schedule"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Campaign needs a current manager decision to proceed to scheduling",
+            )
+        assets = (await context.session.scalars(select(CRMMarketingCampaignAsset).where(
+            CRMMarketingCampaignAsset.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaignAsset.campaign_id == campaign.id,
+        ))).all()
+        if not any(asset.status == "approved" for asset in assets):
+            raise HTTPException(status_code=409, detail="Campaign needs at least one approved content asset")
+        if any(asset.status in {"draft", "in_review", "rejected"} for asset in assets):
+            raise HTTPException(status_code=409, detail="Campaign has content assets that still need review")
+        current_readiness = await get_campaign_readiness(
+            campaign_id=campaign.id,
+            context=context,
+        )
+        current_readiness_basis = _campaign_readiness_basis(campaign, current_readiness)
+        if latest_readiness_review.after_state.get("readiness_basis") != current_readiness_basis:
+            raise HTTPException(
+                status_code=409,
+                detail="Campaign readiness changed after the manager review; review it again before scheduling",
+            )
+    if payload.action == "launch":
+        latest_activation_review = await context.session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == context.access.tenant_id,
+                AuditEvent.target_type == "crm_marketing_campaign_readiness_review",
+                AuditEvent.target_key == str(campaign.id),
+                AuditEvent.action_key == "crm_marketing_campaign.readiness_reviewed",
+            ).order_by(AuditEvent.occurred_at.desc(), AuditEvent.event_id.desc()).limit(1)
+        )
+        if (
+            latest_activation_review is None
+            or latest_activation_review.after_state is None
+            or latest_activation_review.after_state.get("decision") != "proceed_to_launch"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Campaign needs a current manager decision to proceed to activation",
+            )
+        current_readiness = await get_campaign_readiness(
+            campaign_id=campaign.id,
+            context=context,
+        )
+        current_readiness_basis = _campaign_readiness_basis(campaign, current_readiness)
+        if latest_activation_review.after_state.get("readiness_basis") != current_readiness_basis:
+            raise HTTPException(
+                status_code=409,
+                detail="Campaign readiness changed after the manager review; review it again before activation",
+            )
+    previous_status = campaign.status
+    campaign.status = next_status
+    campaign.updated_at = datetime.now(timezone.utc)
+    await context.session.flush()
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id, actor_kind="user",
+        actor_identity_id=context.access.identity_id, actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign." + payload.action,
+        target_type="crm_marketing_campaign", target_key=str(campaign.id),
+        organization_unit_id=campaign.organization_unit_id,
+        before_state={"status": previous_status},
+        after_state={"status": next_status, "note": payload.note}, correlation_id=None,
+    ))
     await context.session.flush()
     return CampaignRead.model_validate(campaign)
 
@@ -279,11 +411,21 @@ async def archive_campaign(
     if campaign is None:
         raise HTTPException(status_code=404, detail="CRM campaign not found")
     await _require_permission(context, "crm.campaign:manage", campaign.organization_unit_id)
-    if campaign.status == "draft":
+    if campaign.status in {"draft", "scheduled", "paused", "completed"}:
+        previous_status = campaign.status
         campaign.status = "archived"
         campaign.updated_at = datetime.now(timezone.utc)
         await context.session.flush()
-        _audit(context, campaign, "crm_marketing_campaign.archived")
+        context.session.add(AuditEvent(
+            tenant_id=context.access.tenant_id, actor_kind="user",
+            actor_identity_id=context.access.identity_id,
+            actor_membership_id=context.access.membership_id,
+            action_key="crm_marketing_campaign.archive",
+            target_type="crm_marketing_campaign", target_key=str(campaign.id),
+            organization_unit_id=campaign.organization_unit_id,
+            before_state={"status": previous_status}, after_state={"status": "archived"},
+            correlation_id=None,
+        ))
         await context.session.flush()
 
 

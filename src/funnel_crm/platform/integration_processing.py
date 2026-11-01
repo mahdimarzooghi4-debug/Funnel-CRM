@@ -5,7 +5,10 @@ performing effects outside the database.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -14,11 +17,10 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, or_, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from funnel_crm.platform.integration_payload_crypto import (
-    IntegrationPayloadCryptoError,
-    IntegrationPayloadKeyring,
-)
+from funnel_crm.platform.integration_payload_crypto import IntegrationPayloadKeyring
 from funnel_crm.platform.models import IntegrationEventInbox
+
+logger = logging.getLogger(__name__)
 
 _ERROR_CODE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 
@@ -77,6 +79,69 @@ class PostgresProductEventProcessor:
         self._base_retry_seconds = base_retry_seconds
         self._max_retry_seconds = max_retry_seconds
         self._keyring = keyring
+
+
+    @asynccontextmanager
+    async def maintain_claims(self, tenant_id: UUID, claims):
+        """Keep every claim in a sequential batch leased while it is being handled."""
+        if not claims:
+            yield
+            return
+        heartbeat = asyncio.create_task(
+            self._heartbeat_claims(tenant_id, claims),
+            name="product-event-lease-heartbeat",
+        )
+        try:
+            yield
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _heartbeat_claims(self, tenant_id: UUID, claims) -> None:
+        interval = max(0.25, self._lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            for claim in claims:
+                try:
+                    await self.renew_lease(
+                        tenant_id,
+                        claim.id,
+                        lease_token=claim.lease_token,
+                    )
+                except LeaseLostError:
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "Product event lease heartbeat failed tenant=%s event=%s error_type=%s",
+                        tenant_id,
+                        claim.id,
+                        type(exc).__name__,
+                    )
+
+    async def renew_lease(
+        self, tenant_id: UUID, event_row_id: UUID, *, lease_token: UUID
+    ) -> datetime:
+        """Extend a live lease only while this claim still owns the event."""
+        now = datetime.now(timezone.utc)
+        lease_until = now + timedelta(seconds=self._lease_seconds)
+        async with self._session_factory() as session:
+            async with session.begin():
+                await self._set_tenant(session, tenant_id)
+                result = await session.execute(
+                    update(IntegrationEventInbox)
+                    .where(
+                        IntegrationEventInbox.tenant_id == tenant_id,
+                        IntegrationEventInbox.id == event_row_id,
+                        IntegrationEventInbox.processing_status == "processing",
+                        IntegrationEventInbox.lease_token == lease_token,
+                        IntegrationEventInbox.lease_until > now,
+                    )
+                    .values(lease_until=lease_until)
+                    .returning(IntegrationEventInbox.id)
+                )
+                if result.scalar_one_or_none() is None:
+                    raise LeaseLostError("event lease is no longer current")
+        return lease_until
 
     async def claim(
         self,
@@ -178,10 +243,19 @@ class PostgresProductEventProcessor:
                                 key_id=row.payload_key_id,
                                 ciphertext=row.encrypted_payload,
                             )
-                        except IntegrationPayloadCryptoError as exc:
-                            raise ValueError(
-                                "claimed integration payload cannot be safely decrypted"
-                            ) from exc
+                        except Exception as exc:
+                            row.processing_status = "failed"
+                            row.attempt_count += 1
+                            row.lease_token = None
+                            row.lease_until = None
+                            row.last_error_code = "integration.payload.decryption_failed"
+                            logger.error(
+                                "Product event payload could not be decrypted tenant=%s event=%s error_type=%s",
+                                tenant_id,
+                                row.id,
+                                type(exc).__name__,
+                            )
+                            continue
                     token = uuid4()
                     lease_until = now + timedelta(seconds=self._lease_seconds)
                     row.processing_status = "processing"

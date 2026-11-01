@@ -1,0 +1,717 @@
+"""Manager review of campaign schedule, audience, content, and open follow-up."""
+
+from datetime import datetime, timezone
+from typing import Literal
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import exists, func, select
+
+from funnel_crm.api.dependencies.tenant import require_tenant_session
+from funnel_crm.api.v1.crm_segments import _segment_member_filters
+from funnel_crm.platform.crm_authorization import crm_scope_ids, has_crm_permission
+from funnel_crm.platform.models import (
+    AuditEvent,
+    CRMMarketingCampaign,
+    CRMCommunicationConsentEvent,
+    CRMContactPoint,
+    CRMMarketingCampaignAsset,
+    CRMProfile,
+    CRMProfileSegment,
+    CRMWorkItem,
+    WorkspaceMembership,
+)
+from funnel_crm.platform.tenant_context import TenantSessionContext
+
+router = APIRouter(prefix="/crm/campaigns", tags=["CRM campaign readiness"])
+AssetStatus = Literal["draft", "in_review", "approved", "rejected", "retired"]
+
+
+class CampaignReadinessCheck(BaseModel):
+    key: Literal["campaign_schedule", "active_audience", "approved_content", "channel_eligibility"]
+    status: Literal["complete", "missing", "pending", "inactive", "not_authorized", "unsupported"]
+    count: int | None
+    explanation: str
+
+
+class CampaignManagerReview(BaseModel):
+    decision: Literal["proceed_to_schedule", "proceed_to_launch", "request_changes", "hold"]
+    note: str | None
+    reviewed_by_identity_id: UUID | None
+    reviewed_at: datetime
+    follow_up_work_item_id: UUID | None
+    follow_up_status: Literal["open", "in_progress", "completed", "cancelled"] | None
+    follow_up_assigned_membership_id: UUID | None
+    follow_up_due_at: datetime | None
+
+
+class CampaignReadinessResponse(BaseModel):
+    campaign_id: UUID
+    campaign_name: str
+    organization_unit_id: UUID
+    channel: str
+    communication_purpose_key: str
+    starts_at: datetime | None
+    ends_at: datetime | None
+    launch_readiness: Literal["ready_for_manager_review", "needs_attention"]
+    checks: list[CampaignReadinessCheck]
+    asset_counts: dict[AssetStatus, int]
+    open_work_item_count: int | None
+    work_item_data_visible: bool
+    latest_manager_review: CampaignManagerReview | None
+    generated_at: datetime
+    basis: str
+
+
+class CampaignReadinessReviewHistoryItem(BaseModel):
+    decision: Literal["proceed_to_schedule", "proceed_to_launch", "request_changes", "hold"]
+    note: str | None
+    reviewed_by_identity_id: UUID | None
+    reviewed_at: datetime
+    readiness: Literal["ready_for_manager_review", "needs_attention"]
+    check_statuses: dict[str, str]
+    follow_up_work_item_id: UUID | None
+    follow_up_status: Literal["open", "in_progress", "completed", "cancelled"] | None
+    follow_up_assigned_membership_id: UUID | None
+    follow_up_due_at: datetime | None
+
+
+class CampaignReadinessReviewHistoryResponse(BaseModel):
+    campaign_id: UUID
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+    items: list[CampaignReadinessReviewHistoryItem]
+
+
+class CampaignReadinessPortfolioResponse(BaseModel):
+    organization_unit_id: UUID | None
+    generated_at: datetime
+    total_draft_campaigns: int
+    limit: int
+    offset: int
+    has_more: bool
+    ready_for_manager_review_count: int
+    needs_attention_count: int
+    attention_by_check: dict[str, int]
+    items: list[CampaignReadinessResponse]
+
+class CampaignReadinessFollowUp(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    assigned_membership_id: UUID | None = None
+    due_at: datetime | None = None
+    priority: Literal["low", "normal", "high", "urgent"] = "high"
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("follow-up title must contain a non-whitespace character")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("due_at")
+    @classmethod
+    def require_due_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("follow-up due_at must include a timezone")
+        return value
+
+
+class CampaignReadinessReviewDecision(BaseModel):
+    decision: Literal["proceed_to_schedule", "proceed_to_launch", "request_changes", "hold"]
+    note: str | None = Field(default=None, max_length=1000)
+    follow_up: CampaignReadinessFollowUp | None = None
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("note must contain a non-whitespace character")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_follow_up_for_actionable_decisions(self):
+        needs_follow_up = self.decision in {"request_changes", "hold"}
+        if needs_follow_up and self.follow_up is None:
+            raise ValueError("request_changes and hold decisions require a follow_up task")
+        if not needs_follow_up and self.follow_up is not None:
+            raise ValueError("follow_up is only valid for request_changes and hold decisions")
+        return self
+
+
+def _campaign_readiness_basis(
+    campaign: CRMMarketingCampaign,
+    readiness: CampaignReadinessResponse,
+) -> dict[str, object]:
+    return {
+        "campaign_status": campaign.status,
+        "campaign_updated_at": campaign.updated_at.isoformat(),
+        "segment_id": str(campaign.segment_id),
+        "channel": campaign.channel,
+        "communication_purpose_key": campaign.communication_purpose_key,
+        "starts_at": campaign.starts_at.isoformat() if campaign.starts_at else None,
+        "ends_at": campaign.ends_at.isoformat() if campaign.ends_at else None,
+        "asset_counts": readiness.asset_counts,
+        "checks": {
+            check.key: {"status": check.status, "count": check.count}
+            for check in readiness.checks
+        },
+    }
+
+
+@router.get(
+    "/readiness-portfolio",
+    response_model=CampaignReadinessPortfolioResponse,
+    operation_id="reviewCRMCampaignReadinessPortfolio",
+)
+async def review_campaign_readiness_portfolio(
+    context: TenantSessionContext = Depends(require_tenant_session),
+    organization_unit_id: UUID | None = None,
+    channel: str | None = Query(default=None, min_length=1, max_length=40),
+    communication_purpose_key: str | None = Query(default=None, min_length=1, max_length=80),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> CampaignReadinessPortfolioResponse:
+    permitted_scopes = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.campaign:view")
+    )).all())
+    if organization_unit_id is not None and organization_unit_id not in permitted_scopes:
+        raise HTTPException(status_code=403, detail="Campaign readiness is not authorized for this organization scope")
+    filters = [
+        CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+        CRMMarketingCampaign.organization_unit_id.in_(permitted_scopes),
+        CRMMarketingCampaign.status == "draft",
+    ]
+    if organization_unit_id is not None:
+        filters.append(CRMMarketingCampaign.organization_unit_id == organization_unit_id)
+    if channel is not None:
+        filters.append(CRMMarketingCampaign.channel == channel)
+    if communication_purpose_key is not None:
+        filters.append(
+            CRMMarketingCampaign.communication_purpose_key == communication_purpose_key
+        )
+    total = int(await context.session.scalar(
+        select(func.count()).select_from(CRMMarketingCampaign).where(*filters)
+    ) or 0)
+    campaign_ids = (await context.session.scalars(
+        select(CRMMarketingCampaign.id).where(*filters)
+        .order_by(CRMMarketingCampaign.starts_at.asc().nulls_last(),
+                  CRMMarketingCampaign.name, CRMMarketingCampaign.id)
+        .limit(limit).offset(offset)
+    )).all()
+    items = [
+        await get_campaign_readiness(campaign_id=campaign_id, context=context)
+        for campaign_id in campaign_ids
+    ]
+    attention_by_check: dict[str, int] = {}
+    for item in items:
+        for check in item.checks:
+            if check.status not in {"complete"}:
+                attention_by_check[check.key] = attention_by_check.get(check.key, 0) + 1
+    ready_count = sum(
+        item.launch_readiness == "ready_for_manager_review" for item in items
+    )
+    needs_attention_count = len(items) - ready_count
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign_readiness_portfolio.reviewed",
+        target_type="crm_marketing_campaign_readiness_portfolio",
+        target_key=f"{organization_unit_id or 'all'}:{offset}",
+        organization_unit_id=organization_unit_id,
+        before_state=None,
+        after_state={
+            "total_draft_campaigns": total,
+            "page_size": len(items),
+            "offset": offset,
+            "channel": channel,
+            "communication_purpose_key": communication_purpose_key,
+            "ready_for_manager_review_count": ready_count,
+            "needs_attention_count": needs_attention_count,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignReadinessPortfolioResponse(
+        organization_unit_id=organization_unit_id,
+        generated_at=datetime.now(timezone.utc),
+        total_draft_campaigns=total,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(items) < total,
+        ready_for_manager_review_count=ready_count,
+        needs_attention_count=needs_attention_count,
+        attention_by_check=attention_by_check,
+        items=items,
+    )
+
+
+@router.get(
+    "/{campaign_id}/readiness",
+    response_model=CampaignReadinessResponse,
+    operation_id="getCRMCampaignLaunchReadiness",
+)
+async def get_campaign_readiness(
+    campaign_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignReadinessResponse:
+    campaign = await context.session.scalar(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaign.id == campaign_id,
+        )
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if not await has_crm_permission(
+        context, permission_key="crm.campaign:view",
+        organization_unit_id=campaign.organization_unit_id,
+    ):
+        raise HTTPException(status_code=403, detail="Campaign readiness is not authorized for this organization scope")
+    if campaign.status not in {"draft", "scheduled"}:
+        raise HTTPException(status_code=409, detail="Readiness review is available for draft or scheduled campaigns")
+    purpose_key = campaign.communication_purpose_key
+
+    active_segment = await context.session.scalar(
+        select(CRMProfileSegment).where(
+            CRMProfileSegment.tenant_id == context.access.tenant_id,
+            CRMProfileSegment.organization_unit_id == campaign.organization_unit_id,
+            CRMProfileSegment.id == campaign.segment_id,
+            CRMProfileSegment.is_active.is_(True),
+        )
+    )
+    grouped_assets = (await context.session.execute(
+        select(CRMMarketingCampaignAsset.status, func.count(CRMMarketingCampaignAsset.id))
+        .where(
+            CRMMarketingCampaignAsset.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaignAsset.organization_unit_id == campaign.organization_unit_id,
+            CRMMarketingCampaignAsset.campaign_id == campaign.id,
+        )
+        .group_by(CRMMarketingCampaignAsset.status)
+    )).all()
+    asset_counts: dict[AssetStatus, int] = {
+        status: 0 for status in ("draft", "in_review", "approved", "rejected", "retired")
+    }
+    for status, count in grouped_assets:
+        asset_counts[status] = int(count)
+    approved_count = asset_counts["approved"]
+    pending_count = asset_counts["draft"] + asset_counts["in_review"] + asset_counts["rejected"]
+    content_status: Literal["complete", "missing", "pending"] = (
+        "complete" if approved_count > 0 and pending_count == 0
+        else "pending" if pending_count > 0
+        else "missing"
+    )
+    schedule_ready = campaign.starts_at is not None and campaign.ends_at is not None
+    audience_ready = active_segment is not None
+    channel_map = {
+        "email": "email",
+        "phone": "phone",
+        "messaging": "phone",
+        "social": "social_handle",
+    }
+    communication_channel = channel_map.get(campaign.channel)
+    eligibility_status: Literal["complete", "missing", "not_authorized", "unsupported"]
+    eligible_count: int | None = None
+    if communication_channel is None:
+        eligibility_status = "unsupported"
+        eligibility_explanation = "No communication-consent channel is mapped to this campaign channel."
+    else:
+        required_permissions = (
+            "crm.profile:view",
+            "crm.segment:view",
+            "crm.contact_point:view",
+            "crm.communication_consent:view",
+        )
+        permission_results = [
+            await has_crm_permission(
+                context,
+                permission_key=permission,
+                organization_unit_id=campaign.organization_unit_id,
+            )
+            for permission in required_permissions
+        ]
+        can_review_eligibility = all(permission_results)
+        if not can_review_eligibility:
+            eligibility_status = "not_authorized"
+            eligibility_explanation = "The caller cannot review audience contact and consent eligibility."
+        elif active_segment is None:
+            eligibility_status = "missing"
+            eligibility_explanation = "Link an active audience segment before reviewing channel eligibility."
+        else:
+            member_filters = await _segment_member_filters(context, active_segment)
+            latest_decision = (
+                select(CRMCommunicationConsentEvent.decision)
+                .where(
+                    CRMCommunicationConsentEvent.tenant_id == context.access.tenant_id,
+                    CRMCommunicationConsentEvent.profile_id == CRMProfile.id,
+                    CRMCommunicationConsentEvent.purpose_key == purpose_key,
+                    CRMCommunicationConsentEvent.channel == communication_channel,
+                )
+                .order_by(
+                    CRMCommunicationConsentEvent.recorded_at.desc(),
+                    CRMCommunicationConsentEvent.id.desc(),
+                )
+                .limit(1)
+                .scalar_subquery()
+            )
+            verified_contact = exists(select(1).where(
+                CRMContactPoint.tenant_id == context.access.tenant_id,
+                CRMContactPoint.profile_id == CRMProfile.id,
+                CRMContactPoint.channel == communication_channel,
+                CRMContactPoint.verification_status == "verified",
+            ))
+            eligible_count = int(await context.session.scalar(
+                select(func.count()).select_from(CRMProfile).where(
+                    *member_filters, verified_contact, latest_decision == "granted"
+                )
+            ) or 0)
+            eligibility_status = "complete" if eligible_count > 0 else "missing"
+            eligibility_explanation = (
+                f"{eligible_count} profile(s) have a verified {communication_channel} contact "
+                f"and current granted consent for purpose '{purpose_key}'."
+                if eligible_count > 0
+                else (
+                    f"No profiles have both a verified {communication_channel} contact and "
+                    f"current granted consent for purpose '{purpose_key}'."
+                )
+            )
+    checks = [
+        CampaignReadinessCheck(
+            key="campaign_schedule",
+            status="complete" if schedule_ready else "missing",
+            count=2 if schedule_ready else int(campaign.starts_at is not None) + int(campaign.ends_at is not None),
+            explanation="Both planned start and end times are set." if schedule_ready else "Set both planned start and end times.",
+        ),
+        CampaignReadinessCheck(
+            key="active_audience",
+            status="complete" if audience_ready else "inactive",
+            count=1 if audience_ready else 0,
+            explanation="The linked audience segment is active." if audience_ready else "Activate or replace the linked audience segment.",
+        ),
+        CampaignReadinessCheck(
+            key="approved_content",
+            status=content_status,
+            count=approved_count,
+            explanation=(
+                "At least one campaign asset is approved and no assets are pending review."
+                if content_status == "complete"
+                else "Content is awaiting review or revision."
+                if content_status == "pending"
+                else "Approve at least one content asset for this campaign."
+            ),
+        ),
+        CampaignReadinessCheck(
+            key="channel_eligibility",
+            status=eligibility_status,
+            count=eligible_count,
+            explanation=eligibility_explanation,
+        ),
+    ]
+    work_item_scopes = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.work_item:view")
+    )).all())
+    work_item_data_visible = campaign.organization_unit_id in work_item_scopes
+    open_work_item_count = None
+    if work_item_data_visible:
+        open_work_item_count = int(await context.session.scalar(
+            select(func.count(CRMWorkItem.id)).where(
+                CRMWorkItem.tenant_id == context.access.tenant_id,
+                CRMWorkItem.organization_unit_id == campaign.organization_unit_id,
+                CRMWorkItem.campaign_id == campaign.id,
+                CRMWorkItem.status.in_(("open", "in_progress")),
+            )
+        ) or 0)
+    latest_review_event = await context.session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.tenant_id == context.access.tenant_id,
+            AuditEvent.target_type == "crm_marketing_campaign_readiness_review",
+            AuditEvent.target_key == str(campaign.id),
+            AuditEvent.action_key == "crm_marketing_campaign.readiness_reviewed",
+        ).order_by(AuditEvent.occurred_at.desc(), AuditEvent.event_id.desc()).limit(1)
+    )
+    latest_manager_review = None
+    if latest_review_event is not None and latest_review_event.after_state is not None:
+        follow_up_id_value = latest_review_event.after_state.get("follow_up_work_item_id")
+        follow_up_item = None
+        if work_item_data_visible and follow_up_id_value:
+            follow_up_item = await context.session.scalar(
+                select(CRMWorkItem).where(
+                    CRMWorkItem.tenant_id == context.access.tenant_id,
+                    CRMWorkItem.organization_unit_id == campaign.organization_unit_id,
+                    CRMWorkItem.campaign_id == campaign.id,
+                    CRMWorkItem.id == UUID(follow_up_id_value),
+                )
+            )
+        latest_manager_review = CampaignManagerReview(
+            decision=latest_review_event.after_state["decision"],
+            note=latest_review_event.after_state.get("note"),
+            reviewed_by_identity_id=latest_review_event.actor_identity_id,
+            reviewed_at=latest_review_event.occurred_at,
+            follow_up_work_item_id=follow_up_item.id if follow_up_item is not None else None,
+            follow_up_status=follow_up_item.status if follow_up_item is not None else None,
+            follow_up_assigned_membership_id=(
+                follow_up_item.assigned_membership_id if follow_up_item is not None else None
+            ),
+            follow_up_due_at=follow_up_item.due_at if follow_up_item is not None else None,
+        )
+    return CampaignReadinessResponse(
+        campaign_id=campaign.id,
+        campaign_name=campaign.name,
+        organization_unit_id=campaign.organization_unit_id,
+        channel=campaign.channel,
+        communication_purpose_key=campaign.communication_purpose_key,
+        starts_at=campaign.starts_at,
+        ends_at=campaign.ends_at,
+        launch_readiness=(
+            "ready_for_manager_review"
+            if schedule_ready and audience_ready and content_status == "complete" and eligibility_status == "complete"
+            else "needs_attention"
+        ),
+        checks=checks,
+        asset_counts=asset_counts,
+        open_work_item_count=open_work_item_count,
+        work_item_data_visible=work_item_data_visible,
+        latest_manager_review=latest_manager_review,
+        generated_at=datetime.now(timezone.utc),
+        basis=(
+            "Readiness is a checklist for manager review, not an automatic launch approval. "
+            "It requires a complete schedule, active audience, at least one approved asset with no unresolved content reviews, "
+            "and at least one profile with a verified channel contact and latest granted consent for the requested purpose. "
+            "Unsupported channels or missing access keep the review in needs_attention. "
+            "Open work items are shown only when the caller has work-item view permission."
+        ),
+    )
+
+
+@router.post(
+    "/{campaign_id}/readiness-review",
+    response_model=CampaignReadinessResponse,
+    operation_id="recordCRMCampaignReadinessReview",
+)
+async def record_campaign_readiness_review(
+    campaign_id: UUID,
+    payload: CampaignReadinessReviewDecision,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignReadinessResponse:
+    campaign = await context.session.scalar(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaign.id == campaign_id,
+        )
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if not await has_crm_permission(
+        context,
+        permission_key="crm.campaign:manage",
+        organization_unit_id=campaign.organization_unit_id,
+    ):
+        raise HTTPException(status_code=403, detail="Campaign review is not authorized for this organization scope")
+    if campaign.status not in {"draft", "scheduled"}:
+        raise HTTPException(status_code=409, detail="Readiness decisions are available for draft or scheduled campaigns")
+    if payload.decision == "proceed_to_schedule" and campaign.status != "draft":
+        raise HTTPException(status_code=409, detail="A campaign must be draft to approve scheduling")
+    if payload.decision == "proceed_to_launch" and campaign.status != "scheduled":
+        raise HTTPException(status_code=409, detail="A campaign must be scheduled to approve activation")
+    if payload.follow_up is not None:
+        if not await has_crm_permission(
+            context,
+            permission_key="crm.work_item:create",
+            organization_unit_id=campaign.organization_unit_id,
+        ):
+            raise HTTPException(status_code=403, detail="Follow-up creation is not authorized for this organization scope")
+        if payload.follow_up.assigned_membership_id is not None:
+            active_assignee = await context.session.scalar(
+                select(WorkspaceMembership.id).where(
+                    WorkspaceMembership.tenant_id == context.access.tenant_id,
+                    WorkspaceMembership.id == payload.follow_up.assigned_membership_id,
+                    WorkspaceMembership.status == "active",
+                )
+            )
+            if active_assignee is None:
+                raise HTTPException(status_code=422, detail="Follow-up assignee must be an active workspace member")
+    readiness = await get_campaign_readiness(campaign_id=campaign_id, context=context)
+    readiness_basis = _campaign_readiness_basis(campaign, readiness)
+    follow_up_item = None
+    if payload.follow_up is not None:
+        follow_up_item = CRMWorkItem(
+            id=uuid4(),
+            tenant_id=context.access.tenant_id,
+            organization_unit_id=campaign.organization_unit_id,
+            campaign_id=campaign.id,
+            assigned_membership_id=payload.follow_up.assigned_membership_id,
+            created_by_membership_id=context.access.membership_id,
+            title=payload.follow_up.title,
+            description=payload.follow_up.description or payload.note,
+            due_at=payload.follow_up.due_at,
+            priority=payload.follow_up.priority,
+            status="open",
+            completed_at=None,
+        )
+        context.session.add(follow_up_item)
+        await context.session.flush()
+        context.session.add(AuditEvent(
+            tenant_id=context.access.tenant_id,
+            actor_kind="user",
+            actor_identity_id=context.access.identity_id,
+            actor_membership_id=context.access.membership_id,
+            action_key="crm_work_item.created",
+            target_type="crm_work_item",
+            target_key=str(follow_up_item.id),
+            organization_unit_id=campaign.organization_unit_id,
+            before_state=None,
+            after_state={
+                "campaign_id": str(campaign.id),
+                "title": follow_up_item.title,
+                "priority": follow_up_item.priority,
+                "status": follow_up_item.status,
+                "source": "campaign_readiness_review",
+            },
+            correlation_id=None,
+        ))
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign.readiness_reviewed",
+        target_type="crm_marketing_campaign_readiness_review",
+        target_key=str(campaign.id),
+        organization_unit_id=campaign.organization_unit_id,
+        before_state=None,
+        after_state={
+            "decision": payload.decision,
+            "note": payload.note,
+            "readiness": readiness.launch_readiness,
+            "check_statuses": {check.key: check.status for check in readiness.checks},
+            "readiness_basis": readiness_basis,
+            "follow_up_work_item_id": str(follow_up_item.id) if follow_up_item else None,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return await get_campaign_readiness(campaign_id=campaign_id, context=context)
+
+
+@router.get(
+    "/{campaign_id}/readiness-reviews",
+    response_model=CampaignReadinessReviewHistoryResponse,
+    operation_id="listCRMCampaignReadinessReviews",
+)
+async def list_campaign_readiness_reviews(
+    campaign_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> CampaignReadinessReviewHistoryResponse:
+    campaign = await context.session.scalar(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == context.access.tenant_id,
+            CRMMarketingCampaign.id == campaign_id,
+        )
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if not await has_crm_permission(
+        context,
+        permission_key="crm.campaign:view",
+        organization_unit_id=campaign.organization_unit_id,
+    ):
+        raise HTTPException(status_code=403, detail="Campaign review history is not authorized for this organization scope")
+    filters = [
+        AuditEvent.tenant_id == context.access.tenant_id,
+        AuditEvent.target_type == "crm_marketing_campaign_readiness_review",
+        AuditEvent.target_key == str(campaign.id),
+        AuditEvent.action_key == "crm_marketing_campaign.readiness_reviewed",
+    ]
+    total = int(await context.session.scalar(
+        select(func.count()).select_from(AuditEvent).where(*filters)
+    ) or 0)
+    events = (await context.session.scalars(
+        select(AuditEvent).where(*filters)
+        .order_by(AuditEvent.occurred_at.desc(), AuditEvent.event_id.desc())
+        .limit(limit).offset(offset)
+    )).all()
+    work_item_scopes = set((await context.session.scalars(
+        crm_scope_ids(context, permission_key="crm.work_item:view")
+    )).all())
+    can_view_work_items = campaign.organization_unit_id in work_item_scopes
+    work_item_ids = {
+        UUID(event.after_state["follow_up_work_item_id"])
+        for event in events
+        if can_view_work_items and event.after_state
+        and event.after_state.get("follow_up_work_item_id")
+    }
+    work_items_by_id = {}
+    if work_item_ids:
+        work_items = (await context.session.scalars(
+            select(CRMWorkItem).where(
+                CRMWorkItem.tenant_id == context.access.tenant_id,
+                CRMWorkItem.organization_unit_id == campaign.organization_unit_id,
+                CRMWorkItem.campaign_id == campaign.id,
+                CRMWorkItem.id.in_(work_item_ids),
+            )
+        )).all()
+        work_items_by_id = {item.id: item for item in work_items}
+    items = []
+    for event in events:
+        state = event.after_state or {}
+        follow_up_value = state.get("follow_up_work_item_id")
+        follow_up = (
+            work_items_by_id.get(UUID(follow_up_value))
+            if can_view_work_items and follow_up_value
+            else None
+        )
+        items.append(CampaignReadinessReviewHistoryItem(
+            decision=state["decision"],
+            note=state.get("note"),
+            reviewed_by_identity_id=event.actor_identity_id,
+            reviewed_at=event.occurred_at,
+            readiness=state["readiness"],
+            check_statuses=state["check_statuses"],
+            follow_up_work_item_id=follow_up.id if follow_up is not None else None,
+            follow_up_status=follow_up.status if follow_up is not None else None,
+            follow_up_assigned_membership_id=(
+                follow_up.assigned_membership_id if follow_up is not None else None
+            ),
+            follow_up_due_at=follow_up.due_at if follow_up is not None else None,
+        ))
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign.readiness_review_history_viewed",
+        target_type="crm_marketing_campaign_readiness_review_history",
+        target_key=str(campaign.id),
+        organization_unit_id=campaign.organization_unit_id,
+        before_state=None,
+        after_state={"total": total, "page_size": len(items), "offset": offset},
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignReadinessReviewHistoryResponse(
+        campaign_id=campaign.id,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(items) < total,
+        items=items,
+    )

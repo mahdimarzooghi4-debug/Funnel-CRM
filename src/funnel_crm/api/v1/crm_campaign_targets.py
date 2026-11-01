@@ -1,6 +1,6 @@
 """Manager-entered campaign goals and actual-versus-target evaluation."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -15,6 +15,7 @@ from funnel_crm.platform.models import (
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
     CRMMarketingCampaignTargetPlan,
+    CRMProductCommerceEvent,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -38,6 +39,8 @@ class CampaignTargetWrite(BaseModel):
     conversion_cost_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     min_roas: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
     roas_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    min_net_paid_to_spend: Decimal | None = Field(default=None, ge=0, max_digits=20, decimal_places=6)
+    net_paid_to_spend_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
 
     @model_validator(mode="after")
     def validate_goals(self) -> "CampaignTargetWrite":
@@ -48,7 +51,7 @@ class CampaignTargetWrite(BaseModel):
         goals = (
             self.impressions_target, self.clicks_target, self.leads_target,
             self.conversions_target, self.max_spend_amount, self.max_cpl_amount,
-            self.max_cost_per_conversion_amount, self.min_roas,
+            self.max_cost_per_conversion_amount, self.min_roas, self.min_net_paid_to_spend,
         )
         if all(value is None for value in goals):
             raise ValueError("at least one campaign target is required")
@@ -57,6 +60,7 @@ class CampaignTargetWrite(BaseModel):
             (self.max_cpl_amount, self.cpl_currency, "CPL"),
             (self.max_cost_per_conversion_amount, self.conversion_cost_currency, "cost per conversion"),
             (self.min_roas, self.roas_currency, "ROAS"),
+            (self.min_net_paid_to_spend, self.net_paid_to_spend_currency, "net paid-to-spend"),
         ):
             if (amount is None) != (currency is None):
                 raise ValueError(f"{label} target amount and currency must be provided together")
@@ -83,6 +87,8 @@ class CampaignTargetRead(BaseModel):
     conversion_cost_currency: str | None
     min_roas: Decimal | None
     roas_currency: str | None
+    min_net_paid_to_spend: Decimal | None
+    net_paid_to_spend_currency: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -195,6 +201,42 @@ def evaluate_plan_metrics(
     return metrics
 
 
+def evaluate_net_paid_to_spend_target(
+    plan: CRMMarketingCampaignTargetPlan,
+    measurements: list[CRMMarketingCampaignMeasurement],
+    commerce_events: list[CRMProductCommerceEvent],
+) -> TargetMetricEvaluation | None:
+    """Evaluate the full-period net commerce amount against same-currency spend."""
+    if plan.min_net_paid_to_spend is None or plan.net_paid_to_spend_currency is None:
+        return None
+    currency = plan.net_paid_to_spend_currency
+    matching_spend = [
+        row for row in measurements
+        if row.actual_spend_amount is not None and row.actual_spend_currency == currency
+    ]
+    paid_events = [
+        row for row in commerce_events
+        if row.event_kind == "paid" and row.currency == currency
+    ]
+    refunded_amount = sum((
+        row.amount for row in commerce_events
+        if row.event_kind == "refunded" and row.currency == currency
+    ), Decimal("0"))
+    spend = sum((row.actual_spend_amount for row in matching_spend), Decimal("0"))
+    net_paid = sum((row.amount for row in paid_events), Decimal("0")) - refunded_amount
+    actual = (
+        (net_paid / spend).quantize(Decimal("0.000001"))
+        if paid_events and matching_spend and spend > 0
+        else None
+    )
+    result = _result(
+        plan.min_net_paid_to_spend, actual, lower_is_better=False,
+        currency=currency, observed_days=len(matching_spend),
+        period_days=(plan.period_end - plan.period_start).days + 1,
+    )
+    return result
+
+
 @router.put("/{campaign_id}/targets", response_model=CampaignTargetRead,
             operation_id="setCRMMarketingCampaignTargets")
 async def set_campaign_targets(
@@ -282,6 +324,11 @@ async def evaluate_campaign_targets(
     )
     if plan is None:
         raise HTTPException(status_code=404, detail="Campaign target plan not found")
+    if plan.min_net_paid_to_spend is not None and not await has_crm_permission(
+        context, permission_key="crm.commerce_event:view",
+        organization_unit_id=campaign.organization_unit_id,
+    ):
+        raise HTTPException(status_code=403, detail="Campaign commerce outcomes are not authorized")
     rows = (await context.session.scalars(
         select(CRMMarketingCampaignMeasurement).where(
             CRMMarketingCampaignMeasurement.tenant_id == context.access.tenant_id,
@@ -292,4 +339,17 @@ async def evaluate_campaign_targets(
         ).order_by(CRMMarketingCampaignMeasurement.measured_on)
     )).all()
     metrics = evaluate_plan_metrics(plan, rows)
+    if plan.min_net_paid_to_spend is not None:
+        commerce_events = (await context.session.scalars(
+            select(CRMProductCommerceEvent).where(
+                CRMProductCommerceEvent.tenant_id == context.access.tenant_id,
+                CRMProductCommerceEvent.organization_unit_id == campaign.organization_unit_id,
+                CRMProductCommerceEvent.campaign_id == campaign_id,
+                CRMProductCommerceEvent.occurred_at >= datetime.combine(plan.period_start, time.min, tzinfo=timezone.utc),
+                CRMProductCommerceEvent.occurred_at < datetime.combine(plan.period_end + timedelta(days=1), time.min, tzinfo=timezone.utc),
+            )
+        )).all()
+        result = evaluate_net_paid_to_spend_target(plan, list(rows), list(commerce_events))
+        if result is not None:
+            metrics["period_net_paid_to_spend"] = result
     return CampaignTargetEvaluation(target_plan=CampaignTargetRead.model_validate(plan), metrics=metrics)
