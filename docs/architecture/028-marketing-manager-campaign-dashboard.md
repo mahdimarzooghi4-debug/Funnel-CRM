@@ -21,3 +21,9 @@ The selected period is limited to 366 days. Campaign reports inherit the 500-cam
 `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-comparisons?baseline_id={uuid}&current_id={uuid}` compares two snapshots created by the current identity in the active workspace. Both snapshots must have the same report period and definition version, and both hashes are verified before comparison. The response lists numeric metric paths with previous/current values, absolute and percentage changes, and explicit added/removed states; a missing value is never treated as zero. Comparison access is audited with snapshot hashes and the number of changed metrics.
 
 The same comparison is available as `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-comparisons/export.csv` with the same `baseline_id` and `current_id` query parameters. It includes snapshot IDs and hashes, period/version metadata, and one row per changed metric. Text cells are protected against spreadsheet formula execution, and the export is audited with its row and column counts.
+
+## Manager decisions and follow-up
+
+A manager can record an action against a snapshot using `POST /api/v1/crm/analytics/marketing-manager/campaigns/snapshots/{snapshot_id}/actions`. Each action has a title, decision note, optional due date, and optional active workspace assignee. The snapshot worklist at `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions` shows actions created by or assigned to the current member and supports status filtering. An assignee can view and close the action; dashboard snapshot access keeps its existing creator scope.
+
+`PATCH /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action_id}` records a completed or cancelled status with an outcome. An action can transition once from open to a terminal status; database constraints and a transition trigger enforce the rule. Creation, worklist reads, and closure are audited.
