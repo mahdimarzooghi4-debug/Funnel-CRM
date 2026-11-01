@@ -72,7 +72,7 @@ _PAGE = """<!doctype html>
       <a class="nav-item" href="/workspace/marketing-manager" aria-current="page"><span class="nav-icon">▦</span>میزکار و داشبورد نقش‌محور</a>
       <div class="nav-label">ماژول‌ها</div>
       <a class="nav-item" href="/workspace/crm-market-research"><span class="nav-icon">⌕</span>تحقیق و شناخت بازار</a>
-      <a class="nav-item" href="#planning" data-module="planning"><span class="nav-icon">◎</span>استراتژی و برنامه‌ریزی بازاریابی</a>
+      <a class="nav-item" href="/workspace/crm-marketing-planning"><span class="nav-icon">◎</span>استراتژی و برنامه‌ریزی بازاریابی</a>
       <a class="nav-item" href="/workspace/crm-catalog"><span class="nav-icon">◇</span>محصول، قیمت و پیشنهاد فروش</a>
       <a class="nav-item" href="/workspace/crm-campaigns"><span class="nav-icon">◉</span>کمپین و محتوا</a>
       <a class="nav-item" href="#channels" data-module="channels"><span class="nav-icon">⌘</span>کانال‌ها و شرکای فروش</a>
