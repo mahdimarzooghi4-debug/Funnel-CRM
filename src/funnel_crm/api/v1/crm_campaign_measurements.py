@@ -14,6 +14,7 @@ from funnel_crm.platform.models import (
     AuditEvent,
     CRMMarketingCampaign,
     CRMMarketingCampaignMeasurement,
+    CRMProfileSegment,
 )
 from funnel_crm.platform.tenant_context import TenantSessionContext
 
@@ -327,6 +328,7 @@ class CampaignBudgetConsumption(BaseModel):
 
 class CampaignPerformanceItem(BaseModel):
     campaign_id: UUID
+    segment_id: UUID
     name: str
     status: str
     channel: str
@@ -477,6 +479,7 @@ async def get_campaign_performance_portfolio(
         )
         items.append(CampaignPerformanceItem(
             campaign_id=campaign.id,
+            segment_id=campaign.segment_id,
             name=campaign.name,
             status=campaign.status,
             channel=campaign.channel,
@@ -803,6 +806,134 @@ async def get_campaign_channel_performance(
         period_start=period_start,
         period_end=period_end,
         channel_count=len(result_items),
+        measured_campaign_count=sum(item.measured_campaign_count for item in result_items),
+        items=result_items,
+        truncated=portfolio.truncated,
+    )
+
+
+class CampaignSegmentPerformanceItem(BaseModel):
+    segment_id: UUID
+    segment_name: str | None
+    campaign_count: int
+    measured_campaign_count: int
+    source_labels: list[str]
+    coverage_days: dict[str, int]
+    totals: dict[str, int | None]
+    rate_bases: dict[str, dict[str, int]]
+    click_through_rate_percent: float | None
+    lead_rate_per_click_percent: float | None
+    conversion_rate_per_click_percent: float | None
+    planned_budget_by_currency: dict[str, Decimal]
+    actual_spend_by_currency: dict[str, Decimal]
+    attributed_revenue_by_currency: dict[str, Decimal]
+
+
+class CampaignSegmentPerformanceRead(BaseModel):
+    period_start: date
+    period_end: date
+    aggregation_basis: str
+    segment_count: int
+    measured_campaign_count: int
+    items: list[CampaignSegmentPerformanceItem]
+    truncated: bool
+
+
+@router.get(
+    "/performance/segments",
+    response_model=CampaignSegmentPerformanceRead,
+    operation_id="getCRMMarketingCampaignSegmentPerformance",
+    summary="Compare campaign outcomes grouped by configured audience segment",
+)
+async def get_campaign_segment_performance(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignSegmentPerformanceRead:
+    portfolio = await get_campaign_performance_portfolio(
+        period_start=period_start, period_end=period_end, context=context
+    )
+    groups: dict[UUID, list[CampaignPerformanceItem]] = {}
+    for item in portfolio.items:
+        groups.setdefault(item.segment_id, []).append(item)
+    segment_rows = []
+    if groups:
+        segment_rows = (await context.session.scalars(
+            select(CRMProfileSegment).where(
+                CRMProfileSegment.tenant_id == context.access.tenant_id,
+                CRMProfileSegment.id.in_(list(groups)),
+            )
+        )).all()
+    segment_names = {segment.id: segment.name for segment in segment_rows}
+
+    metric_keys = (
+        "impressions", "reach", "clicks", "responses", "leads", "conversions",
+        "assigned_count", "exposure_count", "return_count",
+    )
+    rate_keys = (
+        "click_through_rate_percent", "lead_rate_per_click_percent",
+        "conversion_rate_per_click_percent",
+    )
+    result_items: list[CampaignSegmentPerformanceItem] = []
+    for segment_id, campaigns in sorted(groups.items(), key=lambda item: str(item[0])):
+        totals: dict[str, int | None] = {}
+        coverage: dict[str, int] = {}
+        for key in metric_keys:
+            values = [item.totals[key] for item in campaigns if item.totals[key] is not None]
+            totals[key] = sum(values) if values else None
+            coverage[key] = sum(item.coverage_days[key] for item in campaigns)
+
+        rate_bases: dict[str, dict[str, int]] = {}
+        rates: dict[str, float | None] = {}
+        for key in rate_keys:
+            bases = [item.rate_bases[key] for item in campaigns if item.rate_bases.get(key)]
+            if bases:
+                numerator = sum(item["numerator"] for item in bases)
+                denominator = sum(item["denominator"] for item in bases)
+                rate_bases[key] = {"numerator": numerator, "denominator": denominator}
+                rates[key] = round(100 * numerator / denominator, 4) if denominator else None
+            else:
+                rate_bases[key] = {}
+                rates[key] = None
+
+        planned_budget_by_currency: dict[str, Decimal] = {}
+        for campaign in campaigns:
+            if campaign.planned_budget_amount is not None and campaign.planned_budget_currency is not None:
+                currency = campaign.planned_budget_currency
+                planned_budget_by_currency[currency] = (
+                    planned_budget_by_currency.get(currency, Decimal("0"))
+                    + campaign.planned_budget_amount
+                )
+
+        def sum_currency_map(attribute: str) -> dict[str, Decimal]:
+            result: dict[str, Decimal] = {}
+            for campaign in campaigns:
+                for currency, amount in getattr(campaign, attribute).items():
+                    result[currency] = result.get(currency, Decimal("0")) + amount
+            return result
+
+        result_items.append(CampaignSegmentPerformanceItem(
+            segment_id=segment_id,
+            segment_name=segment_names.get(segment_id),
+            campaign_count=len(campaigns),
+            measured_campaign_count=sum(campaign.record_count > 0 for campaign in campaigns),
+            source_labels=sorted({label for campaign in campaigns for label in campaign.source_labels}),
+            coverage_days=coverage,
+            totals=totals,
+            rate_bases=rate_bases,
+            click_through_rate_percent=rates["click_through_rate_percent"],
+            lead_rate_per_click_percent=rates["lead_rate_per_click_percent"],
+            conversion_rate_per_click_percent=rates["conversion_rate_per_click_percent"],
+            planned_budget_by_currency=planned_budget_by_currency,
+            actual_spend_by_currency=sum_currency_map("actual_spend_by_currency"),
+            attributed_revenue_by_currency=sum_currency_map("attributed_revenue_by_currency"),
+        ))
+
+    return CampaignSegmentPerformanceRead(
+        period_start=period_start,
+        period_end=period_end,
+        aggregation_basis="campaign_configured_audience_segment",
+        segment_count=len(result_items),
         measured_campaign_count=sum(item.measured_campaign_count for item in result_items),
         items=result_items,
         truncated=portfolio.truncated,
