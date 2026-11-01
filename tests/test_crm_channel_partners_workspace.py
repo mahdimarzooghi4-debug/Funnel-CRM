@@ -17,6 +17,8 @@ def test_channel_partners_page_and_security_headers() -> None:
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert 'lang="fa" dir="rtl"' in response.text
     assert 'src="/assets/crm-channel-partners.js"' in response.text
+    assert 'id="partner-details" hidden' in response.text
+    assert 'id="partner-details-close"' in response.text
 
 
 def test_channel_partners_script_uses_scoped_apis_and_safe_dom() -> None:
