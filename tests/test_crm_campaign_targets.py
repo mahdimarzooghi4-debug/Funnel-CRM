@@ -551,6 +551,31 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert verification_history.status_code == 200, verification_history.text
         assert len(verification_history.json()["items"]) == 1
 
+        learning_analytics = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/verification-analytics",
+            headers=headers,
+        )
+        assert learning_analytics.status_code == 200, learning_analytics.text
+        learning_report = learning_analytics.json()
+        assert learning_report["summary"]["verification_count"] == 1
+        assert learning_report["summary"]["expected_count"] == 1
+        assert learning_report["summary"]["matched_count"] == 1
+        assert learning_report["summary"]["direction_match_rate_percent"] == "100.00"
+        assert learning_report["metrics"][0]["metric_path"] == "performance.totals.clicks"
+        assert learning_report["metrics"][0]["unchanged_count"] == 1
+
+        learning_export = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/verification-analytics/export.csv",
+            headers=headers,
+        )
+        assert learning_export.status_code == 200, learning_export.text
+        assert learning_export.headers["content-type"].startswith("text/csv")
+        learning_csv = learning_export.content.decode("utf-8-sig")
+        assert learning_csv.startswith(
+            "record_type,metric_path,value,verification_count,expected_count"
+        )
+        assert "performance.totals.clicks" in learning_csv
+
         duplicate_verification = await client.post(
             f"/api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action['id']}/verifications",
             headers=headers,
