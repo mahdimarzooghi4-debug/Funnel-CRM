@@ -771,6 +771,26 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert below_threshold_alerts.status_code == 200, below_threshold_alerts.text
         assert below_threshold_alerts.json()["alert_count"] == 0
 
+        pacing_alert_export = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/alerts/export.csv",
+            headers=headers,
+            params={
+                "period_start": "2026-10-16",
+                "as_of": "2026-10-16",
+                "variance_threshold_percent": 50,
+            },
+        )
+        assert pacing_alert_export.status_code == 200, pacing_alert_export.text
+        assert pacing_alert_export.headers["content-type"].startswith("text/csv")
+        assert "attachment;" in pacing_alert_export.headers["content-disposition"]
+        alert_csv = pacing_alert_export.content.decode("utf-8-sig")
+        assert alert_csv.startswith(
+            "record_type,campaign_id,campaign_name,campaign_status,period_start"
+        )
+        assert "alert_threshold" in alert_csv
+        assert "behind_pace" in alert_csv
+        assert "Scheduled budget pacing" in alert_csv
+
         pacing_export = await client.get(
             "/api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/export.csv",
             headers=headers,
