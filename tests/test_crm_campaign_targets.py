@@ -743,6 +743,21 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert pacing_item["pacing_status"] == "behind_pace"
         assert pacing_item["budget_currency"] == "USD"
 
+        pacing_export = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/budget-pacing/export.csv",
+            headers=headers,
+            params={"period_start": "2026-10-16", "as_of": "2026-10-16"},
+        )
+        assert pacing_export.status_code == 200, pacing_export.text
+        assert pacing_export.headers["content-type"].startswith("text/csv")
+        assert "attachment;" in pacing_export.headers["content-disposition"]
+        pacing_csv = pacing_export.content.decode("utf-8-sig")
+        assert pacing_csv.startswith(
+            "record_type,campaign_id,campaign_name,currency,pacing_status"
+        )
+        assert "behind_pace" in pacing_csv
+        assert "Scheduled budget pacing" in pacing_csv
+
 
 def test_dashboard_csv_text_neutralizes_spreadsheet_formulas() -> None:
     assert _csv_safe_text("=HYPERLINK(\"https://example.invalid\")").startswith("'=")
