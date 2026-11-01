@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaign_targets import evaluate_net_paid_to_spend_target, router
 from funnel_crm.api.v1.crm_campaign_target_analytics import router as target_analytics_router
+from funnel_crm.api.v1.crm_marketing_manager_dashboard import router as marketing_manager_dashboard_router
 from funnel_crm.api.v1.crm_work_items import router as work_items_router
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
@@ -80,6 +81,7 @@ def make_app(
 
     app.include_router(router, prefix="/api/v1")
     app.include_router(target_analytics_router, prefix="/api/v1")
+    app.include_router(marketing_manager_dashboard_router, prefix="/api/v1")
     app.include_router(work_items_router, prefix="/api/v1")
     return app
 
@@ -377,6 +379,30 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         assert report["groups"][0]["metric_variances"]["leads"]["incomplete_target_total"] == 18
         assert report["campaigns"][0]["metrics"]["roas"]["currency"] == "USD"
         assert report["period_calendar_days"] == 2
+
+        dashboard = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns",
+            headers=headers,
+            params={"period_start": "2026-10-16", "period_end": "2026-10-17"},
+        )
+        assert dashboard.status_code == 200, dashboard.text
+        dashboard_report = dashboard.json()
+        assert dashboard_report["performance"]["campaign_count"] == 3
+        assert dashboard_report["performance"]["measured_campaign_count"] == 2
+        assert dashboard_report["performance"]["planned_budget_by_currency"] == {}
+        assert dashboard_report["performance"]["actual_spend_by_currency"] == {
+            "EUR": "10.000000", "USD": "50.000000",
+        }
+        assert dashboard_report["data_quality"]["campaigns_without_measurements"] == 1
+        assert dashboard_report["data_quality"]["expected_campaign_days"] == 6
+        assert dashboard_report["data_quality"]["covered_campaign_days"] == 3
+        assert dashboard_report["data_quality"]["missing_campaign_days"] == 3
+        assert dashboard_report["target_attainment"]["campaign_count"] == 3
+        assert dashboard_report["target_attainment"]["metric_outcomes"]["clicks"] == {
+            "evaluated": 1, "met": 0, "not_met": 1, "no_data": 0,
+        }
+        assert len(dashboard_report["channel_performance"]) == 1
+        assert len(dashboard_report["segment_performance"]) == 1
         assert report["metric_definitions"]["roas"]["key"] == "reported_roas"
         assert report["metric_outcomes"]["period_net_paid_to_spend"]["met"] == 1
         pooled_usd = next(
