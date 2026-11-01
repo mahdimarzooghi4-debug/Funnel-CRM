@@ -38,8 +38,8 @@ def test_campaign_workspace_client_uses_scoped_campaign_asset_and_calendar_apis(
     assert "/api/v1/crm/segments?limit=100" in response.text
     assert "/api/v1/crm/campaigns" in response.text
     assert "/api/v1/crm/marketing-assets" in response.text
-    assert "/submit" in response.text
-    assert "/review" in response.text
+    assert 'assetAction(a,"submit")' in response.text
+    assert 'assetAction(a,"review",{decision:"approve"})' in response.text
     assert "/api/v1/crm/marketing-calendar/events" in response.text
     assert 'method:"PATCH"' in response.text
     assert 'method:"POST"' in response.text
