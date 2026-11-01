@@ -3,7 +3,7 @@ const source=execFileSync('python',['-c','from funnel_crm.web.crm_support_worksp
 function harness(responder){
  const nodes=new Map();function node(id){if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',children:[],disabled:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=items},addEventListener(){},reset(){this.resetCalled=true}});return nodes.get(id)}
  const calls=[];const ctx={document:{getElementById:node,createElement:()=>({textContent:'',children:[],append(...items){this.children.push(...items)},addEventListener(){}})},Intl,URLSearchParams,Date,fetch:async(path,options)=>{calls.push({path,options});return responder?responder(path,options):{ok:true,json:async()=>({items:[],total:0,overdue_count:0})}}};
- vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope,openHistory,closeHistory,saveEntry,loadSLA,renderSLA,savePlanning,localDateTime};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
+ vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope,openHistory,closeHistory,saveEntry,loadSLA,renderSLA,savePlanning,localDateTime,assignCase};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
  return {node,calls,api:ctx.testAPI};
 }
 test('filters keep unit scope and use server pagination',()=>{const h=harness();h.node('state').value='open';h.node('priority').value='urgent';h.node('overdue').value='true';const q=h.api.query();assert.equal(q.get('organization_unit_id'),'unit-a');assert.equal(q.get('limit'),'50');assert.equal(q.get('status'),'open');assert.equal(q.get('overdue_only'),'true')});
@@ -47,4 +47,11 @@ test('clearing an existing deadline sends explicit null; unchanged plan does not
 test('planning failures preserve edits and closed cases cannot update',async()=>{
  const h=harness(async(path,options)=>({ok:options.method!=='PATCH',json:async()=>options.method==='PATCH'?{detail:'denied'}:{items:[],total:0}}));await h.api.openHistory({id:'case-a',subject:'Plan',status:'open',priority:'normal'},'ws-a:unit-a');h.node('planning-priority').value='high';await h.api.savePlanning({preventDefault(){}});assert.equal(h.node('planning-priority').value,'high');assert.equal(h.node('planning-save').disabled,false);assert.match(h.node('message').textContent,/ذخیره انجام نشد/);
  const closed=harness();await closed.api.openHistory({id:'case-b',subject:'Closed',status:'closed',priority:'normal'},'ws-a:unit-a');await closed.api.savePlanning({preventDefault(){}});assert.equal(closed.calls.filter(c=>c.options.method==='PATCH').length,0);assert.equal(closed.node('planning-save').disabled,true);
+});
+
+test('mine filter uses server scope and assignment never supplies a client identity',async()=>{
+ const h=harness();h.node('ownership').value='mine';assert.equal(h.api.query().get('assigned_to_me'),'true');await h.api.assignCase('case-a',false,'ws-a:unit-a');const call=h.calls.find(c=>c.options.method==='POST');assert.equal(call.path,'/api/v1/crm/support-cases/case-a/assign-to-me');assert.equal(call.options.body,undefined);
+});
+test('release explicitly clears assignment and stale-scope assignment is blocked',async()=>{
+ const h=harness();await h.api.assignCase('case-a',true,'ws-a:unit-a');const call=h.calls.find(c=>c.options.method==='PATCH');assert.deepEqual(JSON.parse(call.options.body),{assigned_membership_id:null});const count=h.calls.length;await h.api.assignCase('case-a',false,'other:scope');assert.equal(h.calls.length,count);
 });
