@@ -107,6 +107,7 @@ _SCRIPT = r"""(() => {
   function unitQuery(){return unit.value?"&organization_unit_id="+encodeURIComponent(unit.value):"";}
   function localIso(id){const value=$(id).value;return value?new Date(value).toISOString():null;}
   function dateLabel(value){return value?new Date(value).toLocaleString("fa-IR"):"تعیین نشده";}
+  function localInputValue(value){if(!value)return "";const date=new Date(value);return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);}
   async function loadSegments(){
     const q=unitQuery();const page=await api("/api/v1/crm/segments?limit=100"+q);segments=(page.items||[]).filter(item=>item.is_active);
     const select=$("campaign-segment");select.replaceChildren();const placeholder=el("option","گروه مخاطب را انتخاب کنید");placeholder.value="";select.appendChild(placeholder);
@@ -140,8 +141,8 @@ _SCRIPT = r"""(() => {
   function editCampaign(c){
     editingId=c.id;$("campaign-form").hidden=false;$("campaign-form-title").textContent="ویرایش کمپین پیش‌نویس";$("save-campaign").textContent="ذخیرهٔ تغییر";
     $("campaign-name").value=c.name;$("campaign-segment").value=c.segment_id;$("campaign-objective").value=c.objective_key;$("campaign-channel").value=c.channel;
-    $("campaign-start").value=c.starts_at?new Date(c.starts_at).toISOString().slice(0,16):"";
-    $("campaign-end").value=c.ends_at?new Date(c.ends_at).toISOString().slice(0,16):"";
+    $("campaign-start").value=localInputValue(c.starts_at);
+    $("campaign-end").value=localInputValue(c.ends_at);
     $("campaign-budget").value=c.planned_budget_amount??"";$("campaign-currency").value=c.planned_budget_currency??"";
     $("campaign-form").scrollIntoView({behavior:"smooth",block:"start"});
   }
