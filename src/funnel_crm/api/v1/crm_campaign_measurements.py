@@ -521,7 +521,8 @@ async def get_campaign_performance_portfolio(
             lead_rate_per_click_percent=paired_rate("leads", "clicks"),
             conversion_rate_per_click_percent=paired_rate("conversions", "clicks"),
             actual_spend_by_currency=spend_by_currency,
-            attributed_revenue_by_currency=revenue_by_currency,\n            efficiency=_campaign_efficiency(spend_by_currency, revenue_by_currency),
+            attributed_revenue_by_currency=revenue_by_currency,
+            efficiency=_campaign_efficiency(spend_by_currency, revenue_by_currency),
             budget_consumption=budget_consumption,
             rate_bases={
                 "click_through_rate_percent": paired_totals("clicks", "impressions"),
@@ -830,6 +831,10 @@ async def get_campaign_channel_performance(
             planned_budget_by_currency=planned_budget_by_currency,
             actual_spend_by_currency=sum_currency_map("actual_spend_by_currency"),
             attributed_revenue_by_currency=sum_currency_map("attributed_revenue_by_currency"),
+            efficiency=_campaign_efficiency(
+                sum_currency_map("actual_spend_by_currency"),
+                sum_currency_map("attributed_revenue_by_currency"),
+            ),
         ))
 
     return CampaignChannelPerformanceRead(
@@ -960,6 +965,10 @@ async def get_campaign_segment_performance(
             planned_budget_by_currency=planned_budget_by_currency,
             actual_spend_by_currency=sum_currency_map("actual_spend_by_currency"),
             attributed_revenue_by_currency=sum_currency_map("attributed_revenue_by_currency"),
+            efficiency=_campaign_efficiency(
+                sum_currency_map("actual_spend_by_currency"),
+                sum_currency_map("attributed_revenue_by_currency"),
+            ),
         ))
 
     return CampaignSegmentPerformanceRead(
