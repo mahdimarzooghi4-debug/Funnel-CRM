@@ -27,3 +27,7 @@ The same comparison is available as `GET /api/v1/crm/analytics/marketing-manager
 A manager can record an action against a snapshot using `POST /api/v1/crm/analytics/marketing-manager/campaigns/snapshots/{snapshot_id}/actions`. Each action has a title, decision note, optional due date, and optional active workspace assignee. The snapshot worklist at `GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions` shows actions created by or assigned to the current member and supports status filtering. An assignee can view and close the action; dashboard snapshot access keeps its existing creator scope.
 
 `PATCH /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/{action_id}` records a completed or cancelled status with an outcome. An action can transition once from open to a terminal status; database constraints and a transition trigger enforce the rule. Creation, worklist reads, and closure are audited.
+
+## Action tracking analytics
+
+`GET /api/v1/crm/analytics/marketing-manager/campaigns/snapshot-actions/analytics` summarizes actions created by or assigned to the current member. It reports open/completed/cancelled counts, overdue open actions, open actions due within seven days, completion rate among closed actions, and average days to closure. A null completion rate means there are no closed actions yet. The overdue and due-soon counts use the database's current date; the read is audited.
