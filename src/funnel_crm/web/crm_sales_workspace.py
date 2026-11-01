@@ -198,7 +198,7 @@ _SCRIPT = r"""(() => {
     const entries=Object.entries(values||{});card.appendChild(node("div",entries.length?entries.map(([currency,value])=>number.format(Number(value))+" "+currency).join(" · "):"داده‌ای برای این بازه ثبت نشده است.","row-meta"));return card;
   }
   async function loadForecast(){
-    if(!pipelineSelect.value)return;
+    if(!pipelineSelect.value||!unit.value)return;
     const start=$("forecast-start").value,end=$("forecast-end").value;if(!start||!end||start>end){say("بازهٔ پیش‌بینی را بررسی کنید.",true);return;}
     try{
       const result=await api("/api/v1/crm/sales-forecast/opportunities?pipeline_id="+encodeURIComponent(pipelineSelect.value)+"&period_start="+start+"&period_end="+end+"&organization_unit_id="+encodeURIComponent(unit.value));
