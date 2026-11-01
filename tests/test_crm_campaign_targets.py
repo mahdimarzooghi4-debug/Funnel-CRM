@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from funnel_crm.api.v1.crm_campaign_targets import evaluate_net_paid_to_spend_target, router
 from funnel_crm.api.v1.crm_campaign_target_analytics import router as target_analytics_router
-from funnel_crm.api.v1.crm_marketing_manager_dashboard import router as marketing_manager_dashboard_router
+from funnel_crm.api.v1.crm_marketing_manager_dashboard import (
+    _csv_safe_text,
+    router as marketing_manager_dashboard_router,
+)
 from funnel_crm.api.v1.crm_work_items import router as work_items_router
 from funnel_crm.platform.models import (
     CRMMarketingCampaign,
@@ -403,6 +406,21 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
         }
         assert len(dashboard_report["channel_performance"]) == 1
         assert len(dashboard_report["segment_performance"]) == 1
+
+        export_response = await client.get(
+            "/api/v1/crm/analytics/marketing-manager/campaigns/export.csv",
+            headers=headers,
+            params={"period_start": "2026-10-16", "period_end": "2026-10-17"},
+        )
+        assert export_response.status_code == 200, export_response.text
+        assert export_response.headers["content-type"].startswith("text/csv")
+        assert "attachment;" in export_response.headers["content-disposition"]
+        export_text = export_response.content.decode("utf-8-sig")
+        assert export_text.startswith("record_type,key,label,currency,metric,value")
+        assert "report_definition_version" in export_text
+        assert "metric_coverage" in export_text
+        assert "target_outcome" in export_text
+        assert "manager_signal" in export_text
         assert report["metric_definitions"]["roas"]["key"] == "reported_roas"
         assert report["metric_outcomes"]["period_net_paid_to_spend"]["met"] == 1
         pooled_usd = next(
@@ -473,3 +491,9 @@ async def test_campaign_targets_upsert_and_evaluation_use_currency_matched_obser
             "leads_target": 10,
         })
         assert invalid.status_code == 422
+
+
+def test_dashboard_csv_text_neutralizes_spreadsheet_formulas() -> None:
+    assert _csv_safe_text("=HYPERLINK(\"https://example.invalid\")").startswith("'=")
+    assert _csv_safe_text("ordinary segment").startswith("ordinary")
+    assert _csv_safe_text("  @SUM(A1:A2)").startswith("'  @")

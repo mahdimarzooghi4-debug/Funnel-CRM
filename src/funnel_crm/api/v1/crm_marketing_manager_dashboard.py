@@ -1,11 +1,12 @@
 """Unified read-only dashboard for marketing managers."""
 
-from datetime import date
+import csv
+from datetime import date, datetime, timezone
+from io import StringIO
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import select
 
 from funnel_crm.api.dependencies.tenant import require_tenant_session
 from funnel_crm.api.v1.crm_campaign_measurements import (
@@ -80,6 +81,8 @@ class DashboardTargetSummary(BaseModel):
 
 
 class MarketingManagerDashboardRead(BaseModel):
+    generated_at: datetime
+    report_definition_version: str
     period_start: date
     period_end: date
     performance: DashboardPerformanceSummary
@@ -214,6 +217,8 @@ async def get_marketing_manager_campaign_dashboard(
     await context.session.flush()
 
     return MarketingManagerDashboardRead(
+        generated_at=datetime.now(timezone.utc),
+        report_definition_version="1",
         period_start=period_start,
         period_end=period_end,
         performance=DashboardPerformanceSummary(
@@ -244,4 +249,172 @@ async def get_marketing_manager_campaign_dashboard(
             "Currency totals remain separate; target and measurement gaps are descriptive, "
             "and reported relationships do not establish causality."
         ),
+    )
+
+
+def _csv_safe_text(value: str) -> str:
+    """Neutralize spreadsheet formulas in untrusted text cells."""
+    if value.lstrip(" \t\r\n").startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
+
+
+@router.get(
+    "/campaigns/export.csv",
+    response_class=Response,
+    operation_id="exportMarketingManagerCampaignDashboardCsv",
+    summary="Export the marketing manager campaign dashboard as CSV",
+)
+async def export_marketing_manager_campaign_dashboard_csv(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> Response:
+    dashboard = await get_marketing_manager_campaign_dashboard(
+        period_start=period_start,
+        period_end=period_end,
+        context=context,
+    )
+    columns = (
+        "record_type", "key", "label", "currency", "metric", "value",
+        "target", "actual", "status", "observed_days", "expected_days",
+        "coverage_percent",
+    )
+    rows: list[dict[str, object]] = []
+
+    def add_row(record_type: str, **values: object) -> None:
+        rows.append({"record_type": record_type, **values})
+
+    add_row("metadata", key="report_definition_version", value=dashboard.report_definition_version)
+    add_row("metadata", key="generated_at", value=dashboard.generated_at.isoformat())
+    add_row("metadata", key="period_start", value=dashboard.period_start.isoformat())
+    add_row("metadata", key="period_end", value=dashboard.period_end.isoformat())
+    add_row("metadata", key="dashboard_basis", value=dashboard.dashboard_basis)
+
+    summary = dashboard.performance
+    add_row("summary", key="campaign_count", value=summary.campaign_count)
+    add_row("summary", key="measured_campaign_count", value=summary.measured_campaign_count)
+    add_row("summary", key="campaigns_truncated", value=summary.truncated)
+    for metric, value in summary.totals.items():
+        add_row("summary_metric", metric=metric, value=value)
+    for currency, value in summary.planned_budget_by_currency.items():
+        add_row("planned_budget", currency=currency, value=value)
+    for currency, value in summary.actual_spend_by_currency.items():
+        add_row("actual_spend", currency=currency, value=value)
+    for currency, value in summary.attributed_revenue_by_currency.items():
+        add_row("attributed_revenue", currency=currency, value=value)
+    for currency, value in summary.efficiency.attributed_revenue_minus_spend_by_currency.items():
+        add_row("revenue_minus_spend", currency=currency, value=value)
+    for currency, value in summary.efficiency.return_on_ad_spend_by_currency.items():
+        add_row("return_on_ad_spend", currency=currency, value=value)
+
+    def write_group(record_type: str, key: str, label: str, campaign_count: int,
+                    totals: dict[str, int | None], spend: dict[str, Decimal],
+                    revenue: dict[str, Decimal], efficiency: CampaignEfficiencyMetrics) -> None:
+        add_row(record_type, key=key, label=label, metric="campaign_count", value=campaign_count)
+        for metric, value in totals.items():
+            add_row(record_type + "_metric", key=key, label=label, metric=metric, value=value)
+        for currency, value in spend.items():
+            add_row(record_type + "_spend", key=key, label=label, currency=currency, value=value)
+        for currency, value in revenue.items():
+            add_row(record_type + "_revenue", key=key, label=label, currency=currency, value=value)
+        for currency, value in efficiency.attributed_revenue_minus_spend_by_currency.items():
+            add_row(record_type + "_revenue_minus_spend", key=key, label=label, currency=currency, value=value)
+        for currency, value in efficiency.return_on_ad_spend_by_currency.items():
+            add_row(record_type + "_return_on_ad_spend", key=key, label=label, currency=currency, value=value)
+
+    for item in dashboard.channel_performance:
+        write_group(
+            "channel", item.channel, item.channel, item.campaign_count, item.totals,
+            item.actual_spend_by_currency, item.attributed_revenue_by_currency, item.efficiency,
+        )
+    for item in dashboard.segment_performance:
+        write_group(
+            "segment", str(item.segment_id), item.segment_name or "", item.campaign_count,
+            item.totals, item.actual_spend_by_currency, item.attributed_revenue_by_currency,
+            item.efficiency,
+        )
+
+    quality = dashboard.data_quality
+    for key in (
+        "campaigns_without_measurements", "expected_campaign_days",
+        "covered_campaign_days", "missing_campaign_days",
+        "out_of_schedule_measurement_days",
+    ):
+        add_row("data_quality", key=key, value=getattr(quality, key))
+    for metric, coverage in quality.metric_coverage.items():
+        add_row(
+            "metric_coverage", metric=metric, observed_days=coverage.observed_days,
+            expected_days=coverage.expected_days, value=coverage.missing_days,
+            coverage_percent=coverage.coverage_percent,
+        )
+
+    targets = dashboard.target_attainment
+    for metric, outcomes in targets.metric_outcomes.items():
+        for status_key in ("met", "not_met", "no_data"):
+            add_row(
+                "target_outcome", key=metric, metric=status_key,
+                value=getattr(outcomes, status_key),
+            )
+    for metric, variance in targets.metric_variances.items():
+        for field in (
+            "targeted_campaign_count", "complete_campaign_count", "incomplete_campaign_count",
+            "target_total", "complete_actual_total", "complete_campaign_target_total",
+            "complete_variance", "incomplete_target_total", "partial_actual_total",
+        ):
+            add_row("target_variance", key=metric, metric=field, value=getattr(variance, field))
+    for signal in targets.manager_signals:
+        add_row(
+            "manager_signal", key=str(signal.campaign_id), label=signal.recommended_action,
+            metric=signal.metric_key, target=signal.target, actual=signal.actual,
+            currency=signal.currency, status=signal.signal_type,
+            observed_days=signal.observed_days, expected_days=signal.period_days,
+        )
+    for outcome in targets.commerce_outcomes_by_currency:
+        add_row(
+            "commerce_outcome", currency=outcome.currency, metric="net_paid_amount",
+            value=outcome.net_paid_amount,
+        )
+    for outcome in targets.commerce_outcomes_by_source_product:
+        add_row(
+            "commerce_source_outcome", key=outcome.source_product,
+            currency=outcome.currency, metric="net_paid_amount", value=outcome.net_paid_amount,
+        )
+
+    buffer = StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        for field in ("record_type", "key", "label", "currency", "metric", "status"):
+            value = row.get(field)
+            if isinstance(value, str):
+                row[field] = _csv_safe_text(value)
+        writer.writerow(row)
+
+    generated_at = dashboard.generated_at.isoformat()
+    context.session.add(AuditEvent(
+        tenant_id=context.access.tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_manager.campaign_dashboard.exported",
+        target_type="crm_marketing_manager_campaign_dashboard_export",
+        target_key=f"{period_start.isoformat()}:{period_end.isoformat()}",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "format": "csv",
+            "report_definition_version": dashboard.report_definition_version,
+            "generated_at": generated_at,
+            "row_count": len(rows),
+            "column_count": len(columns),
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    filename = f"funnel-crm-campaign-dashboard-{period_start.isoformat()}-{period_end.isoformat()}.csv"
+    return Response(
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
