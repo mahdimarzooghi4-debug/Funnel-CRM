@@ -55,7 +55,11 @@ def upgrade() -> None:
         CREATE FUNCTION reject_crm_marketing_dashboard_snapshot_mutation()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
-            RAISE EXCEPTION 'marketing dashboard snapshots are immutable';
+            IF TG_OP = 'UPDATE'
+               OR NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL THEN
+                RAISE EXCEPTION 'marketing dashboard snapshots are immutable';
+            END IF;
+            RETURN OLD;
         END;
         $$
     """)
