@@ -248,6 +248,22 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         assert web["lead_rate_per_click_percent"] == 12.0
         assert web["planned_budget_by_currency"] == {"USD": "500.000000"}
         assert web["actual_spend_by_currency"] == {"EUR": "10.000000", "USD": "20.000000"}
+
+        segments = await client.get(
+            "/api/v1/crm/campaigns/performance/segments",
+            headers=headers,
+            params={"period_start": first_day.isoformat(), "period_end": second_day.isoformat()},
+        )
+        assert segments.status_code == 200, segments.text
+        segment_report = segments.json()
+        assert segment_report["aggregation_basis"] == "campaign_configured_audience_segment"
+        assert segment_report["segment_count"] == 1
+        segment = segment_report["items"][0]
+        assert segment["segment_id"] == str(segment_id)
+        assert segment["segment_name"].startswith("Measurement audience ")
+        assert segment["campaign_count"] == 1
+        assert segment["totals"]["conversions"] == 3
+        assert segment["conversion_rate_per_click_percent"] == 4.0
         assert item["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
 
         comparison = await client.get(
