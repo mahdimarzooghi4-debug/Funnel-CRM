@@ -163,7 +163,7 @@ _SCRIPT = r"""(() => {
   const status = $("status");
   const warn = $("data-warning");
   const params = new URLSearchParams(window.location.search);
-  const moduleData = { campaigns: "/api/v1/crm/campaigns?limit=8", sales: "/api/v1/crm/opportunities?limit=8", learning: "/api/v1/crm/marketing-learning/reviews", admin: "/api/v1/integrations/connections" };
+  const moduleData = { research: "/api/v1/crm/segments?limit=8", planning: "/api/v1/crm/marketing-calendar/events?period_start={start}&period_end={end}", channels: "/api/v1/crm/analytics/marketing-manager/campaigns?period_start={start}&period_end={end}", analytics: "/api/v1/crm/analytics/campaign-performance?period_start={start}&period_end={end}&grouped_by=channel&limit=8", lifecycle: "/api/v1/crm/analytics/customer-lifecycle/follow-up-candidates?inactive_for_days=30&limit=8", campaigns: "/api/v1/crm/campaigns?limit=8", sales: "/api/v1/crm/opportunities?limit=8", learning: "/api/v1/crm/marketing-learning/reviews", admin: "/api/v1/integrations/connections" };
   const moduleInfo = {
     research: { title: "تحقیق و شناخت بازار", description: "شناخت بازار، مشتری، رقبا و روندها با ثبت منبع و کیفیت شواهد.", features: ["برنامه‌ریزی تحقیق و ثبت فرضیه", "مصاحبه، بازخورد و صدای مشتری", "تحلیل بازار، رقبا، روندها و فرصت‌ها", "بخش‌بندی و تعریف گروه هدف"] },
     planning: { title: "استراتژی و برنامه‌ریزی بازاریابی", description: "تبدیل هدف کسب‌وکار به برنامه، بودجه، تقویم، مسئول و معیار سنجش.", features: ["هدف‌ها و شاخص‌های هم‌راستا", "برنامه و تقویم بازاریابی", "بودجهٔ مصوب، تعهدشده، هزینه‌شده و مانده", "مقایسهٔ سناریوهای بودجه"], links: [["مقایسهٔ سناریوهای بودجه", "/workspace/budget-scenario-comparison"]] },
@@ -195,7 +195,7 @@ _SCRIPT = r"""(() => {
       const link = document.createElement("a"); link.className = "module-link"; link.href = href; link.textContent = label; links.appendChild(link);
     });
     const dataHost = $("module-data"); dataHost.replaceChildren();
-    if (moduleData[id]) loadModuleRecords(moduleData[id], dataHost, item.title);
+    if (moduleData[id]) loadModuleRecords(moduleData[id].replace("{start}", $("period-start").value).replace("{end}", $("period-end").value), dataHost, item.title);
     else append(dataHost, "p", "برای این ماژول هنوز فهرست اجرایی متصل نشده است.", "module-empty");
     setStatus(moduleData[id] ? "در حال دریافت دادهٔ مجاز این ماژول…" : "نمای ماژول آماده است؛ اتصال داده در صف پیاده‌سازی است.");
     document.querySelectorAll(".nav-item[data-module]").forEach((link) => link.removeAttribute("aria-current"));
@@ -228,7 +228,7 @@ _SCRIPT = r"""(() => {
   async function loadModuleRecords(path, host, title) {
     try {
       const result = await api(path);
-      const records = Array.isArray(result) ? result : (result.items || result.results || result.records || result.data || []);
+      const records = Array.isArray(result) ? result : (result.items || result.results || result.records || result.candidates || result.campaigns || result.events || result.channel_performance || result.groups || result.data || []);
       host.replaceChildren();
       if (!records.length) { append(host, "p", "برای این فضای کاری موردی برای نمایش وجود ندارد.", "module-empty"); setStatus("فهرست " + title + " بارگذاری شد."); return; }
       records.slice(0, 8).forEach((record, index) => {
