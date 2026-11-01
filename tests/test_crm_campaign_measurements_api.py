@@ -268,6 +268,31 @@ async def test_campaign_measurements_upsert_and_report_observed_metrics_and_mone
         assert segment["totals"]["conversions"] == 3
         assert segment["conversion_rate_per_click_percent"] == 4.0
         assert segment["efficiency"]["return_on_ad_spend_by_currency"] == {"EUR": 4.0, "USD": 5.0}
+
+        quality = await client.get(
+            "/api/v1/crm/campaigns/performance/data-quality",
+            headers=headers,
+            params={"period_start": first_day.isoformat(), "period_end": second_day.isoformat()},
+        )
+        assert quality.status_code == 200, quality.text
+        quality_report = quality.json()
+        assert quality_report["campaign_count"] == 1
+        assert quality_report["expected_campaign_days"] == 2
+        assert quality_report["covered_campaign_days"] == 2
+        assert quality_report["missing_campaign_days"] == 0
+        quality_item = quality_report["items"][0]
+        assert quality_item["expected_days_basis"] == "reporting_period_incomplete_campaign_schedule"
+        assert quality_item["metric_coverage"]["impressions"]["coverage_percent"] == "100.00"
+        assert quality_item["metric_coverage"]["responses"]["coverage_percent"] == "50.00"
+        assert quality_item["days_since_last_measurement"] == 0
+        assert quality_item["out_of_schedule_measurement_days"] == 0
+
+        invalid_quality_period = await client.get(
+            "/api/v1/crm/campaigns/performance/data-quality",
+            headers=headers,
+            params={"period_start": date(2025, 10, 16).isoformat(), "period_end": date(2026, 10, 17).isoformat()},
+        )
+        assert invalid_quality_period.status_code == 422
         assert item["attributed_revenue_by_currency"] == {"EUR": "40.000000", "USD": "100.000000"}
         assert item["efficiency"]["attributed_revenue_minus_spend_by_currency"] == {
             "EUR": "30.000000", "USD": "80.000000"

@@ -980,3 +980,200 @@ async def get_campaign_segment_performance(
         items=result_items,
         truncated=portfolio.truncated,
     )
+
+
+class CampaignMetricCoverage(BaseModel):
+    observed_days: int
+    expected_days: int
+    missing_days: int
+    coverage_percent: Decimal | None
+
+
+class CampaignMeasurementQualityItem(BaseModel):
+    campaign_id: UUID
+    name: str
+    channel: str
+    status: str
+    expected_days_basis: str
+    expected_days: int
+    days_with_any_measurement: int
+    missing_measurement_days: int
+    out_of_schedule_measurement_days: int
+    last_measured_on: date | None
+    days_since_last_measurement: int | None
+    record_count: int
+    source_labels: list[str]
+    metric_coverage: dict[str, CampaignMetricCoverage]
+
+
+class CampaignMeasurementQualityRead(BaseModel):
+    period_start: date
+    period_end: date
+    campaign_count: int
+    campaigns_without_measurements: int
+    expected_campaign_days: int
+    covered_campaign_days: int
+    missing_campaign_days: int
+    out_of_schedule_measurement_days: int
+    items: list[CampaignMeasurementQualityItem]
+    truncated: bool
+
+
+@router.get(
+    "/performance/data-quality",
+    response_model=CampaignMeasurementQualityRead,
+    operation_id="getCRMMarketingCampaignMeasurementQuality",
+    summary="Review campaign measurement coverage and freshness",
+)
+async def get_campaign_measurement_quality(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> CampaignMeasurementQualityRead:
+    if period_start > period_end:
+        raise HTTPException(status_code=422, detail="period_start must not be after period_end")
+    period_days = (period_end - period_start).days + 1
+    if period_days > 366:
+        raise HTTPException(status_code=422, detail="Measurement quality reports are limited to 366 calendar days")
+
+    tenant_id = context.access.tenant_id
+    organization_ids = crm_scope_ids(context, permission_key="crm.campaign:view")
+    campaign_rows = (await context.session.scalars(
+        select(CRMMarketingCampaign).where(
+            CRMMarketingCampaign.tenant_id == tenant_id,
+            CRMMarketingCampaign.organization_unit_id.in_(organization_ids),
+        ).order_by(CRMMarketingCampaign.name, CRMMarketingCampaign.id).limit(501)
+    )).all()
+    truncated = len(campaign_rows) > 500
+    campaigns = campaign_rows[:500]
+    campaign_ids = [campaign.id for campaign in campaigns]
+    rows: list[CRMMarketingCampaignMeasurement] = []
+    if campaign_ids:
+        rows = (await context.session.scalars(
+            select(CRMMarketingCampaignMeasurement).where(
+                CRMMarketingCampaignMeasurement.tenant_id == tenant_id,
+                CRMMarketingCampaignMeasurement.campaign_id.in_(campaign_ids),
+                CRMMarketingCampaignMeasurement.measured_on >= period_start,
+                CRMMarketingCampaignMeasurement.measured_on <= period_end,
+            ).order_by(CRMMarketingCampaignMeasurement.campaign_id,
+                       CRMMarketingCampaignMeasurement.measured_on)
+        )).all()
+
+    rows_by_campaign: dict[UUID, list[CRMMarketingCampaignMeasurement]] = {
+        campaign_id: [] for campaign_id in campaign_ids
+    }
+    for row in rows:
+        rows_by_campaign[row.campaign_id].append(row)
+
+    metric_keys = (
+        "impressions", "reach", "clicks", "responses", "leads", "conversions",
+        "assigned_count", "exposure_count", "return_count",
+    )
+    items: list[CampaignMeasurementQualityItem] = []
+    expected_campaign_days = 0
+    covered_campaign_days = 0
+    missing_campaign_days = 0
+    out_of_schedule_total = 0
+    campaigns_without_measurements = 0
+    for campaign in campaigns:
+        campaign_rows_for_period = rows_by_campaign[campaign.id]
+        if campaign.starts_at is not None and campaign.ends_at is not None:
+            expected_start = max(period_start, campaign.starts_at.date())
+            expected_end = min(period_end, campaign.ends_at.date())
+            expected_days = max((expected_end - expected_start).days + 1, 0)
+            schedule_complete = True
+            basis = "campaign_schedule_overlap"
+        else:
+            expected_start, expected_end = period_start, period_end
+            expected_days = period_days
+            schedule_complete = False
+            basis = "reporting_period_incomplete_campaign_schedule"
+
+        in_expected_window = [
+            row for row in campaign_rows_for_period
+            if expected_days > 0 and expected_start <= row.measured_on <= expected_end
+        ]
+        out_of_schedule = (
+            sum(row.measured_on < expected_start or row.measured_on > expected_end
+                for row in campaign_rows_for_period)
+            if schedule_complete
+            else 0
+        )
+        recorded_days = {row.measured_on for row in in_expected_window}
+        missing_days = max(expected_days - len(recorded_days), 0)
+        metric_coverage: dict[str, CampaignMetricCoverage] = {}
+        for key in metric_keys:
+            observed_days = sum(getattr(row, key) is not None for row in in_expected_window)
+            metric_coverage[key] = CampaignMetricCoverage(
+                observed_days=observed_days,
+                expected_days=expected_days,
+                missing_days=max(expected_days - observed_days, 0),
+                coverage_percent=(
+                    (Decimal(observed_days) * Decimal("100") / Decimal(expected_days)).quantize(Decimal("0.01"))
+                    if expected_days > 0
+                    else None
+                ),
+            )
+
+        last_measured = max(
+            (row.measured_on for row in campaign_rows_for_period),
+            default=None,
+        )
+        days_since_last = (period_end - last_measured).days if last_measured is not None else None
+        if not campaign_rows_for_period:
+            campaigns_without_measurements += 1
+        expected_campaign_days += expected_days
+        covered_campaign_days += len(recorded_days)
+        missing_campaign_days += missing_days
+        out_of_schedule_total += out_of_schedule
+        items.append(CampaignMeasurementQualityItem(
+            campaign_id=campaign.id,
+            name=campaign.name,
+            channel=campaign.channel,
+            status=campaign.status,
+            expected_days_basis=basis,
+            expected_days=expected_days,
+            days_with_any_measurement=len(recorded_days),
+            missing_measurement_days=missing_days,
+            out_of_schedule_measurement_days=out_of_schedule,
+            last_measured_on=last_measured,
+            days_since_last_measurement=days_since_last,
+            record_count=len(campaign_rows_for_period),
+            source_labels=sorted({row.source_label for row in campaign_rows_for_period}),
+            metric_coverage=metric_coverage,
+        ))
+
+    context.session.add(AuditEvent(
+        tenant_id=tenant_id,
+        actor_kind="user",
+        actor_identity_id=context.access.identity_id,
+        actor_membership_id=context.access.membership_id,
+        action_key="crm_marketing_campaign.measurement_quality_reviewed",
+        target_type="crm_marketing_campaign_measurement_quality",
+        target_key="organization_scope",
+        organization_unit_id=None,
+        before_state=None,
+        after_state={
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "campaign_count": len(campaigns),
+            "campaigns_without_measurements": campaigns_without_measurements,
+            "missing_campaign_days": missing_campaign_days,
+            "out_of_schedule_measurement_days": out_of_schedule_total,
+            "truncated": truncated,
+        },
+        correlation_id=None,
+    ))
+    await context.session.flush()
+    return CampaignMeasurementQualityRead(
+        period_start=period_start,
+        period_end=period_end,
+        campaign_count=len(campaigns),
+        campaigns_without_measurements=campaigns_without_measurements,
+        expected_campaign_days=expected_campaign_days,
+        covered_campaign_days=covered_campaign_days,
+        missing_campaign_days=missing_campaign_days,
+        out_of_schedule_measurement_days=out_of_schedule_total,
+        items=items,
+        truncated=truncated,
+    )
