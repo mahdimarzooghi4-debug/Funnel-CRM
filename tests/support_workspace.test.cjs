@@ -3,7 +3,7 @@ const source=execFileSync('python',['-c','from funnel_crm.web.crm_support_worksp
 function harness(responder){
  const nodes=new Map();function node(id){if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',children:[],disabled:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=items},addEventListener(){},reset(){this.resetCalled=true}});return nodes.get(id)}
  const calls=[];const ctx={document:{getElementById:node,createElement:()=>({textContent:'',children:[],append(...items){this.children.push(...items)},addEventListener(){}})},Intl,URLSearchParams,Date,fetch:async(path,options)=>{calls.push({path,options});return responder?responder(path,options):{ok:true,json:async()=>({items:[],total:0,overdue_count:0})}}};
- vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope,openHistory,closeHistory,saveEntry,loadSLA,renderSLA};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
+ vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope,openHistory,closeHistory,saveEntry,loadSLA,renderSLA,savePlanning,localDateTime};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
  return {node,calls,api:ctx.testAPI};
 }
 test('filters keep unit scope and use server pagination',()=>{const h=harness();h.node('state').value='open';h.node('priority').value='urgent';h.node('overdue').value='true';const q=h.api.query();assert.equal(q.get('organization_unit_id'),'unit-a');assert.equal(q.get('limit'),'50');assert.equal(q.get('status'),'open');assert.equal(q.get('overdue_only'),'true')});
@@ -36,4 +36,15 @@ test('SLA rejects inverted and overly long periods without requesting data',asyn
 test('SLA data is discarded after scope reset and failures clear prior results',async()=>{
  let respond;const h=harness(()=>new Promise(r=>{respond=r}));h.node('sla-start').value='2026-01-01';h.node('sla-end').value='2026-01-02';const pending=h.api.loadSLA();h.api.clearScope();respond({ok:true,json:async()=>({case_count:99})});await pending;assert.equal(h.node('sla-result').children.length,0);
  const denied=harness(async()=>({ok:false,json:async()=>({detail:'denied'})}));denied.node('sla-start').value='2026-01-01';denied.node('sla-end').value='2026-01-02';denied.node('sla-result').append({textContent:'old'});await denied.api.loadSLA();assert.equal(denied.node('sla-result').children.length,0);assert.match(denied.node('sla-message').textContent,/ناموفق/);
+});
+
+test('planning sends only changed priority and does not rewrite untouched deadline',async()=>{
+ const h=harness();await h.api.openHistory({id:'case-a',subject:'Plan',status:'open',priority:'normal',response_due_at:'2026-01-01T10:00:00.123Z'},'ws-a:unit-a');h.node('planning-priority').value='urgent';await h.api.savePlanning({preventDefault(){}});const patch=h.calls.find(c=>c.options.method==='PATCH');assert.deepEqual(JSON.parse(patch.options.body),{priority:'urgent'});assert.equal(patch.path,'/api/v1/crm/support-cases/case-a');
+});
+test('clearing an existing deadline sends explicit null; unchanged plan does not write',async()=>{
+ const h=harness();await h.api.openHistory({id:'case-a',subject:'Plan',status:'open',priority:'normal',response_due_at:'2026-01-01T10:00:00Z'},'ws-a:unit-a');await h.api.savePlanning({preventDefault(){}});assert.equal(h.calls.filter(c=>c.options.method==='PATCH').length,0);h.node('planning-due').value='';await h.api.savePlanning({preventDefault(){}});assert.deepEqual(JSON.parse(h.calls.find(c=>c.options.method==='PATCH').options.body),{response_due_at:null});
+});
+test('planning failures preserve edits and closed cases cannot update',async()=>{
+ const h=harness(async(path,options)=>({ok:options.method!=='PATCH',json:async()=>options.method==='PATCH'?{detail:'denied'}:{items:[],total:0}}));await h.api.openHistory({id:'case-a',subject:'Plan',status:'open',priority:'normal'},'ws-a:unit-a');h.node('planning-priority').value='high';await h.api.savePlanning({preventDefault(){}});assert.equal(h.node('planning-priority').value,'high');assert.equal(h.node('planning-save').disabled,false);assert.match(h.node('message').textContent,/ذخیره انجام نشد/);
+ const closed=harness();await closed.api.openHistory({id:'case-b',subject:'Closed',status:'closed',priority:'normal'},'ws-a:unit-a');await closed.api.savePlanning({preventDefault(){}});assert.equal(closed.calls.filter(c=>c.options.method==='PATCH').length,0);assert.equal(closed.node('planning-save').disabled,true);
 });
