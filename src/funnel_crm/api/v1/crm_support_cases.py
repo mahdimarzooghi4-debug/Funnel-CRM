@@ -341,6 +341,30 @@ async def update_support_case(
     return SupportCaseRead.model_validate(item)
 
 
+@router.post("/{case_id}/assign-to-me", response_model=SupportCaseRead,
+             operation_id="assignCRMSupportCaseToMe")
+async def assign_support_case_to_me(
+    case_id: UUID,
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> SupportCaseRead:
+    item = await context.session.scalar(select(CRMCustomerSupportCase).where(
+        CRMCustomerSupportCase.tenant_id == context.access.tenant_id,
+        CRMCustomerSupportCase.id == case_id,
+    ).with_for_update())
+    if item is None:
+        raise HTTPException(status_code=404, detail="CRM support case not found")
+    await _require(context, "crm.support_case:update", item.organization_unit_id)
+    if item.status == "closed":
+        raise HTTPException(status_code=409, detail="Closed support cases cannot be assigned")
+    if item.assigned_membership_id == context.access.membership_id:
+        return SupportCaseRead.model_validate(item)
+    if item.assigned_membership_id is not None:
+        raise HTTPException(status_code=409, detail="Case already has an assignee; release it before claiming")
+    return await update_support_case(
+        case_id, SupportCaseUpdate(assigned_membership_id=context.access.membership_id), context
+    )
+
+
 class SupportCaseEntryCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

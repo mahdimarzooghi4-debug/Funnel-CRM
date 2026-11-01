@@ -7,7 +7,8 @@ from fastapi import FastAPI, Request
 
 from funnel_crm.api.v1.crm_profiles import router as profile_router
 from funnel_crm.api.v1.crm_support_cases import router as support_router
-from funnel_crm.platform.models import Role, RoleAssignment, RolePermission
+from sqlalchemy import select
+from funnel_crm.platform.models import Role, RoleAssignment, RolePermission, UserIdentity, WorkspaceMembership
 from funnel_crm.platform.tenant_context import AuthenticatedIdentity, tenant_session
 
 
@@ -101,6 +102,38 @@ async def test_support_case_queue_tracks_assignment_deadline_and_status(
         assert case["subject"] == "Delayed order"
         assert case["status"] == "open"
         case_id = case["id"]
+
+        claimed = await client.post(f"/api/v1/crm/support-cases/{case_id}/assign-to-me", headers=headers)
+        assert claimed.status_code == 200, claimed.text
+        assert claimed.json()["assigned_membership_id"] is not None
+        repeated = await client.post(f"/api/v1/crm/support-cases/{case_id}/assign-to-me", headers=headers)
+        assert repeated.status_code == 200
+        assert repeated.json()["assigned_membership_id"] == claimed.json()["assigned_membership_id"]
+        mine = await client.get("/api/v1/crm/support-cases", headers=headers,
+                                params={"organization_unit_id": str(root_id), "assigned_to_me": True})
+        assert mine.json()["total"] == 1
+        async with tenant_session(runtime_session_factory, requested_tenant_id=tenant_id, identity=identity) as context:
+            other_identity = await context.session.scalar(select(UserIdentity).where(
+                UserIdentity.subject == tenant_case["identity_b"].subject,
+                UserIdentity.issuer == tenant_case["identity_b"].issuer,
+            ))
+            other_member = WorkspaceMembership(tenant_id=tenant_id, identity_id=other_identity.id, status="active")
+            context.session.add(other_member)
+            await context.session.flush()
+            other_member_id = str(other_member.id)
+        assigned_other = await client.patch(f"/api/v1/crm/support-cases/{case_id}", headers=headers,
+                                           json={"assigned_membership_id": other_member_id})
+        assert assigned_other.status_code == 200
+        takeover = await client.post(f"/api/v1/crm/support-cases/{case_id}/assign-to-me", headers=headers)
+        assert takeover.status_code == 409
+
+        released = await client.patch(f"/api/v1/crm/support-cases/{case_id}", headers=headers,
+                                      json={"assigned_membership_id": None})
+        assert released.status_code == 200
+        assert released.json()["assigned_membership_id"] is None
+        mine = await client.get("/api/v1/crm/support-cases", headers=headers,
+                                params={"organization_unit_id": str(root_id), "assigned_to_me": True})
+        assert mine.json()["total"] == 0
 
         overdue = await client.get(
             "/api/v1/crm/support-cases",
@@ -201,6 +234,8 @@ async def test_support_case_queue_tracks_assignment_deadline_and_status(
             json={"status": "closed"},
         )
         assert closed.status_code == 200, closed.text
+        closed_claim = await client.post(f"/api/v1/crm/support-cases/{case_id}/assign-to-me", headers=headers)
+        assert closed_claim.status_code == 409
         rejected = await client.patch(
             f"/api/v1/crm/support-cases/{case_id}",
             headers=headers,
