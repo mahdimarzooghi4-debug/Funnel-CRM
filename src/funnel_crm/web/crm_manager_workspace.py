@@ -163,7 +163,7 @@ _SCRIPT = r"""(() => {
   const status = $("status");
   const warn = $("data-warning");
   const params = new URLSearchParams(window.location.search);
-  const moduleData = { campaigns: "/api/v1/crm/campaigns?limit=8", sales: "/api/v1/crm/opportunities?limit=8", learning: "/api/v1/crm/marketing-learning/reviews", admin: "/api/v1/product-connections" };
+  const moduleData = { campaigns: "/api/v1/crm/campaigns?limit=8", sales: "/api/v1/crm/opportunities?limit=8", learning: "/api/v1/crm/marketing-learning/reviews", admin: "/api/v1/integrations/connections" };
   const moduleInfo = {
     research: { title: "تحقیق و شناخت بازار", description: "شناخت بازار، مشتری، رقبا و روندها با ثبت منبع و کیفیت شواهد.", features: ["برنامه‌ریزی تحقیق و ثبت فرضیه", "مصاحبه، بازخورد و صدای مشتری", "تحلیل بازار، رقبا، روندها و فرصت‌ها", "بخش‌بندی و تعریف گروه هدف"] },
     planning: { title: "استراتژی و برنامه‌ریزی بازاریابی", description: "تبدیل هدف کسب‌وکار به برنامه، بودجه، تقویم، مسئول و معیار سنجش.", features: ["هدف‌ها و شاخص‌های هم‌راستا", "برنامه و تقویم بازاریابی", "بودجهٔ مصوب، تعهدشده، هزینه‌شده و مانده", "مقایسهٔ سناریوهای بودجه"], links: [["مقایسهٔ سناریوهای بودجه", "/workspace/budget-scenario-comparison"]] },
