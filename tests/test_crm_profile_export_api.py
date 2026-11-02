@@ -87,6 +87,11 @@ async def test_profile_csv_export_is_scoped_audited_and_formula_safe(
         assert "'=1+1" in lines[1]
         assert "email" not in exported.text
         assert "contact" not in exported.text
+        matched = await client.get("/api/v1/crm/profiles/export.csv", params={"search": "1+1"}, headers=headers)
+        assert str(profile_id) in matched.text
+        literal = await client.get("/api/v1/crm/profiles/export.csv", params={"search": "%"}, headers=headers)
+        assert literal.status_code == 200
+        assert len(literal.text.splitlines()) == 1
 
     async with tenant_session(runtime_session_factory, requested_tenant_id=tenant_id, identity=identity) as context:
         events = (
@@ -98,8 +103,9 @@ async def test_profile_csv_export_is_scoped_audited_and_formula_safe(
                 )
             )
         ).all()
-        assert len(events) == 1
-        assert events[0].after_state == {"format": "csv", "rows": 1, "offset": 0, "limit": 5000}
+        assert len(events) == 3
+        assert sorted(event.after_state["rows"] for event in events) == [0, 1, 1]
+        assert all(event.after_state["format"] == "csv" and event.after_state["limit"] == 5000 for event in events)
         await context.session.execute(
             delete(TenantRecord).where(TenantRecord.tenant_id == tenant_id, TenantRecord.id == profile_id)
         )
