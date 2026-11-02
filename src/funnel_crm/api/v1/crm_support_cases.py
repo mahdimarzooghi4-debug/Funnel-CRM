@@ -231,6 +231,8 @@ async def list_support_cases(
     status: SupportCaseStatus | None = Query(default=None),
     priority: SupportCasePriority | None = Query(default=None),
     assigned_to_me: bool = False,
+    unassigned_only: bool = False,
+    search: str | None = Query(default=None, max_length=200),
     profile_id: UUID | None = None,
     overdue_only: bool = False,
     as_of: datetime = Query(default_factory=lambda: datetime.now(timezone.utc)),
@@ -238,6 +240,8 @@ async def list_support_cases(
     offset: int = Query(default=0, ge=0),
     context: TenantSessionContext = Depends(require_tenant_session),
 ) -> SupportCasePage:
+    if assigned_to_me and unassigned_only:
+        raise HTTPException(status_code=422, detail="Choose either assigned-to-me or unassigned cases")
     if as_of.tzinfo is None:
         raise HTTPException(status_code=422, detail="as_of must include a timezone")
     await _require(context, "crm.support_case:view", organization_unit_id)
@@ -249,6 +253,10 @@ async def list_support_cases(
         filters.append(CRMCustomerSupportCase.status == status)
     if priority is not None:
         filters.append(CRMCustomerSupportCase.priority == priority)
+    if search and search.strip():
+        filters.append(CRMCustomerSupportCase.subject.icontains(search.strip(), autoescape=True))
+    if unassigned_only:
+        filters.append(CRMCustomerSupportCase.assigned_membership_id.is_(None))
     if profile_id is not None:
         filters.append(CRMCustomerSupportCase.profile_id == profile_id)
     if assigned_to_me:
@@ -287,7 +295,8 @@ async def list_support_cases(
         target_type="crm_support_case_queue", target_key=str(organization_unit_id),
         organization_unit_id=organization_unit_id, before_state=None,
         after_state={"status": status, "priority": priority, "profile_id": str(profile_id) if profile_id else None,
-            "assigned_to_me": assigned_to_me, "overdue_only": overdue_only,
+            "assigned_to_me": assigned_to_me, "unassigned_only": unassigned_only,
+            "search_applied": bool(search and search.strip()), "overdue_only": overdue_only,
             "as_of": as_of.isoformat(), "total": total, "overdue_count": overdue_count,
             "limit": limit, "offset": offset, "returned": len(rows)},
         correlation_id=None,

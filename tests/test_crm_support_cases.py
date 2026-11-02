@@ -103,6 +103,19 @@ async def test_support_case_queue_tracks_assignment_deadline_and_status(
         assert case["status"] == "open"
         case_id = case["id"]
 
+        for term, expected in ((" delayed ", 1), ("missing subject", 0), ("%", 0), ("_", 0)):
+            searched = await client.get("/api/v1/crm/support-cases", headers=headers,
+                                        params={"organization_unit_id": str(root_id), "search": term})
+            assert searched.status_code == 200
+            assert searched.json()["total"] == expected
+            assert searched.json()["overdue_count"] == expected
+        unassigned = await client.get("/api/v1/crm/support-cases", headers=headers,
+                                      params={"organization_unit_id": str(root_id), "unassigned_only": True})
+        assert unassigned.json()["total"] == 1
+        conflicting = await client.get("/api/v1/crm/support-cases", headers=headers,
+                                       params={"organization_unit_id": str(root_id), "unassigned_only": True, "assigned_to_me": True})
+        assert conflicting.status_code == 422
+
         customer_queue = await client.get("/api/v1/crm/support-cases", headers=headers,
                                           params={"organization_unit_id": str(root_id), "profile_id": profile_id})
         assert customer_queue.status_code == 200
@@ -119,6 +132,11 @@ async def test_support_case_queue_tracks_assignment_deadline_and_status(
         claimed = await client.post(f"/api/v1/crm/support-cases/{case_id}/assign-to-me", headers=headers)
         assert claimed.status_code == 200, claimed.text
         assert claimed.json()["assigned_membership_id"] is not None
+        unassigned_after = await client.get("/api/v1/crm/support-cases", headers=headers,
+                                            params={"organization_unit_id": str(root_id), "unassigned_only": True, "search": "Delayed"})
+        assert unassigned_after.json()["total"] == 0
+        assert unassigned_after.json()["overdue_count"] == 0
+
         repeated = await client.post(f"/api/v1/crm/support-cases/{case_id}/assign-to-me", headers=headers)
         assert repeated.status_code == 200
         assert repeated.json()["assigned_membership_id"] == claimed.json()["assigned_membership_id"]
