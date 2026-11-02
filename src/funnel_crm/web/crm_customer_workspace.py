@@ -234,6 +234,21 @@ _SCRIPT = r"""(() => {
     if(!result.items.length)append(host,"div","رویداد رضایت ارتباطی ثبت نشده است.","empty");
     for(const item of result.items)recordCard(host,item.purpose_key,[["کانال",item.channel],["تصمیم",item.decision==="granted"?"اعطای رضایت":"لغو رضایت"],["نسخهٔ سیاست",item.policy_version],["زمان تصمیم",item.decision_at]]);
   }
+  const pendingActivities=new Map();
+  async function saveActivity(profile,scope,fields,button,message){
+    if(button.disabled||profile.archived_at||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;
+    let payload=pendingActivities.get(scope);
+    if(!payload){const type=fields.type.value.trim(),channel=fields.channel.value,date=new Date(fields.time.value);if(!/^[a-z][a-z0-9_.-]{0,79}$/.test(type)||!["phone","store","field","other"].includes(channel)||!fields.time.value||!Number.isFinite(date.getTime())){message.textContent="نوع تعامل، کانال و زمان معتبر را وارد کنید.";return}const reference=fields.reference.value.trim();if(reference.length>200){message.textContent="شناسهٔ مرجع حداکثر ۲۰۰ کاراکتر است.";return}payload={source_event_id:crypto.randomUUID(),activity_type:type,channel,occurred_at:date.toISOString(),source_record_id:reference||null};pendingActivities.set(scope,payload)}
+    button.disabled=true;Object.values(fields).forEach(input=>input.disabled=true);
+    try{await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/activities/sync",{method:"POST",body:JSON.stringify(payload)});pendingActivities.delete(scope);if(selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile)){await loadDetailSection("activities",profile);say("تعامل ثبت شد.")}}
+    catch(error){if(selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile)){message.textContent="ثبت تأیید نشد؛ صفحه را نبندید و با همین اطلاعات دوباره تلاش کنید: "+error.message;button.textContent="تلاش دوباره با همان شناسه"}}
+    finally{button.disabled=false}
+  }
+  function activityForm(profile,host){if(profile.archived_at)return;const scope=customScope(profile),pending=pendingActivities.get(scope),form=document.createElement("form"),fields={};form.className="formbox";append(form,"strong","ثبت تعامل مشتری");
+    for(const [key,title] of [["type","نوع تعامل (کلید انگلیسی؛ مثلاً visit)"],["channel","کانال"],["time","زمان رخداد به وقت دستگاه"],["reference","شناسهٔ مرجع (اختیاری)"]]){const label=document.createElement("label");label.textContent=title;const input=document.createElement(key==="channel"?"select":"input");if(key==="channel"){for(const [value,text] of [["","انتخاب کنید"],["phone","تلفن"],["store","فروشگاه"],["field","میدانی"],["other","سایر"]]){const option=document.createElement("option");option.value=value;option.textContent=text;input.appendChild(option)}}else if(key==="time")input.type="datetime-local";else input.maxLength=key==="type"?80:200;input.required=key!=="reference";fields[key]=input;label.appendChild(input);form.appendChild(label)}
+    if(pending){fields.type.value=pending.activity_type;fields.channel.value=pending.channel;fields.reference.value=pending.source_record_id||"";const date=new Date(pending.occurred_at);fields.time.value=new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);Object.values(fields).forEach(input=>input.disabled=true)}
+    const button=document.createElement("button"),message=document.createElement("p");button.type="submit";button.className="primary";button.textContent=pending?"تلاش دوباره با همان شناسه":"ثبت تعامل";message.setAttribute("role","status");if(pending)message.textContent="ثبت قبلی هنوز تأیید نشده؛ تلاش مجدد همان رویداد را ارسال می‌کند. تا تأیید ثبت، صفحه را نبندید.";form.appendChild(button);form.appendChild(message);form.addEventListener("submit",event=>{event.preventDefault();saveActivity(profile,scope,fields,button,message)});host.appendChild(form);
+  }
   async function loadActivities(profile,host){
     const scope=customScope(profile),token={};host.activityToken=token;host.replaceChildren();
     const records=document.createElement("section"),message=document.createElement("p"),more=document.createElement("button");
@@ -247,7 +262,7 @@ _SCRIPT = r"""(() => {
       }catch(error){if(current()){message.textContent="دریافت تعاملات انجام نشد: "+error.message;more.textContent="تلاش دوباره";more.hidden=false}}
       finally{busy=false;if(current())more.disabled=false}
     }
-    more.addEventListener("click",next);await next();return next;
+    activityForm(profile,host);more.addEventListener("click",next);await next();return next;
   }
   async function loadDetailSection(name, profile) {
     const host = $("section-" + name); host.replaceChildren();
