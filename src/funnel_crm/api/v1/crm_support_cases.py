@@ -231,6 +231,7 @@ async def list_support_cases(
     status: SupportCaseStatus | None = Query(default=None),
     priority: SupportCasePriority | None = Query(default=None),
     assigned_to_me: bool = False,
+    profile_id: UUID | None = None,
     overdue_only: bool = False,
     as_of: datetime = Query(default_factory=lambda: datetime.now(timezone.utc)),
     limit: int = Query(default=50, ge=1, le=200),
@@ -248,6 +249,8 @@ async def list_support_cases(
         filters.append(CRMCustomerSupportCase.status == status)
     if priority is not None:
         filters.append(CRMCustomerSupportCase.priority == priority)
+    if profile_id is not None:
+        filters.append(CRMCustomerSupportCase.profile_id == profile_id)
     if assigned_to_me:
         filters.append(CRMCustomerSupportCase.assigned_membership_id == context.access.membership_id)
     open_case = CRMCustomerSupportCase.status.in_(("open", "in_progress", "waiting_customer"))
@@ -283,7 +286,7 @@ async def list_support_cases(
         action_key="crm_support_case.queue_viewed",
         target_type="crm_support_case_queue", target_key=str(organization_unit_id),
         organization_unit_id=organization_unit_id, before_state=None,
-        after_state={"status": status, "priority": priority,
+        after_state={"status": status, "priority": priority, "profile_id": str(profile_id) if profile_id else None,
             "assigned_to_me": assigned_to_me, "overdue_only": overdue_only,
             "as_of": as_of.isoformat(), "total": total, "overdue_count": overdue_count,
             "limit": limit, "offset": offset, "returned": len(rows)},

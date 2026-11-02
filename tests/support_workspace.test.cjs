@@ -3,7 +3,7 @@ const source=execFileSync('python',['-c','from funnel_crm.web.crm_support_worksp
 function harness(responder){
  const nodes=new Map();function node(id){if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',children:[],disabled:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=items},addEventListener(){},reset(){this.resetCalled=true}});return nodes.get(id)}
  const calls=[];const ctx={document:{getElementById:node,createElement:()=>({textContent:'',children:[],append(...items){this.children.push(...items)},addEventListener(){}})},Intl,URLSearchParams,Date,fetch:async(path,options)=>{calls.push({path,options});return responder?responder(path,options):{ok:true,json:async()=>({items:[],total:0,overdue_count:0})}}};
- vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope,openHistory,closeHistory,saveEntry,loadSLA,renderSLA,savePlanning,localDateTime,assignCase};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
+ vm.runInNewContext(source.replace('init();','globalThis.testAPI={query,createCase,changeStatus,load,clearScope,openHistory,closeHistory,saveEntry,loadSLA,renderSLA,savePlanning,localDateTime,assignCase,selectCustomerContext,clearCustomerContext};'),ctx);node('workspace').value='ws-a';node('unit').value='unit-a';node('subject').value=' درخواست ';node('profile').value='profile-a';node('new-priority').value='high';
  return {node,calls,api:ctx.testAPI};
 }
 test('filters keep unit scope and use server pagination',()=>{const h=harness();h.node('state').value='open';h.node('priority').value='urgent';h.node('overdue').value='true';const q=h.api.query();assert.equal(q.get('organization_unit_id'),'unit-a');assert.equal(q.get('limit'),'50');assert.equal(q.get('status'),'open');assert.equal(q.get('overdue_only'),'true')});
@@ -54,4 +54,13 @@ test('mine filter uses server scope and assignment never supplies a client ident
 });
 test('release explicitly clears assignment and stale-scope assignment is blocked',async()=>{
  const h=harness();await h.api.assignCase('case-a',true,'ws-a:unit-a');const call=h.calls.find(c=>c.options.method==='PATCH');assert.deepEqual(JSON.parse(call.options.body),{assigned_membership_id:null});const count=h.calls.length;await h.api.assignCase('case-a',false,'other:scope');assert.equal(h.calls.length,count);
+});
+
+test('customer context filters the queue and pins new requests to the verified profile',async()=>{
+ const h=harness(async(path)=>({ok:true,json:async()=>path.startsWith('/api/v1/crm/profiles/')?{id:'customer-a',organization_unit_id:'unit-a',display_name:'مشتری تست'}:{items:[],total:0,overdue_count:0}}));await h.api.selectCustomerContext('customer-a');assert.equal(h.api.query().get('profile_id'),'customer-a');assert.equal(h.node('profile').disabled,true);h.node('profile').value='tampered';await h.api.createCase({preventDefault(){}});const write=h.calls.find(c=>c.options.method==='POST');assert.equal(JSON.parse(write.options.body).profile_id,'customer-a');assert.equal(h.node('profile').value,'customer-a');
+ await h.api.clearCustomerContext();assert.equal(h.api.query().has('profile_id'),false);assert.equal(h.node('profile').disabled,false);
+});
+test('foreign customer context is rejected and late lookup cannot cross scopes',async()=>{
+ const h=harness(async()=>({ok:true,json:async()=>({id:'foreign',organization_unit_id:'unit-b',display_name:'foreign'})}));await h.api.selectCustomerContext('foreign');assert.equal(h.api.query().has('profile_id'),false);assert.match(h.node('message').textContent,/قابل دریافت نیست/);
+ let respond;const late=harness(()=>new Promise(r=>{respond=r}));const pending=late.api.selectCustomerContext('late');late.api.clearScope();respond({ok:true,json:async()=>({id:'late',organization_unit_id:'unit-a',display_name:'late'})});await pending;assert.equal(late.api.query().has('profile_id'),false);assert.equal(late.node('customer-context').textContent,'');
 });
