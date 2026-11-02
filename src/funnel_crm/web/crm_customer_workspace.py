@@ -276,6 +276,10 @@ _SCRIPT = r"""(() => {
     }
     activityForm(profile,host);more.addEventListener("click",next);await next();return next;
   }
+  async function writeContact(profile,scope,item,payload,button,message){
+    if(button.disabled||profile.archived_at||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;
+    button.disabled=true;try{await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/contact-points"+(item?"/"+encodeURIComponent(item.id):""),{method:item?"PATCH":"POST",body:JSON.stringify(payload)});if(selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile)){await loadDetailSection("contacts",profile);say("راه ارتباطی ذخیره شد.")}}catch(error){if(selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile))message.textContent="ذخیره انجام نشد: "+error.message}finally{button.disabled=false}
+  }
   async function loadDetailSection(name, profile) {
     const host = $("section-" + name); host.replaceChildren();
     try {
@@ -286,9 +290,11 @@ _SCRIPT = r"""(() => {
         const version=++customGeneration,scope=customScope(profile);
         try{const result=await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/custom-fields");if(version!==customGeneration||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;renderCustomFields(host,result.items,profile,scope)}catch(error){if(version===customGeneration&&selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile))append(host,"div",error.message,"empty")}
       } else if (name === "contacts") {
+        const scope=customScope(profile),token={};host.contactToken=token;
         const result = await api("/api/v1/crm/profiles/" + encodeURIComponent(profile.id) + "/contact-points");
+        if(host.contactToken!==token||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;
         const items = result.items || [];
-        if (items.length) items.forEach((item) => recordCard(host, item.channel, [["مقدار", item.value], ["وضعیت راستی‌آزمایی", item.verification_status], ["اصلی", item.is_primary ? "بله" : "خیر"]]));
+        if (items.length) items.forEach((item) => {recordCard(host,({phone:"تلفن",email:"ایمیل",postal_address:"نشانی",social_handle:"شناسهٔ شبکهٔ اجتماعی",website:"وب‌سایت"})[item.channel]||item.channel,[["مقدار",item.value],["وضعیت راستی‌آزمایی",item.verification_status],["اصلی",item.is_primary?"بله":"خیر"]]);if(!profile.archived_at){const button=document.createElement("button"),message=document.createElement("p");button.type="button";button.className="secondary";button.textContent=item.is_primary?"برداشتن وضعیت اصلی":"تعیین به‌عنوان راه اصلی این کانال";message.setAttribute("role","status");button.addEventListener("click",()=>writeContact(profile,scope,item,{is_primary:!item.is_primary},button,message));host.appendChild(button);host.appendChild(message)}});
         else append(host, "div", "راه ارتباطی ثبت‌شده‌ای وجود ندارد.", "empty");
         if(profile.archived_at)return;
         const form = document.createElement("form"); form.className = "formbox";
@@ -302,7 +308,8 @@ _SCRIPT = r"""(() => {
         const primaryLabel = document.createElement("label"); primaryLabel.style.display = "flex"; primaryLabel.style.alignItems = "center"; primaryLabel.style.gap = "8px"; primaryLabel.textContent = "راه ارتباطی اصلی";
         const primary = document.createElement("input"); primary.type = "checkbox"; primaryLabel.appendChild(primary); grid.appendChild(primaryLabel);
         form.appendChild(grid); const submit=document.createElement("button");submit.type="submit";submit.className="primary";submit.textContent="ثبت راه ارتباطی";form.appendChild(submit);
-        form.addEventListener("submit", async (event) => { event.preventDefault(); submit.disabled=true; try { await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/contact-points",{method:"POST",body:JSON.stringify({channel:channel.value,value:value.value,is_primary:primary.checked})}); await loadDetailSection("contacts",profile); say("راه ارتباطی با موفقیت ثبت شد."); } catch(error){say(error.message,true);} finally{submit.disabled=false;} });
+        const contactMessage=document.createElement("p");contactMessage.setAttribute("role","status");form.appendChild(contactMessage);
+        form.addEventListener("submit",event=>{event.preventDefault();writeContact(profile,scope,null,{channel:channel.value,value:value.value,is_primary:primary.checked},submit,contactMessage)});
         host.appendChild(form);
       } else {
         const suffix = name === "activities" ? "/activities?limit=50" : "/communication-consents?limit=100";
