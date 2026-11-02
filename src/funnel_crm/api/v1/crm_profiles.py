@@ -96,6 +96,24 @@ async def _require_permission(
         )
 
 
+@router.get("/create-schema", operation_id="getCRMProfileCreationSchema")
+async def get_profile_creation_schema(
+    organization_unit_id: UUID,
+    profile_kind: str = Query(pattern=r"^(person|organization)$"),
+    context: TenantSessionContext = Depends(require_tenant_session),
+) -> dict:
+    await _require_permission(context, permission_key="crm.profile:create",
+                              organization_unit_id=organization_unit_id)
+    definitions = await context.session.scalars(select(CRMCustomFieldDefinition).where(
+        CRMCustomFieldDefinition.tenant_id == context.access.tenant_id,
+        CRMCustomFieldDefinition.entity_kind == profile_kind,
+        CRMCustomFieldDefinition.is_active.is_(True),
+    ).order_by(CRMCustomFieldDefinition.field_key))
+    return {"items": [{"field_key": field.field_key, "display_name": field.display_name,
+                       "value_type": field.value_type, "options": field.options,
+                       "is_required": field.is_required} for field in definitions]}
+
+
 @router.get(
     "",
     response_model=CRMProfilePage,
