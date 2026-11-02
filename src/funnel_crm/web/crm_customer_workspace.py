@@ -72,7 +72,7 @@ _PAGE = """<!doctype html>
             <label>مرحلهٔ چرخهٔ عمر<input id="create-stage" value="lead" maxlength="80" required></label>
             <label class="wide">نام نمایشی<input id="create-name" maxlength="240" required></label>
           </div>
-          <div class="form-actions"><button class="primary" type="submit">ثبت پرونده</button><button id="cancel-create" class="secondary" type="button">انصراف</button></div>
+          <div class="form-actions"><div id="create-custom-fields" class="form-grid"></div><p id="create-custom-message" role="status" aria-live="polite"></p><button id="create-save" class="primary" type="submit" disabled>ثبت پرونده</button><button id="cancel-create" class="secondary" type="button">انصراف</button></div>
         </form>
         <div id="profile-list" class="profile-list"><div class="empty">برای دیدن پرونده‌ها، فضای کاری را انتخاب کنید.</div></div>
         <div class="pagination"><span id="page-meta">—</span><button id="load-more" class="secondary" type="button" hidden>بارگذاری بیشتر</button></div>
@@ -107,7 +107,7 @@ _SCRIPT = r"""(() => {
   const $ = (id) => document.getElementById(id);
   const workspace = $("workspace-id"), unitSelect = $("organization-unit");
   const status = $("status"), listHost = $("profile-list");
-  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null, customGeneration = 0;
+  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null, customGeneration = 0, creationGeneration = 0, creationReady = "", creationFields = [];
   const LIMIT = 50, number = new Intl.NumberFormat("fa-IR");
   const esc = (value) => String(value ?? "");
   function say(message, error = false) { status.textContent = message; status.classList.toggle("error", error); }
@@ -179,6 +179,9 @@ _SCRIPT = r"""(() => {
     pairs.forEach(([key, value]) => append(card, "div", key + ": " + (value ?? "ثبت نشده")));
     host.appendChild(card);
   }
+  function creationScope(){return workspace.value+":"+unitSelect.value+":"+$("profile-kind").value}
+  function creationCustomValues(){if(!creationReady||creationReady!==creationScope())throw Error("ابتدا فیلدهای مورد نیاز را دریافت کنید.");const values={};for(const {field,input} of creationFields){if(input.value===""&&!field.is_required)continue;values[field.field_key]=parseCustomValue(field,input)}return values}
+  async function loadCreationFields(){const version=++creationGeneration,scope=creationScope();creationReady="";creationFields=[];$("create-save").disabled=true;$("create-custom-fields").replaceChildren();if(!workspace.value||!unitSelect.value){$("create-custom-message").textContent="برای ثبت مشتری یک واحد انتخاب کنید.";return}$("create-custom-message").textContent="در حال دریافت فیلدهای ثبت پرونده…";try{const schema=await api("/api/v1/crm/profiles/create-schema?"+new URLSearchParams({organization_unit_id:unitSelect.value,profile_kind:$("profile-kind").value}));if(version!==creationGeneration||scope!==creationScope())return;for(const field of schema.items){const label=document.createElement("label");label.textContent=field.display_name+(field.is_required?" (اجباری)":" (اختیاری)");const input=document.createElement(["choice","boolean"].includes(field.value_type)?"select":"input");if(["choice","boolean"].includes(field.value_type)){const options=field.value_type==="boolean"?[["true","بله"],["false","خیر"]]:field.options.map(x=>[x,x]);for(const [value,text] of [["","انتخاب کنید"],...options]){const option=document.createElement("option");option.value=value;option.textContent=text;input.appendChild(option)}}else{input.type=field.value_type==="number"?"number":field.value_type==="date"?"date":"text";if(input.type==="number")input.step="any";if(input.type==="text")input.maxLength=4000}input.required=field.is_required;label.appendChild(input);$("create-custom-fields").appendChild(label);creationFields.push({field,input})}creationReady=scope;$("create-custom-message").textContent=schema.items.length?"فیلدهای پرونده آماده‌اند.":"فیلد سفارشی فعالی تعریف نشده است.";$("create-save").disabled=false}catch(error){if(version===creationGeneration)$("create-custom-message").textContent="دریافت فیلدها ناموفق بود: "+error.message}}
   function customScope(profile) { return workspace.value+":"+unitSelect.value+":"+profile.id; }
   function parseCustomValue(field, input) {
     const value=input.value;
@@ -260,23 +263,23 @@ _SCRIPT = r"""(() => {
   });
   $("create-form").addEventListener("submit", async (event) => {
     event.preventDefault(); if (!unitSelect.value) { say("برای ثبت مشتری، یک واحد سازمانی انتخاب کنید.",true); return; }
-    const button = $("create-form").querySelector("button[type=submit]"); button.disabled=true;
+    const button = $("create-save"); if(button.disabled)return; button.disabled=true;workspace.disabled=true;unitSelect.disabled=true;$("profile-kind").disabled=true;
     try {
-      const profile = await api("/api/v1/crm/profiles",{method:"POST",body:JSON.stringify({organization_unit_id:unitSelect.value,profile_kind:$("profile-kind").value,display_name:$("create-name").value,lifecycle_stage:$("create-stage").value,custom_fields:{}})});
-      $("create-form").reset(); $("create-stage").value="lead"; $("create-form").hidden=true;
+      const profile = await api("/api/v1/crm/profiles",{method:"POST",body:JSON.stringify({organization_unit_id:unitSelect.value,profile_kind:$("profile-kind").value,display_name:$("create-name").value,lifecycle_stage:$("create-stage").value,custom_fields:creationCustomValues()})});
+      $("create-form").reset(); $("create-stage").value="lead"; $("create-form").hidden=true;creationReady="";
       await loadProfiles(true); const created=profiles.find((row)=>row.id===profile.id); if(created) await openProfile(created);
       say("پروندهٔ مشتری ثبت شد.");
-    } catch(error){say(error.message,true);} finally{button.disabled=false;}
+    } catch(error){say(error.message,true);} finally{button.disabled=false;workspace.disabled=false;unitSelect.disabled=false;$("profile-kind").disabled=false;}
   });
-  $("new-profile").addEventListener("click",()=>{$("create-form").hidden=!$("create-form").hidden; $("profile-detail").hidden=true; $("detail-empty").hidden=false;});
+  $("new-profile").addEventListener("click",()=>{$("create-form").hidden=!$("create-form").hidden;selectedProfile=null;++customGeneration;$("profile-detail").hidden=true;$("detail-empty").hidden=false;if(!$("create-form").hidden)loadCreationFields()});$("profile-kind").addEventListener("change",loadCreationFields);
   $("cancel-create").addEventListener("click",()=>{$("create-form").hidden=true;});
   $("refresh").addEventListener("click",()=>loadProfiles(true));
   $("search").addEventListener("input",drawList);
   $("load-more").addEventListener("click",()=>loadProfiles(false));
-  unitSelect.addEventListener("change",()=>loadProfiles(true));
+  unitSelect.addEventListener("change",()=>{loadCreationFields();loadProfiles(true)});
   document.querySelectorAll(".tab").forEach((tab)=>tab.addEventListener("click",async()=>{activateTab(tab.dataset.tab);if(selectedProfile)await loadDetailSection(tab.dataset.tab,selectedProfile);}));
   workspace.addEventListener("change",async()=>{
-    if(!workspace.value)return;
+    ++creationGeneration;creationReady="";$("create-save").disabled=true;$("create-form").hidden=true;$("create-custom-fields").replaceChildren();if(!workspace.value)return;
     try{await loadUnits();await loadProfiles(true);}catch(error){say(error.message,true);}
   });
   async function init(){
