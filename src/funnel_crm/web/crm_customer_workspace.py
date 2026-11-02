@@ -90,11 +90,11 @@ _PAGE = """<!doctype html>
         <div class="tabs" role="tablist" aria-label="بخش‌های پرونده">
           <button class="tab active" data-tab="contacts" type="button">راه‌های ارتباطی</button>
           <button class="tab" data-tab="activities" type="button">تاریخچهٔ تعامل</button>
-          <button class="tab" data-tab="custom" type="button">اطلاعات سفارشی</button><button class="tab" data-tab="consents" type="button">رضایت ارتباطی</button>
+          <button class="tab" data-tab="duplicates" type="button">بررسی تکراری‌ها</button><button class="tab" data-tab="custom" type="button">اطلاعات سفارشی</button><button class="tab" data-tab="consents" type="button">رضایت ارتباطی</button>
         </div>
         <section id="section-contacts" class="detail-section"></section>
         <section id="section-activities" class="detail-section" hidden></section>
-        <section id="section-custom" class="detail-section" hidden></section><section id="section-consents" class="detail-section" hidden></section>
+        <section id="section-duplicates" class="detail-section" hidden></section><section id="section-custom" class="detail-section" hidden></section><section id="section-consents" class="detail-section" hidden></section>
       </section>
       <section id="detail-empty" class="panel empty">یک مشتری را از فهرست انتخاب کنید تا پرونده و تاریخچهٔ آن را ببینید.</section>
     </div>
@@ -107,7 +107,7 @@ _SCRIPT = r"""(() => {
   const $ = (id) => document.getElementById(id);
   const workspace = $("workspace-id"), unitSelect = $("organization-unit");
   const status = $("status"), listHost = $("profile-list");
-  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null, customGeneration = 0, creationGeneration = 0, creationReady = "", creationFields = [], appliedSearch = "", listGeneration = 0, archiveBusy = false;
+  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null, customGeneration = 0, creationGeneration = 0, creationReady = "", creationFields = [], appliedSearch = "", listGeneration = 0, archiveBusy = false, duplicateGeneration = 0;
   const LIMIT = 50, number = new Intl.NumberFormat("fa-IR");
   const esc = (value) => String(value ?? "");
   function say(message, error = false) { status.textContent = message; status.classList.toggle("error", error); }
@@ -162,7 +162,7 @@ _SCRIPT = r"""(() => {
     if (!workspace.value) return;
     if(!reset&&$("load-more").disabled)return;
     const version=++listGeneration,scope=workspace.value+":"+unitSelect.value;$("load-more").disabled=true;
-    if (reset) { offset = 0; profiles = []; selectedProfile = null; ++customGeneration; $("profile-detail").hidden=true; $("detail-empty").hidden=false;listHost.replaceChildren();$("total").textContent="—";$("page-meta").textContent=""; }
+    if (reset) { offset = 0; profiles = []; selectedProfile = null; ++customGeneration;++duplicateGeneration; $("profile-detail").hidden=true; $("detail-empty").hidden=false;listHost.replaceChildren();$("total").textContent="—";$("page-meta").textContent=""; }
     say("در حال دریافت فهرست مشتریان…");
     try {
       const query = "?"+profileQuery();
@@ -175,7 +175,7 @@ _SCRIPT = r"""(() => {
   }
   function activateTab(name) {
     document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === name));
-    ["contacts", "activities", "consents", "custom"].forEach((key) => { $("section-" + key).hidden = key !== name; });
+    ["contacts", "activities", "consents", "custom", "duplicates"].forEach((key) => { $("section-" + key).hidden = key !== name; });
   }
   function recordCard(host, title, pairs) {
     const card = document.createElement("article"); card.className = "record"; append(card, "strong", title);
@@ -206,10 +206,14 @@ _SCRIPT = r"""(() => {
       if(["boolean","choice"].includes(field.value_type)){const empty=document.createElement("option");empty.value="";empty.textContent="انتخاب کنید";input.appendChild(empty);const options=field.value_type==="boolean"?[["true","بله"],["false","خیر"]]:field.options.map(x=>[x,x]);for(const [value,text] of options){const option=document.createElement("option");option.value=value;option.textContent=text;input.appendChild(option)}}else{input.type=field.value_type==="number"?"number":field.value_type==="date"?"date":"text";if(field.value_type==="number")input.step="any";if(field.value_type==="text")input.maxLength=4000}
       input.value=field.value==null?"":String(field.value);input.required=true;label.appendChild(input);form.appendChild(label);const button=document.createElement("button");button.type="submit";button.className="primary";button.textContent="ذخیرهٔ مقدار";const message=document.createElement("p");message.setAttribute("role","status");message.setAttribute("aria-live","polite");form.appendChild(button);form.appendChild(message);form.addEventListener("submit",event=>{event.preventDefault();saveCustomValue(field,input,button,message,profile,scope)});host.appendChild(form)}
   }
+  async function mergeReviewedProfile(source,target,ack,button,message,scope){if(button.disabled||!ack.checked||!selectedProfile||selectedProfile.id!==source.id||scope!==customScope(source))return;button.disabled=true;workspace.disabled=true;unitSelect.disabled=true;$("archive-view").disabled=true;try{await api("/api/v1/crm/profiles/"+encodeURIComponent(source.id)+"/merge-into/"+encodeURIComponent(target.id),{method:"POST"});if(scope!==customScope(source))return;await loadProfiles(true);say("پروندهٔ فعلی به‌عنوان تکراری پروندهٔ اصلی ثبت شد.")}catch(error){message.textContent="ثبت تکراری انجام نشد: "+error.message}finally{button.disabled=false;workspace.disabled=false;unitSelect.disabled=false;$("archive-view").disabled=false}}
+  async function previewDuplicate(source,candidate,scope,host){const version=++duplicateGeneration;host.replaceChildren();try{const target=await api("/api/v1/crm/profiles/"+encodeURIComponent(candidate.profile_id));if(version!==duplicateGeneration||!selectedProfile||selectedProfile.id!==source.id||scope!==customScope(source))return;if(target.archived_at||target.merged_into_profile_id||target.profile_kind!==source.profile_kind)throw Error("نوع یا وضعیت پروندهٔ مقصد برای ثبت تکراری مناسب نیست.");recordCard(host,"بررسی قبل از ثبت",[["پروندهٔ تکراری",source.display_name],["پروندهٔ اصلی که باقی می‌ماند",target.display_name]]);append(host,"p","این عملیات پروندهٔ فعلی را به پروندهٔ اصلی ارجاع می‌دهد و آن را از فهرست فعال کنار می‌گذارد؛ اطلاعات تماس، سوابق و مقادیر فیلدها در این API جابه‌جا نمی‌شوند.","foot");const form=document.createElement("form"),label=document.createElement("label"),ack=document.createElement("input");ack.type="checkbox";ack.required=true;label.textContent="دو پرونده را بررسی کردم و جهت ثبت تکراری را تأیید می‌کنم.";label.appendChild(ack);const button=document.createElement("button");button.type="submit";button.className="primary";button.textContent="ثبت پروندهٔ فعلی به‌عنوان تکراری";const message=document.createElement("p");message.setAttribute("role","status");form.appendChild(label);form.appendChild(button);form.appendChild(message);form.addEventListener("submit",event=>{event.preventDefault();mergeReviewedProfile(source,target,ack,button,message,scope)});host.appendChild(form)}catch(error){if(version===duplicateGeneration&&selectedProfile&&selectedProfile.id===source.id&&scope===customScope(source))append(host,"p",error.message,"empty")}}
+  async function loadDuplicates(profile,host){const version=++duplicateGeneration,scope=customScope(profile);host.replaceChildren();if(profile.archived_at){append(host,"p","برای بررسی تکراری‌ها ابتدا پرونده را بازیابی کنید.","empty");return}append(host,"p","این پیشنهادها بر اساس تطابق دقیق راه ارتباطی‌اند و به‌تنهایی اثبات نمی‌کنند که دو پرونده یک مشتری هستند.","foot");try{const result=await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/possible-duplicates");if(version!==duplicateGeneration||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;if(!result.items.length){append(host,"p","پروندهٔ مشابهی با تطابق دقیق راه ارتباطی پیدا نشد.","empty");return}const preview=document.createElement("section");for(const candidate of result.items){const row=document.createElement("article");row.className="record";append(row,"strong",candidate.display_name);const channels={phone:"تلفن",email:"ایمیل",postal_address:"نشانی",social_handle:"شناسهٔ شبکهٔ اجتماعی",website:"وب‌سایت"};append(row,"p","راه ارتباطی مشترک: "+candidate.matching_channels.map(x=>channels[x]||x).join("، "));const button=document.createElement("button");button.type="button";button.className="secondary";button.textContent="بررسی به‌عنوان پروندهٔ اصلی";button.addEventListener("click",()=>previewDuplicate(profile,candidate,scope,preview));row.appendChild(button);host.appendChild(row)}host.appendChild(preview)}catch(error){if(version===duplicateGeneration&&selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile))append(host,"p",error.message,"empty")}}
   async function loadDetailSection(name, profile) {
     const host = $("section-" + name); host.replaceChildren();
     try {
-      if (name === "custom") {
+      if(name==="duplicates"){await loadDuplicates(profile,host);
+      } else if (name === "custom") {
         const version=++customGeneration,scope=customScope(profile);
         try{const result=await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/custom-fields");if(version!==customGeneration||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;renderCustomFields(host,result.items,profile,scope)}catch(error){if(version===customGeneration&&selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile))append(host,"div",error.message,"empty")}
       } else if (name === "contacts") {
