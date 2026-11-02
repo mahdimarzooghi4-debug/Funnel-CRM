@@ -90,11 +90,11 @@ _PAGE = """<!doctype html>
         <div class="tabs" role="tablist" aria-label="بخش‌های پرونده">
           <button class="tab active" data-tab="contacts" type="button">راه‌های ارتباطی</button>
           <button class="tab" data-tab="activities" type="button">تاریخچهٔ تعامل</button>
-          <button class="tab" data-tab="consents" type="button">رضایت ارتباطی</button>
+          <button class="tab" data-tab="custom" type="button">اطلاعات سفارشی</button><button class="tab" data-tab="consents" type="button">رضایت ارتباطی</button>
         </div>
         <section id="section-contacts" class="detail-section"></section>
         <section id="section-activities" class="detail-section" hidden></section>
-        <section id="section-consents" class="detail-section" hidden></section>
+        <section id="section-custom" class="detail-section" hidden></section><section id="section-consents" class="detail-section" hidden></section>
       </section>
       <section id="detail-empty" class="panel empty">یک مشتری را از فهرست انتخاب کنید تا پرونده و تاریخچهٔ آن را ببینید.</section>
     </div>
@@ -107,7 +107,7 @@ _SCRIPT = r"""(() => {
   const $ = (id) => document.getElementById(id);
   const workspace = $("workspace-id"), unitSelect = $("organization-unit");
   const status = $("status"), listHost = $("profile-list");
-  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null;
+  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null, customGeneration = 0;
   const LIMIT = 50, number = new Intl.NumberFormat("fa-IR");
   const esc = (value) => String(value ?? "");
   function say(message, error = false) { status.textContent = message; status.classList.toggle("error", error); }
@@ -160,7 +160,7 @@ _SCRIPT = r"""(() => {
   }
   async function loadProfiles(reset = true) {
     if (!workspace.value) return;
-    if (reset) { offset = 0; profiles = []; }
+    if (reset) { offset = 0; profiles = []; selectedProfile = null; ++customGeneration; $("profile-detail").hidden=true; $("detail-empty").hidden=false; }
     say("در حال دریافت فهرست مشتریان…");
     try {
       const query = "?limit=" + LIMIT + "&offset=" + offset + selectedUnitQuery();
@@ -172,17 +172,40 @@ _SCRIPT = r"""(() => {
   }
   function activateTab(name) {
     document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === name));
-    ["contacts", "activities", "consents"].forEach((key) => { $("section-" + key).hidden = key !== name; });
+    ["contacts", "activities", "consents", "custom"].forEach((key) => { $("section-" + key).hidden = key !== name; });
   }
   function recordCard(host, title, pairs) {
     const card = document.createElement("article"); card.className = "record"; append(card, "strong", title);
     pairs.forEach(([key, value]) => append(card, "div", key + ": " + (value ?? "ثبت نشده")));
     host.appendChild(card);
   }
+  function customScope(profile) { return workspace.value+":"+unitSelect.value+":"+profile.id; }
+  function parseCustomValue(field, input) {
+    const value=input.value;
+    if(value==="")throw Error("مقدار فیلد را وارد کنید؛ پاک‌کردن مقدار در این API پشتیبانی نمی‌شود.");
+    if(field.value_type==="boolean")return value==="true";
+    if(field.value_type==="number"){const n=Number(value);if(!Number.isFinite(n)||!value.trim())throw Error("عدد معتبر وارد کنید.");return n}
+    return value;
+  }
+  async function saveCustomValue(field,input,button,message,profile,scope) {
+    if(button.disabled||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;
+    let value;try{value=parseCustomValue(field,input)}catch(error){message.textContent=error.message;return}
+    button.disabled=true;message.textContent="در حال ذخیره…";
+    try{const result=await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/custom-fields/"+encodeURIComponent(field.field_key),{method:"PUT",body:JSON.stringify({value})});if(!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;input.value=String(result.value);message.textContent="مقدار ذخیره شد."}catch(error){if(selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile))message.textContent="ذخیره انجام نشد: "+error.message}finally{button.disabled=false}
+  }
+  function renderCustomFields(host,fields,profile,scope) {
+    if(!fields.length){append(host,"div","فیلد سفارشی فعالی برای این نوع پرونده تعریف نشده است.","empty");return}
+    for(const field of fields){const form=document.createElement("form");form.className="formbox";const label=document.createElement("label");label.textContent=field.display_name+(field.is_required?" (اجباری)":"");const input=document.createElement(["boolean","choice"].includes(field.value_type)?"select":"input");
+      if(["boolean","choice"].includes(field.value_type)){const empty=document.createElement("option");empty.value="";empty.textContent="انتخاب کنید";input.appendChild(empty);const options=field.value_type==="boolean"?[["true","بله"],["false","خیر"]]:field.options.map(x=>[x,x]);for(const [value,text] of options){const option=document.createElement("option");option.value=value;option.textContent=text;input.appendChild(option)}}else{input.type=field.value_type==="number"?"number":field.value_type==="date"?"date":"text";if(field.value_type==="number")input.step="any";if(field.value_type==="text")input.maxLength=4000}
+      input.value=field.value==null?"":String(field.value);input.required=true;label.appendChild(input);form.appendChild(label);const button=document.createElement("button");button.type="submit";button.className="primary";button.textContent="ذخیرهٔ مقدار";const message=document.createElement("p");message.setAttribute("role","status");message.setAttribute("aria-live","polite");form.appendChild(button);form.appendChild(message);form.addEventListener("submit",event=>{event.preventDefault();saveCustomValue(field,input,button,message,profile,scope)});host.appendChild(form)}
+  }
   async function loadDetailSection(name, profile) {
     const host = $("section-" + name); host.replaceChildren();
     try {
-      if (name === "contacts") {
+      if (name === "custom") {
+        const version=++customGeneration,scope=customScope(profile);
+        try{const result=await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/custom-fields");if(version!==customGeneration||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;renderCustomFields(host,result.items,profile,scope)}catch(error){if(version===customGeneration&&selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile))append(host,"div",error.message,"empty")}
+      } else if (name === "contacts") {
         const result = await api("/api/v1/crm/profiles/" + encodeURIComponent(profile.id) + "/contact-points");
         const items = result.items || [];
         if (items.length) items.forEach((item) => recordCard(host, item.channel, [["مقدار", item.value], ["وضعیت راستی‌آزمایی", item.verification_status], ["اصلی", item.is_primary ? "بله" : "خیر"]]));
