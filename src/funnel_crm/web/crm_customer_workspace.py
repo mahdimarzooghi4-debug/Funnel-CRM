@@ -57,7 +57,7 @@ _PAGE = """<!doctype html>
     <div class="filters">
       <label>فضای کاری<select id="workspace-id"><option value="">در حال دریافت…</option></select></label>
       <label>واحد سازمانی<select id="organization-unit"><option value="">همهٔ واحدهای مجاز</option></select></label>
-      <button id="new-profile" class="primary" type="button">مشتری جدید</button>
+      <label>نمای پرونده‌ها<select id="archive-view"><option value="">فعال</option><option value="archived">بایگانی‌شده</option></select></label><button id="new-profile" class="primary" type="button">مشتری جدید</button>
       <button id="refresh" class="secondary wide-button" type="button">به‌روزرسانی فهرست</button>
     </div>
     <p id="status" class="status" role="status" aria-live="polite">در حال آماده‌سازی…</p>
@@ -80,7 +80,7 @@ _PAGE = """<!doctype html>
       </section>
       <section id="profile-detail" class="panel" hidden aria-live="polite">
         <div class="detail-head"><div><h2 id="detail-name"></h2><div id="detail-meta" class="profile-meta"></div></div><span class="spacer"></span><span id="detail-kind" class="badge"></span></div>
-        <p><a id="customer-support-link" class="secondary" href="/workspace/crm-support">درخواست‌های پشتیبانی این مشتری</a></p><form id="edit-form" class="formbox" style="margin-top:13px">
+        <p id="archive-notice" class="foot" hidden>این پرونده بایگانی شده است؛ برای ویرایش، ابتدا آن را بازیابی کنید.</p><button id="archive-toggle" class="secondary" type="button">بایگانی پرونده</button><p><a id="customer-support-link" class="secondary" href="/workspace/crm-support">درخواست‌های پشتیبانی این مشتری</a></p><form id="edit-form" class="formbox" style="margin-top:13px">
           <div class="form-grid">
             <label>نام نمایشی<input id="edit-name" maxlength="240" required></label>
             <label>مرحلهٔ چرخهٔ عمر<input id="edit-stage" maxlength="80" required></label>
@@ -107,7 +107,7 @@ _SCRIPT = r"""(() => {
   const $ = (id) => document.getElementById(id);
   const workspace = $("workspace-id"), unitSelect = $("organization-unit");
   const status = $("status"), listHost = $("profile-list");
-  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null, customGeneration = 0, creationGeneration = 0, creationReady = "", creationFields = [], appliedSearch = "", listGeneration = 0;
+  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null, customGeneration = 0, creationGeneration = 0, creationReady = "", creationFields = [], appliedSearch = "", listGeneration = 0, archiveBusy = false;
   const LIMIT = 50, number = new Intl.NumberFormat("fa-IR");
   const esc = (value) => String(value ?? "");
   function say(message, error = false) { status.textContent = message; status.classList.toggle("error", error); }
@@ -157,7 +157,7 @@ _SCRIPT = r"""(() => {
     $("page-meta").textContent = number.format(profiles.length) + " از " + number.format(total) + " مورد دریافت شده";
     $("load-more").hidden = profiles.length >= total;
   }
-  function profileQuery(){const q=new URLSearchParams({limit:String(LIMIT),offset:String(offset)});if(unitSelect.value)q.set("organization_unit_id",unitSelect.value);if(appliedSearch)q.set("search",appliedSearch);return q}
+  function profileQuery(){const q=new URLSearchParams({limit:String(LIMIT),offset:String(offset)});if(unitSelect.value)q.set("organization_unit_id",unitSelect.value);if(appliedSearch)q.set("search",appliedSearch);if($("archive-view").value==="archived")q.set("include_archived","true");return q}
   async function loadProfiles(reset = true) {
     if (!workspace.value) return;
     if(!reset&&$("load-more").disabled)return;
@@ -194,13 +194,14 @@ _SCRIPT = r"""(() => {
     return value;
   }
   async function saveCustomValue(field,input,button,message,profile,scope) {
-    if(button.disabled||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;
+    if(profile.archived_at||button.disabled||!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;
     let value;try{value=parseCustomValue(field,input)}catch(error){message.textContent=error.message;return}
     button.disabled=true;message.textContent="در حال ذخیره…";
     try{const result=await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/custom-fields/"+encodeURIComponent(field.field_key),{method:"PUT",body:JSON.stringify({value})});if(!selectedProfile||selectedProfile.id!==profile.id||scope!==customScope(profile))return;input.value=String(result.value);message.textContent="مقدار ذخیره شد."}catch(error){if(selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile))message.textContent="ذخیره انجام نشد: "+error.message}finally{button.disabled=false}
   }
   function renderCustomFields(host,fields,profile,scope) {
     if(!fields.length){append(host,"div","فیلد سفارشی فعالی برای این نوع پرونده تعریف نشده است.","empty");return}
+    if(profile.archived_at){for(const field of fields)recordCard(host,field.display_name,[["مقدار",field.value==null?"ثبت نشده":field.value_type==="boolean"?(field.value?"بله":"خیر"):String(field.value)]]);return}
     for(const field of fields){const form=document.createElement("form");form.className="formbox";const label=document.createElement("label");label.textContent=field.display_name+(field.is_required?" (اجباری)":"");const input=document.createElement(["boolean","choice"].includes(field.value_type)?"select":"input");
       if(["boolean","choice"].includes(field.value_type)){const empty=document.createElement("option");empty.value="";empty.textContent="انتخاب کنید";input.appendChild(empty);const options=field.value_type==="boolean"?[["true","بله"],["false","خیر"]]:field.options.map(x=>[x,x]);for(const [value,text] of options){const option=document.createElement("option");option.value=value;option.textContent=text;input.appendChild(option)}}else{input.type=field.value_type==="number"?"number":field.value_type==="date"?"date":"text";if(field.value_type==="number")input.step="any";if(field.value_type==="text")input.maxLength=4000}
       input.value=field.value==null?"":String(field.value);input.required=true;label.appendChild(input);form.appendChild(label);const button=document.createElement("button");button.type="submit";button.className="primary";button.textContent="ذخیرهٔ مقدار";const message=document.createElement("p");message.setAttribute("role","status");message.setAttribute("aria-live","polite");form.appendChild(button);form.appendChild(message);form.addEventListener("submit",event=>{event.preventDefault();saveCustomValue(field,input,button,message,profile,scope)});host.appendChild(form)}
@@ -216,6 +217,7 @@ _SCRIPT = r"""(() => {
         const items = result.items || [];
         if (items.length) items.forEach((item) => recordCard(host, item.channel, [["مقدار", item.value], ["وضعیت راستی‌آزمایی", item.verification_status], ["اصلی", item.is_primary ? "بله" : "خیر"]]));
         else append(host, "div", "راه ارتباطی ثبت‌شده‌ای وجود ندارد.", "empty");
+        if(profile.archived_at)return;
         const form = document.createElement("form"); form.className = "formbox";
         const grid = document.createElement("div"); grid.className = "form-grid";
         const channelLabel = document.createElement("label"); channelLabel.textContent = "نوع راه ارتباطی";
@@ -244,8 +246,9 @@ _SCRIPT = r"""(() => {
       }
     } catch (error) { append(host, "div", error.message, "empty"); }
   }
+  async function toggleArchive(){if(archiveBusy||!selectedProfile)return;const profile=selectedProfile,scope=customScope(profile),restore=Boolean(profile.archived_at);archiveBusy=true;$("archive-toggle").disabled=true;workspace.disabled=true;unitSelect.disabled=true;$("archive-view").disabled=true;try{await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+(restore?"/restore":"/archive"),{method:"POST"});if(scope!==customScope(profile))return;await loadProfiles(true);say(restore?"پرونده بازیابی شد.":"پرونده بایگانی شد.")}catch(error){say(error.message,true)}finally{archiveBusy=false;$("archive-toggle").disabled=false;workspace.disabled=false;unitSelect.disabled=false;$("archive-view").disabled=false}}
   async function openProfile(profile) {
-    selectedProfile = profile; drawList(); $("detail-empty").hidden = true; $("profile-detail").hidden = false;
+    selectedProfile = profile;$("archive-toggle").textContent=profile.archived_at?"بازیابی پرونده":"بایگانی پرونده";$("archive-notice").hidden=!profile.archived_at;$("edit-form").hidden=Boolean(profile.archived_at); drawList(); $("detail-empty").hidden = true; $("profile-detail").hidden = false;
     $("customer-support-link").href = "/workspace/crm-support?" + new URLSearchParams({workspace_id: workspace.value, organization_unit_id: profile.organization_unit_id, profile_id: profile.id});
     $("detail-name").textContent = profile.display_name;
     $("detail-kind").textContent = profile.profile_kind === "organization" ? "سازمان" : "شخص";
@@ -255,7 +258,7 @@ _SCRIPT = r"""(() => {
     activateTab("contacts"); await loadDetailSection("contacts", profile);
   }
   $("edit-form").addEventListener("submit", async (event) => {
-    event.preventDefault(); if (!selectedProfile) return;
+    event.preventDefault(); if (!selectedProfile||selectedProfile.archived_at) return;
     const button = $("edit-form").querySelector("button[type=submit]"); button.disabled = true;
     try {
       await api("/api/v1/crm/profiles/" + encodeURIComponent(selectedProfile.id), {method:"PATCH",body:JSON.stringify({display_name:$("edit-name").value,lifecycle_stage:$("edit-stage").value})});
@@ -269,13 +272,14 @@ _SCRIPT = r"""(() => {
     const button = $("create-save"); if(button.disabled)return; button.disabled=true;workspace.disabled=true;unitSelect.disabled=true;$("profile-kind").disabled=true;
     try {
       const profile = await api("/api/v1/crm/profiles",{method:"POST",body:JSON.stringify({organization_unit_id:unitSelect.value,profile_kind:$("profile-kind").value,display_name:$("create-name").value,lifecycle_stage:$("create-stage").value,custom_fields:creationCustomValues()})});
-      $("create-form").reset(); $("create-stage").value="lead"; $("create-form").hidden=true;creationReady="";
+      $("create-form").reset(); $("create-stage").value="lead"; $("create-form").hidden=true;$("archive-view").value="";creationReady="";
       await loadProfiles(true); const created=profiles.find((row)=>row.id===profile.id); if(created) await openProfile(created);
       say("پروندهٔ مشتری ثبت شد.");
     } catch(error){say(error.message,true);} finally{button.disabled=false;workspace.disabled=false;unitSelect.disabled=false;$("profile-kind").disabled=false;}
   });
   $("new-profile").addEventListener("click",()=>{$("create-form").hidden=!$("create-form").hidden;selectedProfile=null;++customGeneration;$("profile-detail").hidden=true;$("detail-empty").hidden=false;if(!$("create-form").hidden)loadCreationFields()});$("profile-kind").addEventListener("change",loadCreationFields);
   $("cancel-create").addEventListener("click",()=>{$("create-form").hidden=true;});
+  $("archive-view").addEventListener("change",()=>loadProfiles(true));$("archive-toggle").addEventListener("click",toggleArchive);
   $("refresh").addEventListener("click",()=>loadProfiles(true));
   $("profile-search-form").addEventListener("submit",event=>{event.preventDefault();appliedSearch=$("search").value.trim();loadProfiles(true)});$("clear-profile-search").addEventListener("click",()=>{$("search").value="";appliedSearch="";loadProfiles(true)});
   $("load-more").addEventListener("click",()=>loadProfiles(false));
