@@ -64,7 +64,7 @@ _PAGE = """<!doctype html>
     <div class="layout">
       <section class="panel" aria-labelledby="profiles-title">
         <div class="panel-head"><h2 id="profiles-title">فهرست مشتریان</h2><span id="total" class="count">—</span><span class="spacer"></span></div>
-        <label class="search"><input id="search" type="search" placeholder="جست‌وجو در مشتریان دریافت‌شده" aria-label="جست‌وجوی مشتری"></label>
+        <form id="profile-search-form" class="search"><input id="search" type="search" maxlength="240" placeholder="جست‌وجوی نام مشتری" aria-label="جست‌وجوی مشتری"><button type="submit" class="secondary">جست‌وجو</button><button id="clear-profile-search" type="button" class="secondary">پاک کردن</button></form>
         <form id="create-form" class="formbox" hidden>
           <div class="panel-head"><h2>ثبت مشتری</h2></div>
           <div class="form-grid">
@@ -76,7 +76,7 @@ _PAGE = """<!doctype html>
         </form>
         <div id="profile-list" class="profile-list"><div class="empty">برای دیدن پرونده‌ها، فضای کاری را انتخاب کنید.</div></div>
         <div class="pagination"><span id="page-meta">—</span><button id="load-more" class="secondary" type="button" hidden>بارگذاری بیشتر</button></div>
-        <p class="foot">نمایش بر اساس دسترسی حساب انجام می‌شود. جست‌وجو در رکوردهای دریافت‌شدهٔ فعلی است.</p>
+        <p class="foot">نمایش بر اساس دسترسی حساب انجام می‌شود. جست‌وجو در همهٔ پرونده‌های مجاز انجام می‌شود.</p>
       </section>
       <section id="profile-detail" class="panel" hidden aria-live="polite">
         <div class="detail-head"><div><h2 id="detail-name"></h2><div id="detail-meta" class="profile-meta"></div></div><span class="spacer"></span><span id="detail-kind" class="badge"></span></div>
@@ -107,7 +107,7 @@ _SCRIPT = r"""(() => {
   const $ = (id) => document.getElementById(id);
   const workspace = $("workspace-id"), unitSelect = $("organization-unit");
   const status = $("status"), listHost = $("profile-list");
-  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null, customGeneration = 0, creationGeneration = 0, creationReady = "", creationFields = [];
+  let units = [], profiles = [], offset = 0, total = 0, selectedProfile = null, customGeneration = 0, creationGeneration = 0, creationReady = "", creationFields = [], appliedSearch = "", listGeneration = 0;
   const LIMIT = 50, number = new Intl.NumberFormat("fa-IR");
   const esc = (value) => String(value ?? "");
   function say(message, error = false) { status.textContent = message; status.classList.toggle("error", error); }
@@ -139,10 +139,9 @@ _SCRIPT = r"""(() => {
     rows.forEach((unit) => { const option = document.createElement("option"); option.value = unit.id; option.textContent = unit.name; unitSelect.appendChild(option); });
   }
   function drawList() {
-    const term = $("search").value.trim().toLocaleLowerCase();
-    const visible = profiles.filter((profile) => !term || profile.display_name.toLocaleLowerCase().includes(term));
+    const visible = profiles;
     listHost.replaceChildren();
-    if (!visible.length) { append(listHost, "div", "مشتری منطبق با جست‌وجو در داده‌های دریافت‌شده پیدا نشد.", "empty"); }
+    if (!visible.length) { append(listHost, "div", "مشتری منطبق با فیلتر انتخاب‌شده پیدا نشد.", "empty"); }
     visible.forEach((profile) => {
       const button = document.createElement("button"); button.type = "button";
       button.className = "profile-row" + (selectedProfile?.id === profile.id ? " selected" : "");
@@ -158,17 +157,21 @@ _SCRIPT = r"""(() => {
     $("page-meta").textContent = number.format(profiles.length) + " از " + number.format(total) + " مورد دریافت شده";
     $("load-more").hidden = profiles.length >= total;
   }
+  function profileQuery(){const q=new URLSearchParams({limit:String(LIMIT),offset:String(offset)});if(unitSelect.value)q.set("organization_unit_id",unitSelect.value);if(appliedSearch)q.set("search",appliedSearch);return q}
   async function loadProfiles(reset = true) {
     if (!workspace.value) return;
-    if (reset) { offset = 0; profiles = []; selectedProfile = null; ++customGeneration; $("profile-detail").hidden=true; $("detail-empty").hidden=false; }
+    if(!reset&&$("load-more").disabled)return;
+    const version=++listGeneration,scope=workspace.value+":"+unitSelect.value;$("load-more").disabled=true;
+    if (reset) { offset = 0; profiles = []; selectedProfile = null; ++customGeneration; $("profile-detail").hidden=true; $("detail-empty").hidden=false;listHost.replaceChildren();$("total").textContent="—";$("page-meta").textContent=""; }
     say("در حال دریافت فهرست مشتریان…");
     try {
-      const query = "?limit=" + LIMIT + "&offset=" + offset + selectedUnitQuery();
+      const query = "?"+profileQuery();
       const page = await api("/api/v1/crm/profiles" + query);
+      if(version!==listGeneration||scope!==workspace.value+":"+unitSelect.value)return;
       profiles = reset ? page.items : profiles.concat(page.items);
       total = page.total; offset += page.items.length; drawList();
       say("فهرست مشتریان به‌روز شد.");
-    } catch (error) { say(error.message, true); }
+    } catch (error) { if(version===listGeneration)say(error.message, true); }finally{if(version===listGeneration)$("load-more").disabled=false;}
   }
   function activateTab(name) {
     document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === name));
@@ -274,12 +277,12 @@ _SCRIPT = r"""(() => {
   $("new-profile").addEventListener("click",()=>{$("create-form").hidden=!$("create-form").hidden;selectedProfile=null;++customGeneration;$("profile-detail").hidden=true;$("detail-empty").hidden=false;if(!$("create-form").hidden)loadCreationFields()});$("profile-kind").addEventListener("change",loadCreationFields);
   $("cancel-create").addEventListener("click",()=>{$("create-form").hidden=true;});
   $("refresh").addEventListener("click",()=>loadProfiles(true));
-  $("search").addEventListener("input",drawList);
+  $("profile-search-form").addEventListener("submit",event=>{event.preventDefault();appliedSearch=$("search").value.trim();loadProfiles(true)});$("clear-profile-search").addEventListener("click",()=>{$("search").value="";appliedSearch="";loadProfiles(true)});
   $("load-more").addEventListener("click",()=>loadProfiles(false));
   unitSelect.addEventListener("change",()=>{loadCreationFields();loadProfiles(true)});
   document.querySelectorAll(".tab").forEach((tab)=>tab.addEventListener("click",async()=>{activateTab(tab.dataset.tab);if(selectedProfile)await loadDetailSection(tab.dataset.tab,selectedProfile);}));
   workspace.addEventListener("change",async()=>{
-    ++creationGeneration;creationReady="";$("create-save").disabled=true;$("create-form").hidden=true;$("create-custom-fields").replaceChildren();if(!workspace.value)return;
+    ++listGeneration;listHost.replaceChildren();selectedProfile=null;$("profile-detail").hidden=true;$("load-more").hidden=true;++creationGeneration;creationReady="";$("create-save").disabled=true;$("create-form").hidden=true;$("create-custom-fields").replaceChildren();if(!workspace.value)return;
     try{await loadUnits();await loadProfiles(true);}catch(error){say(error.message,true);}
   });
   async function init(){

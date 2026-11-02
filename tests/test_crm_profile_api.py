@@ -154,6 +154,19 @@ async def test_profile_api_enforces_action_and_filters_rows_by_org_scope(
         assert page.json()["total"] == 1
         assert [item["id"] for item in page.json()["items"]] == [str(created_id)]
 
+        for term, count in ((" authorized customer ", 1), ("missing", 0), ("%", 0), ("_", 0)):
+            searched = await client.get("/api/v1/crm/profiles", headers=headers, params={"search": term, "limit": 1})
+            assert searched.status_code == 200
+            assert searched.json()["total"] == count
+            assert len(searched.json()["items"]) == count
+        outside = await client.get("/api/v1/crm/profiles", headers=headers,
+                                   params={"search": "customer", "organization_unit_id": str(branch_b_id)})
+        assert outside.json()["total"] == 0
+        beyond = await client.get("/api/v1/crm/profiles", headers=headers,
+                                  params={"search": "customer", "offset": 1})
+        assert beyond.json()["total"] == 1
+        assert beyond.json()["items"] == []
+
         hidden = await client.get(
             f"/api/v1/crm/profiles/{hidden_profile_id}", headers=headers
         )

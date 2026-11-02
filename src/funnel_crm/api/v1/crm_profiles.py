@@ -126,6 +126,7 @@ async def list_crm_profiles(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     include_archived: bool = Query(default=False),
+    search: str | None = Query(default=None, max_length=240),
 ) -> CRMProfilePage:
     """Filter at the database query so out-of-scope rows never enter the result."""
     allowed_units = crm_scope_ids(context, permission_key="crm.profile:view")
@@ -144,6 +145,9 @@ async def list_crm_profiles(
         filters.append(CRMProfile.archived_at.is_(None))
     if organization_unit_id is not None:
         filters.append(CRMProfile.organization_unit_id == organization_unit_id)
+
+    if search and search.strip():
+        filters.append(CRMProfile.display_name.icontains(search.strip(), autoescape=True))
 
     total = await context.session.scalar(
         select(func.count()).select_from(CRMProfile).where(*filters)
