@@ -80,7 +80,7 @@ _PAGE = """<!doctype html>
       </section>
       <section id="profile-detail" class="panel" hidden aria-live="polite">
         <div class="detail-head"><div><h2 id="detail-name"></h2><div id="detail-meta" class="profile-meta"></div></div><span class="spacer"></span><span id="detail-kind" class="badge"></span></div>
-        <form id="edit-form" class="formbox" style="margin-top:13px">
+        <p><a id="customer-support-link" class="secondary" href="/workspace/crm-support">درخواست‌های پشتیبانی این مشتری</a></p><form id="edit-form" class="formbox" style="margin-top:13px">
           <div class="form-grid">
             <label>نام نمایشی<input id="edit-name" maxlength="240" required></label>
             <label>مرحلهٔ چرخهٔ عمر<input id="edit-stage" maxlength="80" required></label>
@@ -217,6 +217,7 @@ _SCRIPT = r"""(() => {
   }
   async function openProfile(profile) {
     selectedProfile = profile; drawList(); $("detail-empty").hidden = true; $("profile-detail").hidden = false;
+    $("customer-support-link").href = "/workspace/crm-support?" + new URLSearchParams({workspace_id: workspace.value, organization_unit_id: profile.organization_unit_id, profile_id: profile.id});
     $("detail-name").textContent = profile.display_name;
     $("detail-kind").textContent = profile.profile_kind === "organization" ? "سازمان" : "شخص";
     const unit = units.find((item) => item.id === profile.organization_unit_id);

@@ -103,6 +103,19 @@ async def test_support_case_queue_tracks_assignment_deadline_and_status(
         assert case["status"] == "open"
         case_id = case["id"]
 
+        customer_queue = await client.get("/api/v1/crm/support-cases", headers=headers,
+                                          params={"organization_unit_id": str(root_id), "profile_id": profile_id})
+        assert customer_queue.status_code == 200
+        assert customer_queue.json()["total"] == 1
+        assert customer_queue.json()["items"][0]["id"] == case_id
+        other_queue = await client.get("/api/v1/crm/support-cases", headers=headers,
+                                       params={"organization_unit_id": str(root_id), "profile_id": str(uuid4())})
+        assert other_queue.json()["total"] == 0
+        assert other_queue.json()["overdue_count"] == 0
+        foreign_queue = await client.get("/api/v1/crm/support-cases", headers=headers,
+                                         params={"organization_unit_id": str(tenant_case["root_b"]), "profile_id": profile_id})
+        assert foreign_queue.status_code == 403
+
         claimed = await client.post(f"/api/v1/crm/support-cases/{case_id}/assign-to-me", headers=headers)
         assert claimed.status_code == 200, claimed.text
         assert claimed.json()["assigned_membership_id"] is not None
