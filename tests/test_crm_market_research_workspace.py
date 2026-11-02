@@ -28,5 +28,6 @@ def test_market_research_script_uses_scoped_apis_and_safe_dom() -> None:
     assert '"X-Workspace-ID"' in response.text
     assert "/api/v1/crm/segments" in response.text
     assert "/api/v1/crm/analytics/customer-activities/summary?" in response.text
-    assert "/preview?limit=10" in response.text
+    assert "/preview?" in response.text
+    assert 'limit:"50",offset:String(offset)' in response.text
     assert "innerHTML" not in response.text
