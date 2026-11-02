@@ -234,10 +234,26 @@ _SCRIPT = r"""(() => {
     if(!result.items.length)append(host,"div","رویداد رضایت ارتباطی ثبت نشده است.","empty");
     for(const item of result.items)recordCard(host,item.purpose_key,[["کانال",item.channel],["تصمیم",item.decision==="granted"?"اعطای رضایت":"لغو رضایت"],["نسخهٔ سیاست",item.policy_version],["زمان تصمیم",item.decision_at]]);
   }
+  async function loadActivities(profile,host){
+    const scope=customScope(profile),token={};host.activityToken=token;host.replaceChildren();
+    const records=document.createElement("section"),message=document.createElement("p"),more=document.createElement("button");
+    message.setAttribute("role","status");message.setAttribute("aria-live","polite");more.type="button";more.textContent="نمایش تعاملات بیشتر";
+    host.appendChild(message);host.appendChild(records);host.appendChild(more);let offset=0,busy=false,total=0;
+    const current=()=>host.activityToken===token&&selectedProfile&&selectedProfile.id===profile.id&&scope===customScope(profile);
+    async function next(){if(busy||!current())return;busy=true;more.disabled=true;message.textContent="در حال دریافت تعاملات…";
+      try{const result=await api("/api/v1/crm/profiles/"+encodeURIComponent(profile.id)+"/activities?"+new URLSearchParams({limit:"50",offset:String(offset)}));if(!current())return;
+        for(const item of result.items)recordCard(records,item.activity_type||"تعامل",[["کانال",({phone:"تلفن",store:"فروشگاه",field:"میدانی",other:"سایر"})[item.channel]||item.channel],["محصول مبدأ",item.source_product],["شناسهٔ مرجع",item.source_record_id||"—"],["زمان رخداد",item.occurred_at]]);
+        offset+=result.items.length;total=result.total;more.textContent="نمایش تعاملات بیشتر";more.hidden=offset>=total||!result.items.length;message.textContent=total?"نمایش "+new Intl.NumberFormat("fa-IR").format(offset)+" از "+new Intl.NumberFormat("fa-IR").format(total)+" تعامل":"تعامل ثبت‌شده‌ای وجود ندارد.";
+      }catch(error){if(current()){message.textContent="دریافت تعاملات انجام نشد: "+error.message;more.textContent="تلاش دوباره";more.hidden=false}}
+      finally{busy=false;if(current())more.disabled=false}
+    }
+    more.addEventListener("click",next);await next();return next;
+  }
   async function loadDetailSection(name, profile) {
     const host = $("section-" + name); host.replaceChildren();
     try {
-      if(name==="consents"){await loadConsents(profile,host);
+      if(name==="activities"){await loadActivities(profile,host);
+      } else if(name==="consents"){await loadConsents(profile,host);
       } else if(name==="duplicates"){await loadDuplicates(profile,host);
       } else if (name === "custom") {
         const version=++customGeneration,scope=customScope(profile);
