@@ -64,3 +64,7 @@ test('foreign customer context is rejected and late lookup cannot cross scopes',
  const h=harness(async()=>({ok:true,json:async()=>({id:'foreign',organization_unit_id:'unit-b',display_name:'foreign'})}));await h.api.selectCustomerContext('foreign');assert.equal(h.api.query().has('profile_id'),false);assert.match(h.node('message').textContent,/قابل دریافت نیست/);
  let respond;const late=harness(()=>new Promise(r=>{respond=r}));const pending=late.api.selectCustomerContext('late');late.api.clearScope();respond({ok:true,json:async()=>({id:'late',organization_unit_id:'unit-a',display_name:'late'})});await pending;assert.equal(late.api.query().has('profile_id'),false);assert.equal(late.node('customer-context').textContent,'');
 });
+
+test('subject search is trimmed and preserves literal wildcard text with unassigned scope',()=>{
+ const h=harness();h.node('queue-search').value='  مسئله % _  ';h.node('ownership').value='unassigned';const q=h.api.query();assert.equal(q.get('search'),'مسئله % _');assert.equal(q.get('unassigned_only'),'true');assert.equal(q.has('assigned_to_me'),false);assert.equal(q.get('organization_unit_id'),'unit-a');h.node('ownership').value='mine';assert.equal(h.api.query().has('unassigned_only'),false);
+});
