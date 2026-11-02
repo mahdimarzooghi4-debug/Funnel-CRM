@@ -60,6 +60,7 @@ _PAGE = """<!doctype html>
       <label>نمای پرونده‌ها<select id="archive-view"><option value="">فعال</option><option value="archived">بایگانی‌شده</option></select></label><button id="new-profile" class="primary" type="button">مشتری جدید</button>
       <button id="refresh" class="secondary wide-button" type="button">به‌روزرسانی فهرست</button>
     </div>
+    <button id="export-customers" type="button" class="secondary">دریافت CSV مشتریان فعال مطابق جست‌وجو و واحد انتخاب‌شده (حداکثر ۱۰٬۰۰۰)</button>
     <p id="status" class="status" role="status" aria-live="polite">در حال آماده‌سازی…</p>
     <div class="layout">
       <section class="panel" aria-labelledby="profiles-title">
@@ -128,6 +129,17 @@ _SCRIPT = r"""(() => {
     }
     return result;
   }
+  async function exportCustomers(){
+    const button=$("export-customers"),ws=workspace.value,unit=unitSelect.value,search=appliedSearch;
+    if(button.disabled||!ws)return;if($("archive-view").value==="archived"){say("خروجی CSV فقط برای مشتریان فعال موجود است؛ نمای فعال را انتخاب کنید.",true);return}
+    button.disabled=true;try{const query=new URLSearchParams({limit:"10000"});if(unit)query.set("organization_unit_id",unit);if(search)query.set("search",search);
+      const response=await fetch("/api/v1/crm/profiles/export.csv?"+query,{credentials:"same-origin",headers:{Accept:"text/csv","X-Workspace-ID":ws}});
+      if(!response.ok){let result={};try{result=await response.json()}catch(_){}throw Error(response.status===413?"تعداد مشتریان بیش از سقف خروجی است؛ جست‌وجو یا واحد را محدودتر کنید.":typeof result.detail==="string"?result.detail:"دریافت خروجی ناموفق بود.")}
+      const blob=await response.blob();if(ws!==workspace.value||unit!==unitSelect.value||search!==appliedSearch||$("archive-view").value==="archived")return;
+      const url=URL.createObjectURL(blob),link=document.createElement("a");try{link.href=url;link.download="funnel-customers.csv";link.click();say("خروجی مشتریان فعال در محدودهٔ مجوز خروجی دریافت شد.")}finally{URL.revokeObjectURL(url)}
+    }catch(error){if(ws===workspace.value)say(error.message,true)}finally{button.disabled=false}
+  }
+  $("export-customers").addEventListener("click",exportCustomers);
   function selectedUnitQuery() {
     return unitSelect.value ? "&organization_unit_id=" + encodeURIComponent(unitSelect.value) : "";
   }

@@ -181,6 +181,7 @@ async def export_crm_profiles_csv(
     organization_unit_id: UUID | None = None,
     limit: int = Query(default=5000, ge=1, le=10000),
     offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None, max_length=240),
 ) -> Response:
     view_scope = crm_scope_ids(
         context,
@@ -201,6 +202,9 @@ async def export_crm_profiles_csv(
     ]
     if organization_unit_id is not None:
         filters.append(CRMProfile.organization_unit_id == organization_unit_id)
+
+    if search and search.strip():
+        filters.append(CRMProfile.display_name.icontains(search.strip(), autoescape=True))
 
     total = int(
         await context.session.scalar(
