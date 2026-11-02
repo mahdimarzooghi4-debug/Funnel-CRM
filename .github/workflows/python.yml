@@ -40,3 +40,4 @@ jobs:
       - run: node tests/budget_workspace_client.test.cjs
       - run: node --test tests/partner_registry_editor.test.cjs
       - run: node --test tests/support_workspace.test.cjs
+      - run: node --test tests/custom_fields_workspace.test.cjs
